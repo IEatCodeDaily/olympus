@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "olympus",
+      "dependencies": {
+        "convex": "^1.42.0",
+      },
       "devDependencies": {
         "bun-types": "^1.3.14",
         "oxlint": "^1.71.0",
