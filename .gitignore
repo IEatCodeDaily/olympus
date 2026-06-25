@@ -1,0 +1,22 @@
+# Build artifacts
+dist/
+node_modules/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+apps/runtime/.env
+apps/runtime/.env.local
+
+# Convex generated + local deployment
+convex/_generated/
+.convex/
+
+# Logs / OS
+*.log
+.DS_Store
+
+# Bun
+.bun/

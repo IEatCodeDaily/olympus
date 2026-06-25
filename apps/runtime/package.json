@@ -1,0 +1,12 @@
+{
+  "name": "@olympus/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.ts",
+  "dependencies": {
+    "@olympus/protocol": "workspace:*",
+    "@olympus/hermes-adapter": "workspace:*",
+    "convex": "^1.17.0"
+  }
+}
