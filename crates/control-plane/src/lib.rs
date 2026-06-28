@@ -1,8 +1,11 @@
 //! Olympus control plane — core library.
 //!
 //! Phase 1: append-only event log over redb (`event`, `log`, `compress`).
+//! Phase 2: in-memory views (`views`).
+//! Phase 6: tantivy full-text search (`search`).
 
 pub mod compress;
 pub mod event;
 pub mod log;
+pub mod search;
 pub mod views;
