@@ -1,313 +1,160 @@
-import { useState, useEffect, useRef } from "react";
-import type { SearchHit, Session } from "../types";
-import { searchSessions, fetchSession } from "../api";
-import { sourceColor, sourceLabel, relativeTime, Highlight, SourceDot, Spinner } from "../components";
+import { useState, useMemo } from "react";
+import { searchSessions } from "../api";
+import { useSessions } from "../hooks/useSessions";
+import { relativeTime, SOURCE_META } from "../lib/format";
+import type { SearchHit } from "../types";
 
 interface Props {
-  onOpenSession: (sessionId: string) => void;
-  onClose: () => void;
+  onOpenSession: (id: string) => void;
 }
 
 interface GroupedHits {
   sessionId: string;
-  source: Session["source"];
-  sessionTitle: string | null;
+  source: string;
+  sessionTitle: string;
   hits: SearchHit[];
+  bestScore: number;
 }
 
-export function SearchView({ onOpenSession, onClose }: Props) {
+export default function SearchView({ onOpenSession }: Props) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [includeArchived, setIncludeArchived] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [sessionCache, setSessionCache] = useState<Map<string, Session>>(new Map());
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Focus on mount
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  // Debounced search
-  useEffect(() => {
-    if (!query.trim()) {
-      setHits([]);
-      setHasSearched(false);
-      return;
+  const sessionList = useSessions({ archived: true });
+  const sessionMap = useMemo(() => {
+    const m = new Map<string, { title: string | null; source: string }>();
+    for (const s of sessionList.sessions) {
+      m.set(s.id, { title: s.title, source: s.source });
     }
+    return m;
+  }, [sessionList.sessions]);
 
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const resp = await searchSessions({
-          q: query,
-          limit: 50,
-          includeArchived,
-        });
-        setHits(resp.hits);
-        setHasSearched(true);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Search failed");
-      } finally {
-        setLoading(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [query, includeArchived]);
+  const runSearch = async () => {
+    if (!query.trim()) return;
+    setSearching(true);
+    setSearched(true);
+    try {
+      const res = await searchSessions({ q: query, includeArchived });
+      setHits(res.hits);
+    } catch {
+      setHits([]);
+    } finally {
+      setSearching(false);
+    }
+  };
 
   // Group hits by session
-  const grouped: GroupedHits[] = [];
-  const groupMap = new Map<string, GroupedHits>();
-  for (const hit of hits) {
-    if (groupMap.has(hit.sessionId)) {
-      groupMap.get(hit.sessionId)!.hits.push(hit);
-    } else {
-      const g: GroupedHits = {
-        sessionId: hit.sessionId,
-        source: hit.source,
-        sessionTitle: null,
-        hits: [hit],
-      };
-      groupMap.set(hit.sessionId, g);
-      grouped.push(g);
+  const grouped: GroupedHits[] = useMemo(() => {
+    const bySession = new Map<string, SearchHit[]>();
+    for (const hit of hits) {
+      const arr = bySession.get(hit.sessionId) ?? [];
+      arr.push(hit);
+      bySession.set(hit.sessionId, arr);
     }
-  }
-
-  // Fetch session titles for groups (lazy, deduped)
-  useEffect(() => {
-    for (const g of grouped) {
-      if (g.sessionTitle === null && !sessionCache.has(g.sessionId)) {
-        fetchSession(g.sessionId)
-          .then((sess) => {
-            g.sessionTitle = sess.title ?? "Untitled";
-            setSessionCache((prev) => new Map(prev).set(g.sessionId, sess));
-          })
-          .catch(() => {
-            g.sessionTitle = "Untitled";
-          });
-      } else if (sessionCache.has(g.sessionId)) {
-        g.sessionTitle = sessionCache.get(g.sessionId)?.title ?? "Untitled";
-      }
+    const groups: GroupedHits[] = [];
+    for (const [sessionId, sessionHits] of bySession) {
+      const meta = sessionMap.get(sessionId);
+      groups.push({
+        sessionId,
+        source: sessionHits[0].source,
+        sessionTitle: meta?.title ?? "(unknown session)",
+        hits: sessionHits.sort((a, b) => b.score - a.score),
+        bestScore: Math.max(...sessionHits.map((h) => h.score)),
+      });
     }
-  }, [grouped, sessionCache]);
+    return groups.sort((a, b) => b.bestScore - a.bestScore);
+  }, [hits, sessionMap]);
 
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      height: "100%",
-      background: "var(--bg-0)",
-    }}>
-      {/* ── Search header ── */}
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        height: "var(--header-h)",
-        padding: "0 20px",
-        borderBottom: "1px solid var(--border-faint)",
-        background: "var(--bg-1)",
-        flexShrink: 0,
-      }}>
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ opacity: 0.5 }}>
-          <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3" />
-          <path d="M11 11L14 14" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        </svg>
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search across all conversations…"
-          style={{
-            flex: 1,
-            height: "32px",
-            fontSize: "13px",
-            fontFamily: "var(--font-sans)",
-            color: "var(--text-primary)",
-            background: "transparent",
-            border: "none",
-            outline: "none",
-          }}
-        />
-        {loading && <Spinner size={14} />}
-        <button
-          onClick={() => setIncludeArchived(!includeArchived)}
-          className="mono"
-          style={{
-            fontSize: "10px",
-            color: includeArchived ? "var(--accent)" : "var(--text-faint)",
-            background: "transparent",
-            border: "1px solid var(--border-faint)",
-            padding: "3px 8px",
-            borderRadius: "var(--radius-sm)",
-            cursor: "pointer",
-          }}
-        >
-          {includeArchived ? "• archived" : "archived"}
-        </button>
-        <button
-          onClick={onClose}
-          className="mono"
-          style={{
-            fontSize: "10px",
-            color: "var(--text-faint)",
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          esc
-        </button>
+    <div className="search-view">
+      <div className="search-header">
+        <div className="search-input-wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Search across all sessions..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch()}
+            autoFocus
+          />
+          {searching && <span className="search-spinner" />}
+        </div>
+        <label className="archive-toggle">
+          <input
+            type="checkbox"
+            checked={includeArchived}
+            onChange={(e) => setIncludeArchived(e.target.checked)}
+          />
+          <span>Include archived</span>
+        </label>
       </div>
 
-      {/* ── Results ── */}
-      <div style={{ flex: 1, overflow: "auto", padding: "16px 0" }}>
-        {error && (
-          <div style={{ padding: "20px 24px", color: "var(--error)", fontSize: "13px" }}>
-            {error}
-          </div>
+      <div className="search-stats">
+        {!searched && <span>Search across all sessions and messages.</span>}
+        {searched && !searching && (
+          <span>{hits.length} match{hits.length !== 1 ? "es" : ""} in {grouped.length} session{grouped.length !== 1 ? "s" : ""}</span>
         )}
+      </div>
 
-        {!loading && !error && hasSearched && grouped.length === 0 && (
-          <div style={{
-            textAlign: "center",
-            padding: "80px 20px",
-            color: "var(--text-faint)",
-          }}>
-            <div style={{ fontSize: "13px", marginBottom: "6px", color: "var(--text-tertiary)" }}>
-              No results for "{query}"
-            </div>
-            <div style={{ fontSize: "11px" }}>
-              Try different keywords or include archived sessions.
-            </div>
-          </div>
-        )}
-
-        {!loading && !error && !hasSearched && (
-          <div style={{
-            textAlign: "center",
-            padding: "80px 20px",
-            color: "var(--text-faint)",
-            fontSize: "13px",
-          }}>
-            Type to search across all conversations
-          </div>
-        )}
-
-        {grouped.length > 0 && (
-          <div style={{ maxWidth: "760px", margin: "0 auto", padding: "0 24px" }}>
-            {/* Result count */}
-            <div className="mono" style={{
-              fontSize: "10.5px",
-              color: "var(--text-faint)",
-              marginBottom: "16px",
-              paddingBottom: "12px",
-              borderBottom: "1px solid var(--border-faint)",
-            }}>
-              {hits.length} match{hits.length !== 1 ? "es" : ""} in {grouped.length} session{grouped.length !== 1 ? "s" : ""}
-            </div>
-
-            {/* Grouped results */}
-            {grouped.map((group) => {
-              const title = group.sessionTitle ?? "…";
-              return (
-                <div key={group.sessionId} style={{ marginBottom: "24px" }}>
-                  {/* Session header */}
-                  <button
-                    onClick={() => onOpenSession(group.sessionId)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      width: "100%",
-                      padding: "6px 0",
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      marginBottom: "4px",
-                    }}
+      <div className="search-results">
+        {grouped.map((group) => {
+          const meta = SOURCE_META[group.source as keyof typeof SOURCE_META] ?? SOURCE_META.api_server;
+          return (
+            <div key={group.sessionId} className="search-group">
+              <div className="search-group-header" onClick={() => onOpenSession(group.sessionId)}>
+                <span className="group-source-dot" style={{ background: meta.color }} />
+                <span className="group-title">{group.sessionTitle}</span>
+                <span className="group-source-label" style={{ color: meta.color }}>{meta.label}</span>
+                <span className="group-hit-count">{group.hits.length} match{group.hits.length !== 1 ? "es" : ""}</span>
+                <svg className="group-open-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M7 7h10v10M7 17 17 7" />
+                </svg>
+              </div>
+              <div className="search-group-hits">
+                {group.hits.map((hit) => (
+                  <div
+                    key={`${hit.sessionId}-${hit.messageId}`}
+                    className="search-hit"
+                    onClick={() => onOpenSession(hit.sessionId)}
                   >
-                    <SourceDot source={group.source} />
-                    <span style={{
-                      fontSize: "12.5px",
-                      fontWeight: 500,
-                      color: "var(--text-primary)",
-                      flex: 1,
-                    }} className="truncate">
-                      {title}
-                    </span>
-                    <span className="mono" style={{
-                      fontSize: "10px",
-                      color: "var(--text-faint)",
-                    }}>
-                      {sourceLabel(group.source)}
-                    </span>
-                    <span className="mono" style={{
-                      fontSize: "10px",
-                      color: "var(--text-faint)",
-                      padding: "1px 5px",
-                      borderRadius: "3px",
-                      background: "var(--bg-2)",
-                    }}>
-                      {group.hits.length}
-                    </span>
-                  </button>
-
-                  {/* Individual hits */}
-                  {group.hits.slice(0, 5).map((hit, i) => (
-                    <button
-                      key={`${hit.messageId}-${i}`}
-                      onClick={() => onOpenSession(group.sessionId)}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        padding: "6px 0 6px 18px",
-                        background: "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        borderLeft: "1px solid var(--border-faint)",
-                        marginLeft: "3px",
-                      }}
-                    >
-                      <div style={{
-                        fontSize: "12px",
-                        lineHeight: "1.55",
-                        color: "var(--text-secondary)",
-                        marginBottom: "3px",
-                      }}>
-                        <Highlight text={hit.snippet} query={query} />
-                      </div>
-                      <div className="mono" style={{
-                        fontSize: "9.5px",
-                        color: "var(--text-faint)",
-                      }}>
-                        msg #{hit.messageId} · {relativeTime(hit.timestamp)} · score {hit.score.toFixed(2)}
-                      </div>
-                    </button>
-                  ))}
-                  {group.hits.length > 5 && (
-                    <div className="mono" style={{
-                      fontSize: "10px",
-                      color: "var(--text-faint)",
-                      padding: "4px 0 4px 18px",
-                      marginLeft: "3px",
-                    }}>
-                      +{group.hits.length - 5} more
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    <HighlightSnippet snippet={hit.snippet} query={query} />
+                    <span className="hit-time">{relativeTime(hit.timestamp)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {searched && hits.length === 0 && !searching && (
+          <div className="search-empty">No results found.</div>
         )}
       </div>
     </div>
+  );
+}
+
+function HighlightSnippet({ snippet, query }: { snippet: string; query: string }) {
+  if (!query.trim()) return <span className="hit-snippet">{snippet}</span>;
+  const terms = query.trim().split(/\s+/).filter((t) => t.length > 0);
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = snippet.split(regex);
+  return (
+    <span className="hit-snippet">
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className="hit-highlight">{part}</mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
   );
 }

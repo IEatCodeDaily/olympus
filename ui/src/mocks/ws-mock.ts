@@ -74,22 +74,21 @@ class MockWebSocket {
     });
   }
 
-  // Simulate live session.* frames every ~15s — new sessions appear, existing update
+  // Simulate session.updated frames every ~30s — SLOW, just lastActivity bumps
+  // (fast traffic causes the virtual list to reorder mid-interaction, breaking clicks)
   private startLiveSessionTraffic(): void {
     this.sessionTimer = setInterval(() => {
-      // Occasionally bump lastActivity + messageCount on a random session
-      if (Math.random() < 0.6) {
+      if (Math.random() < 0.3) {
         const sess = SESSIONS[Math.floor(Math.random() * SESSIONS.length)];
         this.emit({
           kind: "session.updated",
           sessionId: sess.id,
           changes: {
             lastActivity: Math.floor(Date.now() / 1000),
-            messageCount: sess.messageCount + 1,
           },
         });
       }
-    }, 15000);
+    }, 30000); // 30s, not 15s — reduces churn
   }
 
   // On subscribe: replay message.delta tokens for the latest assistant message, then message.done
