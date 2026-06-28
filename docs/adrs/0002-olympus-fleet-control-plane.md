@@ -550,12 +550,14 @@ working copy**, so session output never pollutes a repo's `jj status`.
 │           ├── repos/<org>/<repo>/      #   sub-session's own jj workspace (forked from parent's commit)
 │           └── artifacts/
 ├── projects/                            # project-scoped SHARED assets — NOT workdirs, NOT session spaces
-│   └── <project_id>/
-│       ├── vault/                       # knowledge vault (llm-wiki); own jj repo; live-synced (§8)
-│       │   └── .jj/
+│   └── <project_id>/                    # (vault is now a separate top-level resource — see §8)
 │       ├── skills.json                  # project default ACTIVE skills (refs into library)
 │       ├── mcp.json                     # project default ACTIVE MCP servers
 │       └── config.json                  # project config, materialized from control plane
+├── vaults/                              # KNOWLEDGE VAULTS (top-level resource, §8)
+│   └── <vault_id>/                      #   curated knowledge repo (text=jj, blobs=content-addressed)
+│       ├── docs/                        #   source files (.md jj-tracked; .pdf/.xlsx via blobref)
+│       └── .vault/vault.db              #   local SQLite index (FTS5 + sqlite-vec)
 ├── skills/                              # Olympus-managed skill LIBRARY (ALL managed skills)
 │   └── <skill_id>/                      #   bytes materialized by envoy; READ-ALL (§9)
 ├── mcp/                                 # Olympus-managed MCP LIBRARY (ALL managed servers)
@@ -868,37 +870,153 @@ nodeActualState:                                 # reported by each envoy
 
 ---
 
-## 8. Knowledge vaults (project-scoped, live-synced)
+## 8. Knowledge vaults (separate top-level resource, access-gated, offline-first)
 
-A knowledge vault is a project-scoped, live-synced **LLM-wiki**: documentation and
-reference material agents in that project can read, including non-text references
-(`.pdf`, `.xlsx`, `.pptx`, images) alongside markdown.
+A knowledge vault is the **curated knowledge repository** — markdown docs, PDFs,
+spreadsheets, presentations, reference material. It is a **separate top-level
+resource**, NOT nested under projects and NOT mixed with session artifacts. This
+separation is deliberate:
 
-### 8.1 Storage and sync (decided)
+- **Session artifacts** (`sessions/<id>/.olympus/artifacts/`) are ephemeral agent
+  output — the random `.md`/`.html` an LLM generates mid-work. They die with the
+  session or get promoted. They **never** pollute the vault.
+- **The vault** is curated, reviewed, indexed, and persistent. Adding to it
+  requires explicit access approval (§8.3).
 
-- A vault lives at `~/olympus/projects/<project_id>/vault/` and **is its own jj
-  repo** (git-colocated). jj is the sync substrate. The canonical copy is a remote
-  the envoy pulls from / pushes to (a git remote the operator owns; for remote
-  nodes that traffic rides the iroh tunnel).
-- **Write path:** an agent (or the operator via the UI) writes vault files
-  locally. The envoy commits and pushes to the canonical remote, then emits a
-  `vault.updated` event to the control plane (updating the index). Writes are
-  serialized per vault by the envoy; a genuine push conflict surfaces to the
-  operator rather than auto-merging.
-- **Read/sync path:** other nodes serving the same project pull on a
-  `vault.updated` webhook plus a periodic cron backstop (e.g. every 5 min). No
-  Syncthing, no separate object store for the canonical copy.
-- The control plane holds the vault **index/metadata** (document list, titles,
-  tags, extracted-text refs, embeddings refs, last-synced commit); **bytes** live
-  in the jj-synced vault dir. Non-text references are stored as files and indexed
-  by path + extracted text (§10A.3).
+### 8.1 Filesystem layout
 
-### 8.2 Access
+```text
+~/olympus/vaults/                              ← VAULTS (top-level resource)
+└── <vault_id>/                                ← a vault
+    ├── docs/                                  ← source files
+    │   ├── *.md, *.txt                        ← TEXT: jj-tracked (lightweight, mergeable)
+    │   ├── *.pdf, *.xlsx, *.pptx             ← BINARIES: NOT jj-tracked
+    │   │   └── <filename>.blobref             ← jj-tracked pointer (blake3 hash → fetch blob)
+    │   └── images/, video/                    ← same: blobref + content-addressed bytes
+    ├── .vault/
+    │   ├── vault.db                           ← local SQLite index (FTS5 + sqlite-vec + metadata)
+    │   ├── sync.json                          ← sync state (last jj commit, subscription scope)
+    │   └── blobs/                             ← content-addressed blob cache (blake3-keyed)
+    │       └── <hash>                         ← fetched on demand (iroh-blobs P2P or R2/S3 fallback)
+    └── .jj/                                   ← jj tracks TEXT files + blobref pointers only
+```
 
-- Vaults are **project-scoped**: only sessions bound to that project may read the
-  vault. Part of the context/project isolation surface (§3).
-- Agents read the vault from the local path; the envoy guarantees the local copy
-  is current within the sync interval.
+### 8.2 Storage model — text in jj, binaries content-addressed (decided)
+
+**Text files** (`.md`, `.json`, `.txt`, configs) — tracked by jj (small,
+mergeable, conflict-rare). This is what jj is good at.
+
+**Binary files** (`.pdf`, `.xlsx`, `.pptx`, images, video) — **never tracked by
+jj** (jj has no LFS, no partial clone; storing blobs in jj would replicate every
+version of every binary on every node forever — verified). Instead:
+
+1. A small **`.blobref` pointer file** is jj-tracked — contains the blake3 hash,
+   mime type, and original filename. This is what jj syncs (a few hundred bytes).
+2. The **actual bytes** are content-addressed by blake3 hash:
+   - **Local cache:** `.vault/blobs/<hash>` (fetch-on-demand, lazy)
+   - **P2P fast-path:** **iroh-blobs** transfers between the operator's own nodes
+     (Mac ↔ Linux ↔ cloud) — fastest when a peer already has the blob
+   - **Durable tier:** **object store (R2/S3)** as the always-available backup
+     (like a CDN origin for Git LFS) — a node fetches from the nearest iroh peer
+     first, falls back to R2 if no peer has it
+3. A node never downloads a blob it doesn't need — **selective fetch**
+
+### 8.3 Access gating (change approval — sub-sessions cannot write directly)
+
+```text
+Vault access tiers (per vault, per session):
+  READ:    any session in the same org/context can read vault docs + search
+  PROPOSE: any session can propose a change (creates a diff artifact in session space)
+  WRITE:   only the main session / human operator / designated agents can commit
+  ADMIN:   org owner/admin can restructure, delete, change access
+```
+
+A sub-session that wants to add or modify a vault document:
+1. Writes the proposed file to its session artifacts (`.olympus/artifacts/proposed-doc.md`)
+2. Creates a vault change proposal (the diff + a `.blobref` if binary)
+3. The main session or a human reviews and either **accepts** (commits to the
+   vault jj repo + uploads blob if needed + re-indexes) or **rejects**
+
+This prevents the vault from filling with low-quality agent-generated content.
+The vault is curated; session artifacts are ephemeral. The promotion boundary is
+human-or-orchestrator-gated.
+
+### 8.4 The vault sync engine (runs in the envoy, per node)
+
+Each node's envoy runs a vault sync engine that maintains the local `vault.db`
+derived index from the vault files:
+
+```text
+1. FILE WATCH (inotify on vault/docs/)
+   → detects new/changed/deleted files
+   → computes blake3 hash per file
+   → if hash changed: queue for re-indexing
+
+2. TEXT EXTRACTION
+   .md → raw text (trivial)
+   .pdf → pdf-extract / pdfium
+   .xlsx → calamine (pure Rust)
+   .pptx/.docx → XML parse
+   images → OCR (tesseract) or vision-caption (deferred)
+   → produces clean text + metadata (title, headings, tags)
+
+3. EMBEDDING
+   chunk the text (sliding window, ~512 tokens, overlap)
+   embed each chunk (local model by default; API opt-in per vault)
+   LOCAL: all-MiniLM-L6-v2 via candle/ort (~80MB model, fully offline)
+   API:   OpenAI/Voyage/Z.AI (costs money; hits the §16 budget; higher quality)
+
+4. INDEX WRITE (local vault.db — SQLite + sqlite-vec)
+   documents: path, hash, title, modified_at, vault_id, tags
+   chunks: doc_id, ordinal, text, embedding (blob)
+   chunks_fts: FTS5 index on chunk text
+   sync_state: last_synced_hash, last_indexed_at
+   → upsert on change, delete on removal
+   → the index is a DERIVED projection of the files (always rebuildable)
+
+5. SELECTIVE SYNC
+   jj sparse checkout: only materialize subscribed vault paths
+   vault.db: only index materialized files
+   subscription config per node: which vaults, which folders/tags
+   → mobile holds 2 vaults; PC holds all; server holds all
+```
+
+### 8.5 vault.db — the local index
+
+**sqlite-vec** (MIT) as a SQLite extension for vector search. Chosen because:
+- embedded in the same vault.db — no separate index server
+- MIT/shippable
+- vault sizes (thousands of docs, not millions) are within brute-force range
+- works offline (no network needed for search)
+
+**The index is local-only and always derived from files.** No index sync over the
+wire — the index is rebuilt from the jj-synced files. If files are correct (jj
+sync), the index is correct (rebuild from files). This avoids the hardest problem
+in distributed vector indices (conflicting embedding versions across nodes).
+
+### 8.6 Vault is a content-plane resource (§2.6 / §3.5.4)
+
+The vault is **content**, not coordination. It is classified as content in the
+§3.5.4 cut — it does not depend on the single-writer scheduler, and it is a
+candidate for future CRDT-based local-first sync (§2.6). In the MVP, both files
+(jj) and index (vault.db) are local-derivation only; the control plane holds
+metadata (vault list, access config, subscription config) as coordination state.
+
+### 8.7 Vaults are optionally project-bound
+
+A vault has `orgId` + `ownerId` + optional `projectId` (§3.5.3). A vault can be
+shared across projects in the same org, or dedicated to one project. Access is
+gated by the §8.3 tiers + the org RBAC role (§3.5.2). The vault is NOT nested
+under `projects/<id>/` in the filesystem — it is a top-level resource
+(`vaults/<vault_id>/`) with the project link recorded in metadata.
+
+### 8.8 MVP status
+
+The vault is **post-MVP**. The MVP ships without a vault (sessions and Hermes
+parity first). This section records the data-model decisions (text in jj, binaries
+content-addressed via iroh-blobs + object store, sqlite-vec local index, access
+gating, sync engine, selective sync) so the vault lands as an additive feature,
+not a redesign.
 
 ---
 
