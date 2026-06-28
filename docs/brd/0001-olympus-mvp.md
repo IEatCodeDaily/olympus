@@ -10,7 +10,8 @@
 
 The operator runs Hermes Agent across multiple channels — CLI (1,038 sessions),
 Telegram (285), WebUI (22), Discord (9), cron (133), API server (70), and
-subagents (69). **1,626 sessions totaling 108,169 messages**, today, across
+subagents. **~1,633 sessions totaling ~108,584 messages** at last snapshot (the
+live count drifts), across
 `~/.hermes/state.db` (1.4 GB). These sessions are siloed: a conversation started
 on Telegram cannot be resumed from the WebUI or CLI without manual handoff; the
 WebUI session list and the Telegram gateway maintain separate views; there is no
@@ -30,7 +31,7 @@ own auth/gateway/profile system is flaky under multi-provider load.
 
 **A single, sync-native control plane where every session from every channel
 lives in one place and is resumable from anywhere.** The operator opens Olympus,
-sees all 1,626 sessions (CLI, Telegram, Discord, WebUI, cron, subagents)
+sees all sessions (CLI, Telegram, Discord, WebUI, cron, subagents)
 unified, searches across them, and resumes any one — continuing the conversation
 in Olympus's interface regardless of which channel originated it.
 
@@ -47,7 +48,7 @@ interface** — not a reimplementation of Hermes's tools, skills, MCP, or memory
 
 | Requirement | What it means | Success criterion |
 |---|---|---|
-| **Unified session store** | Every session from every Hermes channel synced into Olympus's event log from `state.db` (WAL-mode concurrent reads); all new external sessions appear live | All 1,629 existing sessions visible in Olympus; new CLI/Telegram/Discord sessions appear live |
+| **Unified session store** | Every session from every Hermes channel synced into Olympus's event log from `state.db` (WAL-mode concurrent reads); all new external sessions appear live | All existing sessions (the import-start snapshot count) visible in Olympus; new CLI/Telegram/Discord sessions appear live |
 | **Cross-channel resume = fork** | Continuing any external session forks it into an Olympus-managed session (never in-place — avoids cross-channel divergence) | Fork a Telegram-started session into Olympus; continue it there; the Telegram session is untouched |
 | **Sync-native reactivity** | Session list, messages, tool calls update live as Hermes runs — no refresh, no polling the UI (control plane tails state.db) | Send a message from CLI; see it appear in Olympus in real time |
 | **Chat interface** | Full chat UI with streaming, markdown, tool-call rendering, model switching — parity with Hermes Studio's chat | Operator can drive Hermes from Olympus the same way they drive it from Studio today |
@@ -75,7 +76,7 @@ These are in ADR 0002 but explicitly **deferred past the MVP**:
 
 | NFR | Target |
 |---|---|
-| Import time | 1,626 sessions / 108k messages imported in <10 min |
+| Import time | full snapshot (~1,633 sessions / ~108k messages) imported in <10 min |
 | Search latency | Keyword search across all messages <500ms p95 |
 | Session list load | <200ms for the full list (paginated, virtualized) |
 | Streaming latency | Token-to-UI <100ms over local WSS |
@@ -87,7 +88,7 @@ These are in ADR 0002 but explicitly **deferred past the MVP**:
 
 1. **The operator stops opening Hermes Studio.** Olympus is the primary
    interface for all Hermes interaction within 2 weeks of MVP ship.
-2. **Zero sessions lost in migration.** 1,626 in → 1,626 in Olympus.
+2. **Zero sessions lost in migration.** import-start snapshot count in → same count in Olympus.
 3. **Cross-channel resume works.** Operator resumes a Telegram session from
    Olympus at least once per day and it just works.
 4. **Search finds what Studio couldn't.** Operator runs a search that spans
@@ -108,7 +109,10 @@ These are in ADR 0002 but explicitly **deferred past the MVP**:
 ## 8. Timeline
 
 MVP target: **4–6 weeks** from implementation start. Phased per ADR 0002 §23
-phases 1–5 (control-plane core, Hermes bridge, session store, UI, reactive sync).
+the implementation plan's phases (control-plane core done; then state.db import +
+unified read-only view + search + live sync, then ACP bridge + fork after the
+required spikes). See `docs/plans/2026-06-28-olympus-mvp.md` for the authoritative
+phase list and `docs/reviews/2026-06-28-adversarial-review.md` for the gating spikes.
 The implementation plan (`docs/plans/`) breaks this into bite-sized tasks.
 
 ## 9. Stakeholders

@@ -64,10 +64,10 @@ single-binary process** with these parts:
   behind a `Transport` trait, two byte-pipes. Browser↔control-plane uses WSS
   (browsers cannot be raw iroh peers) — the one unavoidable second transport.
 - **Durable workflows:** an embedded, single-process, **checkpoint-based**
-  engine backed by redb. Either adopt **Sayiir** (MIT, continuation-based, no
-  deterministic-replay constraint) via a custom redb `PersistentBackend`, or
-  build an equivalent — pending the source-review verdict. The n8n-like visual
-  builder is ours regardless.
+  engine backed by redb. **Decision: adopt Sayiir** (MIT, continuation-based, no
+  deterministic-replay constraint) via a custom redb `PersistentBackend` — per the
+  completed source review (ADR 0002 §15.2). The n8n-like visual builder is ours.
+  (Workflows are post-MVP; this records the engine choice.)
 - **Storage / compression / search:** redb values **zstd-compressed with a
   trained dictionary** (messages are highly compressible); **tantivy** (MIT) for
   full-text/BM25 search as a derived, rebuildable index; a **content-addressed
@@ -105,9 +105,9 @@ inherently per-host and belong to that host's envoy.")
 - **Correctness caveat unchanged:** the substrate guarantees state/view
   correctness, not behavioral correctness. The verification layer (verifiable
   artifact, not agent self-report) is still required.
-- **Open inputs at time of writing:** (a) Sayiir adopt-vs-build (source review in
-  flight); (b) confirmed event-sourced log over state-tables (decided: log, for
-  audit). Neither blocks this decision; both are captured in ADR 0002.
+- **Resolved inputs:** (a) Sayiir **adopted** after the source review (ADR 0002
+  §15.2); (b) event-sourced log over state-tables (decided: log, for audit). Both
+  captured in ADR 0002.
 
 ## Rejected alternatives (substrate)
 

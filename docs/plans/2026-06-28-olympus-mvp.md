@@ -8,25 +8,57 @@ a Rust-native control plane.
 
 **Architecture:** Rust single-binary control plane (redb event log + in-memory
 views + delta broadcast over WSS + single-writer scheduler) + Hermes bridge
-(gateway socket or CLI subprocess) + React/Tauri UI. Single-node MVP; no envoy,
-no multi-node, no workflows, no cards/board. See ADR 0002 (full spec) and ADR
-0003 (substrate). BRD/PRD: `docs/brd/0001` + `docs/prd/0001`.
+(**ACP over stdio** — `hermes acp`; see §ACP below) + React/Tauri UI. Single-node
+MVP that **collapses Layer 1 + Layer 2 into one process but keeps an internal
+envoy module boundary** (per the ADR 0002 §2.1 hard boundary — the host-effect
+code lives behind an `envoy` module seam even when co-located, so multi-node is a
+later deployment change, not a refactor). No multi-node, no workflows, no
+cards/board UI in MVP. See ADR 0002 (full spec) and ADR 0003 (substrate).
+BRD/PRD: `docs/brd/0001` + `docs/prd/0001`. Adversarial review:
+`docs/reviews/2026-06-28-adversarial-review.md` (the fixes below address it).
 
 **Tech stack:** Rust (redb, tantivy, zstd, tokio, axum, serde/postcard), React
 + Vite + Tauri (UI), TypeScript (UI only).
 
-**Current repo state:** Legacy Convex/TS scaffold from ADR 0001. No Cargo.toml,
-no Rust workspace. The `convex/`, `apps/`, `packages/` dirs are the old TS
-scaffold. This plan replaces them with a Rust workspace.
+**Current repo state:** Phase 0 + Phase 1 DONE (commit `fe7580b`): Rust workspace
++ redb event log + zstd compression, 14 tests green. The legacy Convex/TS
+scaffold is removed. Remaining phases build on `crates/control-plane`.
 
-**Import data:** `~/.hermes/state.db` — 1,626 sessions, 108,169 messages, 1.4GB.
+**Import data:** `~/.hermes/state.db` (SQLite, WAL). **Counts are NOT hardcoded** —
+they drift (a read-only snapshot at the start of this plan showed ~1,633 sessions
+/ ~108,584 messages; the live DB changes constantly). **Acceptance = "counts equal
+the read-only snapshot taken at import start," recorded in the import report** —
+never fixed constants in prose (adversarial review blocker #6). Sources observed:
+cli, telegram, cron, subagent, api_server, webui, discord.
 Schema:
 ```sql
--- sessions table: id, source, user_id, model, started_at, ended_at, message_count,
---   tool_call_count, input_tokens, output_tokens, title, archived, git_branch, ...
--- messages table: id, session_id, role, content, tool_call_id, tool_calls,
---   tool_name, timestamp, token_count, finish_reason, reasoning, reasoning_content, ...
+-- sessions: id, source, user_id, model, started_at, ended_at, message_count,
+--   tool_call_count, input_tokens, output_tokens, title, archived, git_branch,
+--   parent_session_id, model_config (holds _branched_from for forks), ...
+-- messages: id (AUTOINCREMENT, NON-contiguous), session_id, role, content,
+--   tool_call_id, tool_calls, tool_name, timestamp, token_count, finish_reason,
+--   reasoning, reasoning_content,
+--   active, observed, compacted  -- ⚠ MUTABLE state columns (see Phase 4 sync)
+-- FTS triggers maintain messages_fts; session counters are updated only by
+-- Hermes methods, NOT triggers.
 ```
+
+> **§ACP — the real Hermes bridge contract (source-verified; replaces any
+> "gateway socket / CLI subprocess" wording).** The drive lane is `hermes acp`
+> (Agent Client Protocol, JSON-RPC over stdio). Real methods (verified in
+> `acp_adapter/`):
+> - `session/prompt` — send a prompt. **Slash commands (`/steer …`, `/model …`)
+>   are sent as prompt TEXT**, intercepted inside prompt handling — there is NO
+>   ACP `steer` or generic `slash` method.
+> - `session/cancel` — interrupt the running turn.
+> - `session/set_model` — switch model.
+> - `session/resume` — resume, but **only restores rows whose `source == "acp"`**
+>   (arbitrary external telegram/cli sessions are NOT directly ACP-resumable —
+>   this is why cross-channel continuation must FORK into an acp-owned session).
+> - `session/update` — streaming notifications (text / tool / thought).
+> - There is NO `hermes acp --resume` CLI flag; resume is an ACP method call.
+> Any §19 "uniform command queue" is an Olympus-side abstraction; the envoy maps
+> it to these real methods. Do NOT call invented method names.
 
 ---
 
@@ -350,11 +382,27 @@ fn replay_rebuilds_views() {
 - `GET /api/sessions/:id/messages` — REST query: list messages (paginated).
 - `POST /api/sessions/:id/messages` — REST mutation: send a message to Hermes.
 
+**AUTH GATE (mandatory — adversarial review blocker #7; NOT deferred).** state.db
+holds secrets, system prompts, tool outputs, and corporate context; an
+unauthenticated local server that can read all history and drive Hermes is a
+privilege-escalation surface. So even in single-user MVP:
+- **Bind `127.0.0.1` by default**; remote bind is opt-in and **fails closed**.
+- **Per-install random token**: generated on first run, stored mode-0600 under
+  `~/.olympus/`; required on every `/api/*` and the `/ws` upgrade (query param for
+  WS, header for REST — mirrors how Hermes's own dashboard gates `/api/pty`).
+- **Strict Origin/Host checks** on the WS upgrade and mutations (reject
+  cross-origin; a hostile local web page must not reach the port). No "localhost
+  == trusted."
+- This is the `can(user, action, resource)` seam (ADR §3.5.2) in its MVP form:
+  one operator, one token; the call sites exist so real RBAC is a later flip.
+
 **Verify:**
 ```bash
 cargo run
-# In another terminal:
-curl http://localhost:8787/api/sessions
+# unauth request is rejected:
+curl -sS http://localhost:8787/api/sessions ; echo " (expect 401)"
+# with token:
+curl -sS -H "authorization: Bearer $(cat ~/.olympus/token)" http://localhost:8787/api/sessions
 # Expected: {"sessions": []} (empty until import)
 ```
 
@@ -405,15 +453,15 @@ wscat -c ws://localhost:8787/ws
 - Create: `crates/control-plane/src/bridge/acp.rs` (JSON-RPC-over-stdio client)
 - Create: `crates/control-plane/src/bridge/hermes.rs` (`HermesAgentRuntime`)
 
-**Interface (uniform command queue → native ACP):**
+**Interface (Olympus-side uniform command queue → REAL native ACP methods):**
 ```rust
 pub enum AgentCommand {
     Prompt { text: String, model: Option<String> },
-    Steer { text: String },      // ACP `steer` — mid-turn injection
-    Cancel,                       // ACP `session/cancel`
-    Stop,
-    SwitchModel { model: String },
-    Slash { command: String },
+    Steer { text: String },      // → session/prompt with text "/steer <text>" (NOT an ACP method)
+    Cancel,                       // → session/cancel
+    Stop,                         // → close the ACP child
+    SwitchModel { model: String },// → session/set_model
+    Slash { command: String },    // → session/prompt with text "/<command>" (NOT an ACP method)
 }
 
 pub enum AgentEvent {
@@ -426,25 +474,38 @@ pub enum AgentEvent {
 
 #[async_trait]
 pub trait AgentRuntime: Send + Sync {
-    async fn start(&self, session_id: &str) -> anyhow::Result<()>; // spawn `hermes acp`, open stdio
-    async fn send(&self, cmd: AgentCommand) -> anyhow::Result<()>; // → ACP method over stdin
+    async fn start(&self, session_id: &str) -> anyhow::Result<()>; // spawn `hermes acp`, open stdio, session/resume or session/new
+    async fn send(&self, cmd: AgentCommand) -> anyhow::Result<()>; // → real ACP method (table below)
     fn events(&self) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>>; // from `session/update`
     async fn stop(&self) -> anyhow::Result<()>;
 }
 ```
 
-**ACP mechanics (verified against Hermes source):**
-- Spawn `hermes acp` as a child; it speaks **ACP (Agent Client Protocol),
-  JSON-RPC over stdio**.
-- `Prompt` → `session/prompt`; `Steer` → `steer` (Hermes `acp_adapter/server.py`
-  line ~456, *"Inject guidance into the currently running agent turn"*); `Cancel`
-  → `session/cancel` (sets cancel_event + `agent.interrupt()`); streaming via
-  `session/update` notifications.
-- **No Hermes fork change needed** — these methods already exist.
+**ACP mechanics (SOURCE-VERIFIED — see §ACP in the header + the adversarial
+review). The earlier "steer is an ACP method / no fork change" claim was WRONG.**
 
-**SPIKE (do first):** start `hermes acp`, send `session/prompt`, confirm streamed
-`session/update`, then send `steer` mid-turn and confirm it lands. This is the
-one integration to validate before building on it.
+| Olympus command | Real ACP wire call |
+|---|---|
+| `Prompt` | `session/prompt` (text) |
+| `Steer` | `session/prompt` with text `"/steer <text>"` (slash intercepted in prompt handling; only lands while a turn is running) |
+| `Slash` | `session/prompt` with text `"/<command>"` |
+| `Cancel` | `session/cancel` (sets cancel_event + `agent.interrupt()`) |
+| `SwitchModel` | `session/set_model` |
+| start/resume | `session/resume` — **only for rows with `source=="acp"`**; for a non-acp external session, FORK first (Phase 5) into an acp-owned session, then resume the fork |
+| streaming | `session/update` notifications |
+
+- **`session/set_model` is a real method** (confirmed) — model switching does NOT
+  need the slash path, though `/model` text also works.
+- **Steer is best-effort and turn-scoped:** `/steer` only injects while a turn is
+  actively running; otherwise it queues/no-ops per Hermes behavior. Olympus must
+  not assume steer lands when the agent is idle.
+
+**SPIKE 0 (MANDATORY — do BEFORE building the bridge; adversarial review blocker
+#1).** Against a throwaway acp session: `session/new` → `session/prompt` "say
+PONG" → assert streamed `session/update` PONG → `session/set_model` → a long
+prompt then a concurrent `session/prompt "/steer …"` → assert it influences
+output → `session/cancel`. Capture the exact JSON-RPC frames into
+`docs/reviews/acp-wire-spike.md`. Only build `acp.rs` once the frames are proven.
 
 **Verify:**
 ```bash
@@ -455,28 +516,46 @@ cargo test bridge::acp   # unit: frame encode/decode
 
 **Commit:** `feat: ACP bridge (hermes acp over stdio)`
 
-### Task 4.2: state.db live sync (observe all external channels)
+### Task 4.2: state.db sync — MUTABLE-source reconciliation (NOT append-only)
 
-**Objective:** Tail `~/.hermes/state.db` for new sessions/messages from any channel.
+**Objective:** Keep Olympus in sync with `~/.hermes/state.db` across **inserts,
+updates, and deletes**. (Adversarial review blocker #3: state.db is NOT
+append-only — `messages.id` is non-contiguous, and Hermes mutates rows via
+compaction (`active=0, compacted=1`), rewind/undo (`active=0`), and destructive
+`replace_messages` (delete+reinsert, called by ACP after turns). A pure
+`id > last_seen` tail misses every mutation and diverges.)
 
 **Files:**
 - Create: `crates/control-plane/src/sync.rs`
 
-**Design:**
-- Open `~/.hermes/state.db` read-only via rusqlite (WAL mode → concurrent-safe).
-- Track `last_seen_message_id` in Olympus's redb meta.
-- Poll loop (~1–2s, optional inotify on `state.db-wal`):
-  `SELECT * FROM messages WHERE id > ?1 ORDER BY id` → append `MessageAppended`
-  events; `SELECT * FROM sessions WHERE started_at > ?1` → `SessionCreated`.
-- One mechanism covers Telegram, Discord, CLI, cron, api_server, subagent.
+**Design — two layers:**
+1. **Fast tail (latency):** read-only rusqlite (WAL → concurrent-safe);
+   `SELECT * FROM messages WHERE id > ?last_seen ORDER BY id` on a ~1–2s poll
+   (optional inotify on `state.db-wal`) → `MessageAppended` events. Catches new
+   inserts quickly. **Honor `active`/`compacted`:** treat `active=0` as
+   tombstoned (don't surface), `compacted=1` per Hermes search semantics.
+2. **Reconciliation sweep (correctness):** periodically (e.g. every 30–60s, and
+   on session open) compute a per-session signature — `(max(id), row_count,
+   sum over active rows)` or a cheap checksum — and compare to Olympus's view.
+   On mismatch, re-read that session's rows and reconcile (handle deletes,
+   rewinds, compaction, title/counter/model changes via `SessionUpdated`).
+3. Session metadata (`message_count`, `title`, `model`, `archived`) is read from
+   `sessions` and reconciled too — counters there are authoritative (triggers do
+   NOT maintain them).
+
+**Acceptance / better path noted:** if reconciliation proves too chatty, the
+clean fix is to ask Hermes (via a patch — see `hermes-patches/`) for an
+append-only changefeed table of session mutations. Record that as a candidate
+patch if the sweep is insufficient.
 
 **Verify:**
 ```bash
-# Start a CLI session in another terminal: hermes -z "test message"
-# Assert: Olympus's session list gains the new session live; the message appears.
+# insert: hermes -z "test" in another terminal → appears in Olympus live.
+# mutation: trigger a rewind/compaction in a Hermes session → Olympus reflects
+#   the active=0 tombstone, not a stale duplicate.
 ```
 
-**Commit:** `feat: state.db live sync`
+**Commit:** `feat: state.db mutable-source sync (tail + reconciliation)`
 
 ---
 
@@ -489,8 +568,9 @@ cargo test bridge::acp   # unit: frame encode/decode
 **Files:**
 - Create: `crates/control-plane/src/import.rs`
 
-**Design (state.db is the complete archive — 1,629 sessions; NOT JSONL which is
-pruned to ~135):**
+**Design (state.db is the complete archive — NOT JSONL which is pruned to ~135;
+exclude `active=0` tombstoned messages; record the snapshot counts in an import
+report per the §header acceptance rule, do NOT hardcode):**
 ```rust
 pub fn import_sessions(state_db: &Path, log: &Log) -> anyhow::Result<ImportStats> {
     let conn = rusqlite::Connection::open_with_flags(
@@ -514,38 +594,50 @@ pub fn import_sessions(state_db: &Path, log: &Log) -> anyhow::Result<ImportStats
 // zstd-compress content; batch in transactions of 1000; tantivy-index each.
 ```
 
-### Task 5.3: Fork mechanics (prepare a forked session in state.db)
+### Task 5.3: Fork mechanics — via a Hermes patch, proven on a COPIED db first
 
-**Objective:** Implement session forking — write a forked session into state.db so
-`hermes acp` can resume it.
+**Objective:** Fork a session so `hermes acp` can resume the fork. (Adversarial
+review blocker #2: raw-writing the LIVE state.db is a corruption risk. Hermes's
+`append_message` updates session counters explicitly (no trigger does it); branch
+lineage lives in `sessions.model_config._branched_from` (NOT a message marker);
+ACP resume ignores non-`acp` rows; a mid-thread `<olympus>` system message gets
+fed to the model but ignored by ACP UI replay. So the fork MUST replicate Hermes
+invariants and must never be developed against the live DB.)
 
-**Files:**
-- Create: `crates/control-plane/src/fork.rs`
+**Approach — a Hermes patch, not a raw writer:**
+1. **GATE: fork-spike on a COPIED db.** `cp ~/.hermes/state.db /tmp/fork-spike.db`.
+   Prototype the fork as a transaction that produces a resumable `source='acp'`
+   session; `hermes acp` (pointed at the copy via `HERMES_HOME`) must
+   `session/resume` it cleanly with correct history and NO invariant drift.
+   Capture results in `docs/reviews/fork-spike.md`.
+2. **Implement as a Hermes patch:** add `SessionDB.create_fork(src_id, fork_point,
+   fork_type)` to Hermes that does the full transaction with Hermes invariants:
+   `source='acp'`, `model_config._branched_from=src_id` + `parent_session_id`,
+   correct `message_count`/`tool_call_count`, `cwd`/`model_config`, `active=1`
+   rows, FTS, FK-valid lineage, timestamps. Save it via
+   `hermes-patches/patchctl.sh save 001-sessiondb-create-fork hermes_state.py`,
+   register in `manifest.toml`, commit to the Olympus repo.
+3. **Olympus calls the patched helper** (via the envoy / `hermes` CLI), never raw
+   SQL. Lineage of record is Olympus's event log (`forked_from`/`fork_point`/
+   `fork_type`); if a Hermes-side marker is needed it goes in `model_config`
+   (NOT a model-visible system message).
+4. **Backup before any live write:** SQLite online-backup or operator-confirmed
+   snapshot before the first live fork (adversarial review §6).
 
-**Design (ADR §6.6.1):**
-```rust
-pub fn fork_session(
-    state_db: &Path, src_session_id: &str, fork_point: u64,
-    fork_type: ForkType,  // SubSession | Parallel
-) -> anyhow::Result<String> {  // returns new session_id
-    // 1. open state.db (WAL, read-write for the fork-prep write)
-    // 2. create new session row; copy src messages [0..fork_point] into it
-    // 3. inject system message:
-    //    <olympus fork="true" from_agent="..." from_session="<src>"
-    //             fork_point="<n>" olympus_session="<new>"/>
-    // 4. record forked_from + fork_point + fork_type in Olympus's event log
-    // 5. (envoy then runs `hermes acp` --resume <new>)
-}
-```
+**Files:** `crates/control-plane/src/fork.rs` (calls the helper);
+`hermes-patches/patches/001-sessiondb-create-fork.patch` (the Hermes change).
 
 ### Task 5.4: Import + fork verification
 
 ```bash
-sqlite3 ~/.hermes/state.db "SELECT COUNT(*) FROM sessions;"   # 1629
-sqlite3 ~/.hermes/state.db "SELECT COUNT(*) FROM messages;"   # 108169
-curl localhost:8787/api/sessions | jq '.sessions | length'    # 1629
-# Fork: fork a session, assert `hermes acp --resume <fork>` loads the copied
-#   history + the marker; assert the source session row is unchanged.
+# Counts = the snapshot taken at import start (NOT hardcoded — §header rule).
+#   Record snapshot in the import report; assert Olympus count == snapshot count.
+SNAP_S=$(sqlite3 -readonly ~/.hermes/state.db "SELECT COUNT(*) FROM sessions;")
+SNAP_M=$(sqlite3 -readonly ~/.hermes/state.db "SELECT COUNT(*) FROM messages WHERE active=1;")
+curl -s localhost:8787/api/sessions | jq '.sessions | length'   # == $SNAP_S
+# Fork (on the COPIED db first, then live with backup): fork a session, assert
+#   `hermes acp` session/resume loads the copied history; assert the SOURCE
+#   session rows are byte-for-byte unchanged.
 ```
 
 **Commit:** `feat: import from state.db + session fork mechanics`
@@ -636,7 +728,7 @@ curl 'http://localhost:8787/api/search?q=esp32'
 1. `cargo run` (start control plane).
 2. Import runs (or run manually).
 3. Open `http://localhost:8787` in browser.
-4. Session list shows 1,626 sessions.
+4. Session list shows all imported sessions (== the import-start snapshot count).
 5. Filter by source = telegram → 285 sessions.
 6. Search "esp32" → results from multiple channels.
 7. Click a session → chat view → history loads.
@@ -670,10 +762,12 @@ curl 'http://localhost:8787/api/search?q=esp32'
 | 2 | 3 | In-memory views (sessions, messages) |
 | 3 | 2 | WSS server + delta broadcast |
 | 4 | 2 | Hermes bridge (gateway + wiring) |
-| 5 | 3 | Import from state.db (1,626 sessions) |
+| 5 | 3 | Import from state.db (full snapshot) + fork (via Hermes patch) |
 | 6 | 1 | tantivy search |
 | 7 | 5 | React UI (list, chat, search, settings) |
 | 8 | 3 | Integration, systemd, Tauri |
 
 **Total: 24 tasks across 9 phases.** Each task is independently committable.
-The riskiest is Phase 4 (Hermes bridge) — spike the gateway protocol first.
+The riskiest is Phase 4/5 (ACP bridge + fork) — do the ACP wire-spike and the
+fork-on-copied-DB spike FIRST (adversarial review blockers #1, #2). The read-only
+track (import + view + search + sync) has no spike dependency and is built first.

@@ -1893,8 +1893,8 @@ Olympus **accepts node death**; it does not fight it with live migration.
   transport/identity friction reintroduced. Rejected in favor of a Rust-native
   single-binary control plane.
 - **Restate / n8n / Windmill (workflow engines).** BSL / fair-code / AGPL — not
-  shippable in a closed product. Rejected; the workflow engine is Sayiir (MIT) or
-  in-house, and the n8n-like surface is ours (§15, ADR 0003).
+  shippable in a closed product. Rejected; the workflow engine is **Sayiir (MIT,
+  adopted — §15.2)**, and the n8n-like surface is ours (§15, ADR 0003).
 - **Port Hermes into the control plane as the orchestrator.** Hermes's value (PTY,
   spawn, filesystem, skills, local model switching) is inseparable from its host
   environment. Rejected; Hermes runs as a host process behind `AgentRuntime` and

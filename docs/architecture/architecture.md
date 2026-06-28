@@ -148,9 +148,11 @@ with a derived in-memory view.
   object storage; lifecycle designed in.
 - **SSH/terminal** (§18): envoy PTY ↔ xterm.js (over WSS); operator capability,
   audited.
-- **AgentRuntime** (§19): startRun/abortRun/listTools/callTool; lives in the envoy;
-  orchestrator = same impl + control-plane tools. Prove the seam with a real 2nd
-  impl early.
+- **AgentRuntime** (§19): an envoy-owned command queue (`start`/`send`/`events`/
+  `stop`) — `send` takes `prompt`/`steer`/`cancel`/`stop`/`switchModel`/`slash`
+  and each per-harness adapter maps them to that harness's native stdio protocol
+  (Hermes = ACP over stdio). Orchestrator = same impl + control-plane tools. Prove
+  the seam with a real 2nd impl early.
 - **Node death** (§20): accept; card reset + recover-as-new-attempt seeded with
   trace; base case = `reapOrphanedMainSessions`. State correctness + execution
   durability guaranteed; execution continuity NOT.

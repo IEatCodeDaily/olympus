@@ -107,14 +107,17 @@ open that session. (ADR §6.6.2.)
 **What:** Import all existing sessions and messages from
 `~/.hermes/state.db` into Olympus's redb event log.
 
-- **Source:** `~/.hermes/state.db` — `sessions` table (1,626 rows) + `messages`
-  table (108,169 rows). Schema documented in the implementation plan.
+- **Source:** `~/.hermes/state.db` — `sessions` + `messages` tables. **Counts
+  are a read-only snapshot taken at import start (the live DB drifts; ~1,633
+  sessions / ~108,584 active messages at last check), NOT hardcoded constants.**
+  Schema documented in the implementation plan.
 - **Mapping:** each Hermes session → an Olympus session event (with source
   channel, model, timestamps, token counts). Each Hermes message → an Olympus
   message event (with role, content, tool calls, reasoning, timestamp).
 - **Idempotent:** re-running the import on the same DB skips already-imported
   sessions (keyed by Hermes session ID).
-- **Verification:** count match (1,626 sessions, 108,169 messages), spot-check
+- **Verification:** Olympus count == the import-start snapshot count (recorded
+  in the import report), spot-check
   10 sessions across each source channel, FTS search works post-import.
 - **Indexing:** tantivy index built during import (every message indexed).
 
@@ -125,7 +128,8 @@ gateway-free. See ADR §6.7 (sync) and §19 (drive).
 
 **Lane 1 — Observe (read-only, all external channels):**
 - Source of truth is `~/.hermes/state.db` (WAL mode → concurrent reads while
-  Hermes writes). NOT the JSONL files (incomplete: ~135 on disk vs 1,629 sessions).
+  Hermes writes). NOT the JSONL files (incomplete: ~135 on disk vs the full
+  archive in state.db).
 - Live tail: `SELECT * FROM messages WHERE id > <last_seen_id>` polled ~1–2s
   (optionally inotify on `state.db-wal`). New rows → `MessageAppended` events →
   UI updates live. Covers Telegram, Discord, CLI, cron, api_server, subagent —
@@ -136,10 +140,13 @@ gateway-free. See ADR §6.7 (sync) and §19 (drive).
   stdio) per managed session and holds the process handle + stdio channel.
 - A uniform **command queue** in the envoy (`prompt`, `steer`, `cancel`, `stop`,
   `switchModel`, `slash`) maps to ACP methods: `session/prompt`, `steer` (mid-turn
-  injection — already in Hermes's `acp_adapter/server.py`), `session/cancel`
+  injection sent as `/steer` prompt TEXT, NOT an ACP method), `session/cancel`
   (interrupt — already present), with streaming `session/update` notifications.
-- **Zero Hermes fork change** for steer/cancel/prompt/streaming — ACP already
-  exposes them. Verified in Hermes source.
+- **ACP methods are real** for prompt/cancel/set_model/streaming (verified). Steer
+  and slash are prompt-TEXT, not methods. `session/resume` works only for
+  `source='acp'` rows — cross-channel continuation FORKS (F4). Forking needs a
+  small Hermes patch (`SessionDB.create_fork`, see `hermes-patches/`), proven on
+  a copied DB first — NOT a raw live-DB write.
 - The same `AgentRuntime` interface will back `ClaudeCodeRuntime` (Agent SDK
   streaming mode) and `CodexRuntime` (app-server) later — all stdio control
   protocols. MVP ships `HermesAgentRuntime` (ACP) + a trivial second impl to
@@ -171,14 +178,18 @@ renders collapsible cards. Olympus does NOT execute tools — Hermes does (§19)
 - **Appearance:** theme (dark/light), density (comfortable/compact).
 - **Data:** import trigger (re-run import), export all (JSON), clear cache
   (rebuild tantivy index).
-- **No profile/auth management in MVP** — Hermes's existing profile/auth system
-  continues to work as-is; Olympus doesn't touch it.
+- **MVP auth gate (mandatory, not deferred):** localhost bind by default,
+  per-install token (mode-0600), strict Origin/Host checks on `/ws` + `/api/*`.
+  state.db holds secrets — an unauthenticated local server is a privesc surface.
+  (No multi-user RBAC UI yet; the `can()` seam is operator-only — ADR §3.5.2.)
+  Olympus must also know WHICH Hermes profile/HERMES_HOME it operates on and
+  display it.
 
 ## 4. Non-functional requirements (from BRD, refined)
 
 | NFR | Target | How |
 |---|---|---|
-| Import time | <10 min for 1,626 sessions / 108k messages | Bulk insert into redb; zstd-dict compress; tantivy index in batches |
+| Import time | <10 min for the full snapshot (~1,633 sessions / ~108k messages) | Bulk insert into redb; zstd compress; tantivy index in batches |
 | Search p95 | <500ms across 108k messages | tantivy BM25; index on SSD |
 | Session list | <200ms, virtualized | redb range scan + in-memory view; react-window virtualization |
 | Streaming | <100ms token-to-UI | WSS delta broadcast; no per-token redb write (batch 100ms) |
@@ -190,19 +201,27 @@ renders collapsible cards. Olympus does NOT execute tools — Hermes does (§19)
 ### Flow A: First run (import + connect)
 
 1. Operator starts Olympus (`olympus` binary or `cargo run`).
-2. Olympus detects `~/.hermes/state.db` and prompts: "Import 1,626 sessions?"
+2. Olympus detects `~/.hermes/state.db`, snapshots the counts, and prompts:
+   "Import N sessions?" (N from the live snapshot, not a constant).
 3. Operator confirms → import runs (progress bar) → tantivy index builds.
 4. Olympus detects Hermes gateway (or prompts for CLI path).
 5. Session list loads → operator sees all sessions.
 
-### Flow B: Resume a Telegram session
+### Flow B: Continue (fork) a Telegram session
 
 1. Operator opens Olympus → session list.
-2. Filters by source = Telegram (285 sessions).
+2. Filters by source = Telegram.
 3. Finds the session by title or search.
-4. Clicks it → chat view loads with full history.
-5. Types a message → sends → Hermes responds → streams back.
-6. The session's `source` stays "telegram" but the continuation happened in Olympus.
+4. Clicks it → chat view loads with full history, **read-only** (it's an
+   externally-owned session; Olympus observes, does not drive it).
+5. Clicks **"Continue in Olympus"** → Olympus **forks** it (Hermes `create_fork`
+   helper → a new `source='acp'` session seeded with history up to the fork
+   point; the Telegram session's rows are untouched).
+6. Types a message in the **fork** → the envoy drives it via `hermes acp` → Hermes
+   responds → streams back.
+7. The fork's displayed origin is **"forked from telegram"** with a node-graph
+   edge to the source (§F4/F9); the original Telegram session is unchanged and
+   independent.
 
 ### Flow C: Search across all channels
 
@@ -253,8 +272,8 @@ renders collapsible cards. Olympus does NOT execute tools — Hermes does (§19)
 
 ## 9. Acceptance criteria (MVP ship gate)
 
-- [ ] All 1,626 sessions imported; count matches.
-- [ ] All 108,169 messages imported; count matches.
+- [ ] Session count == the import-start read-only snapshot (recorded in report).
+- [ ] Active-message count == the import-start snapshot (recorded in report).
 - [ ] Tantivy FTS returns results across all sources in <500ms.
 - [ ] Session list loads in <200ms, virtualized, with live updates.
 - [ ] Chat view renders markdown, tool calls, reasoning, streaming.
