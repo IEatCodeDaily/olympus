@@ -13,6 +13,7 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tantivy.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

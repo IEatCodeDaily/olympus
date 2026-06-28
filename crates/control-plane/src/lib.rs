@@ -6,6 +6,7 @@
 
 pub mod compress;
 pub mod event;
+pub mod import;
 pub mod log;
 pub mod search;
 pub mod views;
