@@ -20,3 +20,8 @@ convex/_generated/
 
 # Bun
 .bun/
+
+# Rust
+/target/
+.claude/
+CLAUDE.md

@@ -1,0 +1,17 @@
+[package]
+name = "olympus-control-plane"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+redb.workspace = true
+serde.workspace = true
+postcard.workspace = true
+zstd.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

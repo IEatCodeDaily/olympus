@@ -1,7 +1,18 @@
 # ADR 0001: Olympus is a clean-room product with Convex + React + Bun
 
-- Status: Accepted
+- Status: SUPERSEDED (tech stack) by ADR 0003; PARTIALLY SUPERSEDED (product framing) by ADR 0002
 - Date: 2026-06-25
+
+> **Superseded notes:**
+> - **Product framing (2026-06-27, ADR 0002):** the "thin Bun host-effect
+>   runtime" framing was reframed to a multi-node agent fleet control plane.
+> - **Tech stack (2026-06-28, ADR 0003):** **Convex is removed entirely.** The
+>   Layer-1 control plane is now a **Rust-native single binary** (redb event log +
+>   in-memory views + single-writer scheduler + iroh/UDS transport + tantivy +
+>   embedded workflow engine). React for the UI and Bun/TS for tooling remain
+>   acceptable choices but are no longer load-bearing substrate decisions. This
+>   ADR remains the record of the *original* stack choice; ADR 0003 is the record
+>   of removing it.
 
 ## Context
 
