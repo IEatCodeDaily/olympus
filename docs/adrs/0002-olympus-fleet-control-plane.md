@@ -1222,6 +1222,73 @@ tiered.** Sessions stay forever searchable without staying forever resident.
 
 ---
 
+## 10B. Observability — tracing instrumentation + admin surface
+
+Olympus needs operator-grade backend observability — a Convex-dashboard-equivalent
+that surfaces what the control plane is doing in real time. Two surfaces, never
+mixed: the **user-facing React app** (`:8787`) for sessions/chat/search, and the
+**observability admin surface** (`:8788`) for traces/metrics/logs/system health.
+
+### 10B.1 Architecture (two layers, one binary)
+
+```
+Olympus control plane (single Rust binary)
+├── tracing instrumentation (baked into every module from day 1)
+│   #[tracing::instrument] on: Log::append, ViewManager::replay/apply,
+│   scheduler::assignPendingCommands, sync::poll, import::*, bridge::*
+│   Structured fields: session_id, event_kind, duration_ms, bytes
+│
+├── Telemetry ring buffer (in-memory, bounded — §11 discipline)
+│   ├── spans: VecDeque<SpanRecord> (~10k spans, ~1MB)
+│   ├── logs: VecDeque<LogRecord> (~10k lines, ~2MB)
+│   └── metrics: HashMap<MetricKey, f64/AtomicU64> (live gauges + counters)
+│
+├── Admin server (axum, separate router on :8788, server-rendered HTML)
+│   GET /admin/           — dashboard overview (metrics + health)
+│   GET /admin/traces     — recent spans (filterable by module/session/duration)
+│   GET /admin/logs       — recent log lines (filterable by level/module)
+│   GET /admin/events     — live event-log tail (seq → event type → session)
+│   GET /admin/health     — system health (redb size, view mem, sync, Hermes profile)
+│   WS  /admin/stream     — live push (new spans/logs/metrics as they happen)
+│
+└── OTLP export (optional, opt-in)
+    export to external collector (Grafana/Jaeger/Honeycomb) via
+    OTEL_EXPORTER_OTLP_ENDPOINT — off by default; the ring buffer is primary
+```
+
+### 10B.2 The admin surface is NOT a React SPA
+
+The `:8788` admin surface is server-rendered HTML (askama templates or hand-written),
+no build step, no node_modules, no frontend-worker dependency. The operator opens
+`:8788` and sees what the backend is doing — like the Convex dashboard, not a product
+surface. This separation ensures observability works even when the React UI is broken
+or not built.
+
+### 10B.3 MVP vs deferred
+
+**MVP (bake in now — free if done from the start):**
+- `#[tracing::instrument]` on every public function in the control plane (~1 line
+  each). The workspace already has `tracing` + `tracing-subscriber` initialized.
+- Structured log fields (`session_id`, `event_kind`, `bytes`, `duration_ms`).
+- `/admin/health` — redb size, view memory (§11 per-view byte tracking), sync status,
+  Hermes profile in use, uptime. Richer than `/api/health` (which is for the UI client).
+- The **ring buffer layer** — in-memory, bounded (~50 LOC), feeds the future admin views.
+
+**Deferred (post-MVP, additive):**
+- The full `/admin/traces`, `/admin/logs`, `/admin/events` HTML views.
+- The `/admin/stream` WebSocket.
+- OTLP export via `opentelemetry` crate.
+
+### 10B.4 Instrumentation discipline
+
+The `tracing` spans are compatible with both the internal ring buffer AND external
+OTLP collectors — the `tracing-opentelemetry` bridge layer converts `tracing` spans
+to OTel span model. So instrumenting with `#[tracing::instrument]` from day one costs
+nothing and supports both paths. **Retrofitting instrumentation is expensive** — every
+function that lacks a span is a blind spot the operator can't see.
+
+---
+
 ## 11. Memory and process disposability
 
 **Invariant: every process is disposable; only the envoy daemon (per host) and the
