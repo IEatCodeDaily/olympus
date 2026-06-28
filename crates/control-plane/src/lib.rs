@@ -5,3 +5,4 @@
 pub mod compress;
 pub mod event;
 pub mod log;
+pub mod views;
