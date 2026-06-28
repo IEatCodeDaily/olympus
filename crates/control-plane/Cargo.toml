@@ -12,6 +12,7 @@ zstd.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tantivy.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
