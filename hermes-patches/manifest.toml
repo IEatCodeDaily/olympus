@@ -1,0 +1,23 @@
+# Olympus → Hermes patch registry
+#
+# Every change Olympus requires in Hermes Agent is a reviewable git-diff patch
+# in patches/, listed here. We patch, never fork. See README.md.
+
+[target]
+repo = "IEatCodeDaily/hermes-agent"
+# Local checkout the patches apply to (override with HERMES_AGENT_DIR env var).
+checkout = "~/.hermes/hermes-agent"
+# Upstream commit these patches were authored against (drift detection).
+# Update with `patchctl status` guidance when re-basing onto a newer Hermes.
+base_commit = "d712a7fd7"
+
+# Active patches, applied in array order. Each .patch file lives under patches/.
+# (Empty until the create_fork patch lands post-spike — see README "Planned".)
+#
+# [[patch]]
+# file    = "001-sessiondb-create-fork.patch"
+# purpose = "SessionDB.create_fork() for Olympus cross-channel resume (ADR 0002 §6.6)"
+# targets = ["hermes_state.py"]
+# adr_ref = "§6.6"
+# verify  = "venv/bin/python -m pytest tests/test_hermes_state.py -k fork -q"
+patch = []
