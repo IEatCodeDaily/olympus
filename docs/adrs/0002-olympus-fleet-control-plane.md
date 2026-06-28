@@ -1849,7 +1849,45 @@ exhausted, the next routes onward; when all are exhausted, fall back to an API k
 if one exists, else "Claude capacity exhausted." Single-writer selection +
 reservation means two workers cannot drain the last of a quota concurrently.
 
-### 16.5 UI surface
+### 16.5 Model/provider fallback chain (post-MVP — recorded for planning)
+
+When a provider/subscription is exhausted, rate-limited, or returns errors, the
+scheduler falls through a **per-context fallback chain** (not a global one):
+
+```text
+Per-context model fallback (configurable):
+  primary:    anthropic/claude-sonnet-4-6  (subscription quota)
+  fallback 1: zai/glm-5.2                  (API key, unlimited relay)
+  fallback 2: openrouter/<model>            (pay-per-token)
+  last resort: fail with "all providers exhausted"
+```
+
+Rules:
+- The fallback chain is **per context** (personal vs corporate can have different
+  providers/models), NOT global.
+- Fallback triggers on: rate-limit (429), quota exhaustion, auth failure (401),
+  or provider timeout. NOT on model-quality dissatisfaction (that's a manual switch).
+- The scheduler logs the fallback decision + reason in the event log (audit trail).
+- Subscription limit tracking (§16.1) feeds the fallback: when a subscription's
+  window quota is exhausted, the scheduler proactively routes to the next provider
+  rather than waiting for a 429.
+
+### 16.6 Subscription limit management (post-MVP — recorded for planning)
+
+Beyond the §16.1 usage tracking (which records past usage), subscription **limit
+management** proactively enforces forward-looking limits:
+
+- **Claude Code Max:** weekly message cap (e.g. 500/week). The scheduler tracks
+  remaining weekly messages and routes to the fallback chain when nearing the cap.
+  Resets on a known window boundary.
+- **Codex subscription:** daily/monthly request cap. Same proactive routing.
+- **API keys:** rate-limit detection (429 headers with `retry-after`). The scheduler
+  backoff-and-retry within the provider, then fall through if retries exhausted.
+- **Multiple subscriptions per provider:** the scheduler round-robins across
+  subscriptions (e.g. two Claude Code accounts) before falling to a different
+  provider, maximizing subscription utilization.
+
+### 16.7 UI surface
 
 A subscriptions dashboard: per provider, each key/subscription with used vs limit
 and reset window (e.g. "Claude Code Max: week 3 of 4, 340/500 messages, resets in
