@@ -5,6 +5,7 @@
 //! Phase 6: tantivy full-text search (`search`).
 
 pub mod auth;
+pub mod bridge;
 pub mod compress;
 pub mod event;
 pub mod import;
