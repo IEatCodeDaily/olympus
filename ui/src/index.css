@@ -253,6 +253,26 @@ html, body, #root {
 }
 .list-error { color: var(--red); }
 
+/* Session-list loading skeleton */
+.session-skeleton { padding: 4px 0; }
+.skel-row {
+  display: flex;
+  gap: 10px;
+  height: 68px;
+  padding: 0 16px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.skel-rail {
+  width: 3px;
+  height: 40px;
+  border-radius: 2px;
+  background: var(--bg-elev2);
+  flex-shrink: 0;
+}
+.skel-row-body { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.skel-line-sm { height: 9px; }
+
 .session-row {
   height: 68px;
   display: flex;
@@ -441,29 +461,48 @@ html, body, #root {
 .chat-loading, .chat-empty { padding: 40px; text-align: center; color: var(--text-faint); font-size: 13px; }
 .chat-error { padding: 20px; color: var(--red); font-size: 13px; }
 
+/* ── Messages: clear per-role distinction ────────────────
+   Each turn has a colored left gutter + a labeled role badge, so You / AI /
+   Tool / events are visually unmistakable at a glance. */
 .msg {
   display: flex;
-  gap: 14px;
-  padding: 6px 24px;
-  margin-bottom: 4px;
+  gap: 12px;
+  padding: 12px 24px;
+  border-left: 2px solid transparent;
   transition: background 0.08s;
 }
 .msg:hover { background: rgba(255,255,255,0.015); }
 
-.msg-role {
-  width: 28px;
+/* role-tinted left edge + faint background wash */
+.msg-user      { border-left-color: var(--accent); background: rgba(125,211,252,0.035); }
+.msg-assistant { border-left-color: var(--green); }
+.msg-tool      { border-left-color: var(--amber); background: rgba(252,211,77,0.025); }
+
+.msg-gutter {
+  width: 52px;
   flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 1px;
+}
+
+.role-badge {
   font-size: 10px;
   font-family: var(--mono);
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding-top: 2px;
-  color: var(--text-faint);
-  text-align: right;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  height: fit-content;
 }
-.msg-user .msg-role { color: var(--accent); }
-.msg-assistant .msg-role { color: var(--green); }
-.msg-tool .msg-role { color: var(--amber); }
+.role-badge.role-user   { color: var(--accent); background: rgba(125,211,252,0.12); border-color: rgba(125,211,252,0.3); }
+.role-badge.role-ai     { color: var(--green);  background: rgba(134,239,172,0.12); border-color: rgba(134,239,172,0.3); }
+.role-badge.role-tool   { color: var(--amber);  background: rgba(252,211,77,0.12);  border-color: rgba(252,211,77,0.3); }
+.role-badge.role-system { color: var(--text-faint); background: var(--bg-elev2); }
+.role-badge.role-meta   { color: var(--text-faint); background: var(--bg-elev2); }
 
 .msg-body {
   flex: 1;
@@ -509,20 +548,67 @@ html, body, #root {
   color: var(--text-faint);
   margin-top: 2px;
 }
-.msg-meta.streaming { color: var(--green); animation: pulse 1.5s infinite; }
+.streaming-tag { color: var(--green); animation: pulse 1.5s infinite; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-.msg-system {
-  justify-content: center;
-  padding: 4px 24px;
-}
-.msg-system-text {
+/* Tool RESULT message (role=tool): monospace output block */
+.tool-result-name {
+  font-family: var(--mono);
   font-size: 11px;
+  font-weight: 600;
+  color: var(--amber);
+  margin-bottom: 2px;
+}
+.tool-result-output {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Lifecycle markers (system / session_meta): centered divider, NOT a bubble */
+.msg-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+}
+.msg-divider-line { flex: 1; height: 1px; background: var(--border); }
+.msg-divider-label {
+  font-size: 10px;
   font-family: var(--mono);
   color: var(--text-faint);
-  font-style: italic;
+  text-transform: lowercase;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
 }
+.msg-divider-time { opacity: 0.6; }
+
+/* Transcript loading skeleton */
+.transcript-skeleton { padding: 12px 0; }
+.skel-msg { display: flex; gap: 12px; padding: 12px 24px; border-left: 2px solid var(--border); }
+.skel-user { border-left-color: rgba(125,211,252,0.3); }
+.skel-ai { border-left-color: rgba(134,239,172,0.3); }
+.skel-gutter { width: 52px; flex-shrink: 0; }
+.skel-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.skel-line {
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-elev) 25%, var(--bg-elev2) 50%, var(--bg-elev) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 /* Tool call cards */
 .tool-calls { display: flex; flex-direction: column; gap: 4px; }
@@ -641,6 +727,126 @@ html, body, #root {
   z-index: 10;
 }
 .jump-latest:hover { background: rgba(125, 211, 252, 0.2); }
+
+/* ── Managed/observed badges in chat header ───────────── */
+.chat-managed-badge {
+  font-size: 9px;
+  font-family: var(--mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--green);
+  background: rgba(134,239,172,0.12);
+  border: 1px solid rgba(134,239,172,0.35);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.chat-observed-badge {
+  font-size: 9px;
+  font-family: var(--mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  background: var(--bg-elev2);
+  border: 1px solid var(--border-bright);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* ── Composer ─────────────────────────────────────────── */
+.composer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+  padding: 10px 16px 12px;
+  flex-shrink: 0;
+}
+.composer-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  padding: 6px 6px 6px 12px;
+  transition: border-color 0.15s;
+}
+.composer-input-row:focus-within { border-color: var(--accent); }
+.composer-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-height: 160px;
+  padding: 4px 0;
+}
+.composer-input::placeholder { color: var(--text-faint); }
+.composer-send {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+.composer-send:hover:not(:disabled) { background: #a5e0ff; }
+.composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
+.composer-error {
+  font-size: 11px;
+  color: var(--red);
+  margin-bottom: 6px;
+  font-family: var(--mono);
+}
+.composer-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(9,11,14,0.3);
+  border-top-color: var(--bg);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* Observed (read-only) composer: explain + offer fork */
+.composer-locked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.composer-locked-text {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.composer-locked-text svg { color: var(--text-faint); flex-shrink: 0; }
+.composer-locked-text strong { color: var(--text); font-weight: 600; }
+.composer-fork-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(125,211,252,0.3);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.composer-fork-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.composer-fork-btn:hover:not(:disabled) { background: rgba(125,211,252,0.2); }
 
 /* ── Search View ─────────────────────────────────────── */
 

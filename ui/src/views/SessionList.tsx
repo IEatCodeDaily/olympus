@@ -103,7 +103,7 @@ export default function SessionList({ selectedId, onOpenSession }: Props) {
 
       {/* List — plain render (no virtualizer). ~29 mock sessions is trivial for the DOM. */}
       <div className="list-scroll">
-        {loading && sessions.length === 0 && <div className="list-empty">Loading sessions...</div>}
+        {loading && sessions.length === 0 && <SessionListSkeleton />}
         {error && <div className="list-error">{error}</div>}
         {!loading && sessions.length === 0 && !error && (
           <div className="list-empty">No sessions match your filters.</div>
@@ -149,6 +149,22 @@ function SessionRowContent({ session }: { session: Session }) {
       </div>
       <div className="row-time">{relativeTime(session.lastActivity)}</div>
     </>
+  );
+}
+
+function SessionListSkeleton() {
+  return (
+    <div className="session-skeleton" aria-label="Loading sessions">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="skel-row">
+          <div className="skel-rail" />
+          <div className="skel-row-body">
+            <div className="skel-line" style={{ width: `${55 + ((i * 7) % 35)}%` }} />
+            <div className="skel-line skel-line-sm" style={{ width: `${35 + ((i * 5) % 25)}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

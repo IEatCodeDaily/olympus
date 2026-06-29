@@ -12,7 +12,8 @@ import { test, expect, type Page } from "@playwright/test";
  * did not update the selection highlight or the right-panel content.
  */
 
-const BASE = "http://127.0.0.1:5173";
+// Navigation uses Playwright's configured baseURL (see playwright.config.ts),
+// so the e2e server port can change without editing every test.
 
 /** Get the Nth session row (1-indexed for readability). */
 async function row(page: Page, n: number) {
@@ -24,6 +25,17 @@ async function row(page: Page, n: number) {
 async function rowTitle(page: Page, n: number): Promise<string> {
   const r = await row(page, n);
   return (await r.locator(".row-title").textContent()) ?? "";
+}
+
+/** Get the unique session id from the row (always distinct, unlike titles). */
+async function rowId(page: Page, n: number): Promise<string> {
+  const r = await row(page, n);
+  return (await r.getAttribute("data-session-id")) ?? "";
+}
+
+/** Get the session id currently rendered in the chat panel header. */
+async function chatId(page: Page): Promise<string> {
+  return (await page.locator(".chat-view").getAttribute("data-session-id")) ?? "";
 }
 
 /** Get the title displayed in the chat panel header. */
@@ -49,7 +61,7 @@ async function expectSelected(page: Page, n: number) {
 
 test.describe("Session selection and chat-view switching", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(BASE);
+    await page.goto("/");
     // Wait for the session list to render (MSW mocks are synchronous but React mounts async)
     await page.waitForSelector(".session-row", { timeout: 10_000 });
     // Ensure we have at least 3 rows
@@ -74,17 +86,18 @@ test.describe("Session selection and chat-view switching", () => {
   });
 
   test("clicking session 3 after session 1 switches highlight and content", async ({ page }) => {
-    const title1 = await rowTitle(page, 1);
-    const title3 = await rowTitle(page, 3);
+    const id1 = await rowId(page, 1);
+    const id3 = await rowId(page, 3);
 
-    // Sanity: rows 1 and 3 should have different titles
-    expect(title3).not.toBe(title1);
+    // Sanity: rows 1 and 3 are different sessions (ids are always unique,
+    // unlike titles which can both be "(no title)").
+    expect(id3).not.toBe(id1);
 
     // Click session 1 first
     await (await row(page, 1)).click();
     await page.waitForSelector(".chat-view");
     await expectSelected(page, 1);
-    expect(await chatTitle(page)).toBe(title1);
+    expect(await chatId(page)).toBe(id1);
 
     // Now click session 3
     await (await row(page, 3)).click();
@@ -92,40 +105,40 @@ test.describe("Session selection and chat-view switching", () => {
     // Highlight must move to row 3
     await expectSelected(page, 3);
 
-    // Chat panel content must change to session 3's title
-    const ct3 = await chatTitle(page);
-    expect(ct3).toBe(title3);
-    expect(ct3).not.toBe(title1);
+    // Chat panel content must change to session 3
+    const shown = await chatId(page);
+    expect(shown).toBe(id3);
+    expect(shown).not.toBe(id1);
   });
 
   test("clicking session 1 → 3 → 1 round-trips correctly", async ({ page }) => {
-    const title1 = await rowTitle(page, 1);
-    const title3 = await rowTitle(page, 3);
+    const id1 = await rowId(page, 1);
+    const id3 = await rowId(page, 3);
 
     // Step 1: click session 1
     await (await row(page, 1)).click();
     await page.waitForSelector(".chat-view");
     await expectSelected(page, 1);
-    expect(await chatTitle(page)).toBe(title1);
+    expect(await chatId(page)).toBe(id1);
 
     // Step 2: click session 3
     await (await row(page, 3)).click();
     await expectSelected(page, 3);
-    expect(await chatTitle(page)).toBe(title3);
+    expect(await chatId(page)).toBe(id3);
 
     // Step 3: click session 1 again — must return
     await (await row(page, 1)).click();
     await expectSelected(page, 1);
-    expect(await chatTitle(page)).toBe(title1);
+    expect(await chatId(page)).toBe(id1);
   });
 
   test("highlight is on the correct row at every step of a multi-click sequence", async ({ page }) => {
-    // Click rows 1, 2, 3, 2 in sequence and verify highlight at each step
+    // Click rows 1, 2, 3, 2 in sequence and verify highlight + content at each step
     for (const n of [1, 2, 3, 2]) {
-      const expectedTitle = await rowTitle(page, n);
+      const expectedId = await rowId(page, n);
       await (await row(page, n)).click();
       await expectSelected(page, n);
-      expect(await chatTitle(page)).toBe(expectedTitle);
+      expect(await chatId(page)).toBe(expectedId);
     }
   });
 });

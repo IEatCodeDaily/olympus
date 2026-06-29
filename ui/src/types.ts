@@ -31,7 +31,7 @@ export type SessionSource =
 export interface Message {
   messageId: number;          // monotonic within session
   sessionId: string;
-  role: "user" | "assistant" | "tool" | "system";
+  role: "user" | "assistant" | "tool" | "system" | "session_meta";
   content: string | null;     // decompressed by the server
   toolName: string | null;
   toolCalls: ToolCall[] | null;

@@ -67,7 +67,10 @@ pub fn build_router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
-        .route("/api/sessions/{id}/messages", get(get_messages))
+        .route(
+            "/api/sessions/{id}/messages",
+            get(get_messages).post(post_message),
+        )
         .route("/api/search", get(search))
         .route("/api/models", get(models))
         .route("/ws", get(ws::ws_handler))
@@ -264,6 +267,57 @@ async fn models(State(_state): State<AppState>) -> impl IntoResponse {
     Json(json!({ "models": [] }))
 }
 
+#[derive(Debug, Deserialize)]
+struct PostMessageBody {
+    #[allow(dead_code)]
+    text: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    model: Option<String>,
+}
+
+/// POST a message to drive a session.
+///
+/// Only MANAGED (acp-source) sessions are steerable. Observed sessions
+/// (imported telegram/cli/etc.) return 409 — the UI must FORK them into an
+/// acp-owned session first (cross-channel continuation, ADR §6.6). The actual
+/// prompt delivery + streaming lands with the ACP bridge (Phase 4); until then
+/// even managed sessions return 503 so the contract shape is honest and the UI
+/// can render the right affordance.
+async fn post_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(_body): Json<PostMessageBody>,
+) -> Response {
+    let views = state.views.read().await;
+    let Some(session) = views.sessions.get(&id) else {
+        return (StatusCode::NOT_FOUND, "session not found").into_response();
+    };
+    let managed = session.source == "acp";
+    drop(views);
+
+    if !managed {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "observed",
+                "message": "This session is observed (read-only). Fork it into an Olympus-managed session to continue.",
+            })),
+        )
+            .into_response();
+    }
+
+    // Managed path: the ACP bridge (Phase 4) is not wired yet.
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": "bridge_unavailable",
+            "message": "The Hermes ACP bridge is not connected yet — driving managed sessions is coming next.",
+        })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,6 +508,50 @@ mod tests {
                     .uri("/api/sessions/ghost")
                     .header("authorization", "Bearer testtoken")
                     .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_message_to_observed_session_is_409() {
+        // s1 is a telegram (observed) session — posting must be rejected with 409.
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions/s1/messages")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"text":"hi"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "observed");
+    }
+
+    #[tokio::test]
+    async fn post_message_to_unknown_session_is_404() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions/ghost/messages")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"text":"hi"}"#))
                     .unwrap(),
             )
             .await

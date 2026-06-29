@@ -88,6 +88,29 @@ export async function healthCheck(): Promise<HealthResponse> {
   return res.json() as Promise<HealthResponse>;
 }
 
+// ── Mutations ──────────────────────────────────────────
+
+/**
+ * Send a message to a MANAGED (acp-source) session. The agent's response
+ * streams back over the /ws delta channel; this POST just enqueues the prompt.
+ * Returns 202 on accept; 409 if the session is observed (must be forked first).
+ */
+export async function sendMessage(
+  sessionId: string,
+  text: string,
+  model?: string
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "POST",
+    headers: { ...authHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ text, model }),
+  });
+  if (res.status === 409) {
+    throw new Error("This session is observed (read-only). Fork it to continue from Olympus.");
+  }
+  if (!res.ok) throw new Error(`send failed (${res.status})`);
+}
+
 // ── WebSocket (singleton, safe for mock mode) ──────────
 
 type FrameListener = (frame: ServerFrame) => void;
