@@ -70,7 +70,8 @@ export type ServerFrame =
   | { kind: "message.appended"; sessionId: string; message: Message }
   | { kind: "message.delta"; sessionId: string; messageId: number; textDelta: string }
   | { kind: "message.done"; sessionId: string; messageId: number; finishReason: string | null }
-  | { kind: "sync.status"; connected: boolean };
+  | { kind: "sync.status"; connected: boolean }
+  | { kind: "cards.changed" };
 
 export type ClientFrame =
   | { kind: "subscribe"; sessionId: string }
@@ -102,6 +103,48 @@ export interface HealthResponse {
   snapshot: { sessions: number; messages: number } | null;
   syncConnected: boolean;
   hermesProfile: string;
+}
+
+export type CardStatus = "todo" | "assigned" | "claimed" | "blocked" | "done";
+
+export interface Card {
+  id: string;
+  boardId: string;
+  title: string;
+  status: CardStatus;
+  assignedId: string | null;
+  assignedKind: string | null;
+  currentSessionId: string | null;
+  currentBookmark: string | null;
+  blockedBy: string[];
+  priority: number;
+  createdAt: number;
+  statusChangedAt: number;
+}
+
+export interface CardListResponse {
+  cards: Card[];
+  total: number;
+}
+
+export interface CreateCardBody {
+  boardId: string;
+  title: string;
+}
+
+export interface AssignCardBody {
+  assignedId: string;
+  assignedKind: string;
+  sessionId: string;
+  attemptBookmark: string;
+}
+
+export interface BlockCardBody {
+  blockedBy: string[];
+}
+
+export interface ReassignCardBody extends AssignCardBody {
+  previousSessionId: string;
 }
 
 export type SessionSort = "lastActivity" | "startedAt" | "messageCount";

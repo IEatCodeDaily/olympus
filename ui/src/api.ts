@@ -1,10 +1,16 @@
 import type {
+  Card,
+  CardListResponse,
   Session,
   Message,
   SearchHit,
   ModelInfo,
   ServerFrame,
   ClientFrame,
+  CreateCardBody,
+  AssignCardBody,
+  BlockCardBody,
+  ReassignCardBody,
   SessionListParams,
   MessagesParams,
   SearchParams,
@@ -19,7 +25,29 @@ const BASE = import.meta.env.VITE_API_BASE as string;
 const T = import.meta.env.VITE_API_TOKEN as string;
 
 function authHeaders(): Record<string, string> {
-  return { Authorization: `Bearer ${T}` };
+  return { Authorization: "Bearer " + T };
+}
+
+function jsonHeaders(): Record<string, string> {
+  return { ...authHeaders(), "content-type": "application/json" };
+}
+
+async function expectJson<T>(res: Response, label: string): Promise<T> {
+  if (!res.ok) throw new Error(`${label} ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function postJson<TResponse, TBody = unknown>(
+  path: string,
+  body?: TBody,
+  label = "request"
+): Promise<TResponse> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body ?? {}),
+  });
+  return expectJson<TResponse>(res, label);
 }
 
 // ── REST ───────────────────────────────────────────────
@@ -88,6 +116,23 @@ export async function healthCheck(): Promise<HealthResponse> {
   return res.json() as Promise<HealthResponse>;
 }
 
+export async function fetchCards(params?: {
+  boardId?: string;
+  status?: string;
+}): Promise<CardListResponse> {
+  const q = new URLSearchParams();
+  if (params?.boardId) q.set("boardId", params.boardId);
+  if (params?.status) q.set("status", params.status);
+  const suffix = q.size > 0 ? `?${q}` : "";
+  const res = await fetch(`${BASE}/api/cards${suffix}`, { headers: authHeaders() });
+  return expectJson<CardListResponse>(res, "cards");
+}
+
+export async function fetchCard(id: string): Promise<Card> {
+  const res = await fetch(`${BASE}/api/cards/${id}`, { headers: authHeaders() });
+  return expectJson<Card>(res, "card");
+}
+
 // ── Mutations ──────────────────────────────────────────
 
 /**
@@ -97,7 +142,7 @@ export async function healthCheck(): Promise<HealthResponse> {
 export async function createSession(): Promise<Session> {
   const res = await fetch(`${BASE}/api/sessions`, {
     method: "POST",
-    headers: { ...authHeaders(), "content-type": "application/json" },
+    headers: jsonHeaders(),
     body: "{}",
   });
   if (!res.ok) throw new Error(`create session failed (${res.status})`);
@@ -116,13 +161,37 @@ export async function sendMessage(
 ): Promise<void> {
   const res = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
     method: "POST",
-    headers: { ...authHeaders(), "content-type": "application/json" },
+    headers: jsonHeaders(),
     body: JSON.stringify({ text, model }),
   });
   if (res.status === 409) {
     throw new Error("This session is observed (read-only). Fork it to continue from Olympus.");
   }
   if (!res.ok) throw new Error(`send failed (${res.status})`);
+}
+
+export async function createCard(body: CreateCardBody): Promise<Card> {
+  return postJson<Card, CreateCardBody>("/api/cards", body, "create card failed");
+}
+
+export async function assignCard(id: string, body: AssignCardBody): Promise<Card> {
+  return postJson<Card, AssignCardBody>(`/api/cards/${id}/assign`, body, "assign card failed");
+}
+
+export async function claimCard(id: string): Promise<Card> {
+  return postJson<Card>(`/api/cards/${id}/claim`, undefined, "claim card failed");
+}
+
+export async function blockCard(id: string, body: BlockCardBody): Promise<Card> {
+  return postJson<Card, BlockCardBody>(`/api/cards/${id}/block`, body, "block card failed");
+}
+
+export async function completeCard(id: string): Promise<Card> {
+  return postJson<Card>(`/api/cards/${id}/complete`, undefined, "complete card failed");
+}
+
+export async function reassignCard(id: string, body: ReassignCardBody): Promise<Card> {
+  return postJson<Card, ReassignCardBody>(`/api/cards/${id}/reassign`, body, "reassign card failed");
 }
 
 // ── WebSocket (singleton, safe for mock mode) ──────────
@@ -140,10 +209,8 @@ function getWsUrl(): string {
 }
 
 export function connectWs(): void {
-  // Singleton: if already connected or connecting, skip
   if (ws || connecting) return;
 
-  // In mock mode, don't attempt real WS connection (no mock WS server)
   const useMocks = import.meta.env.VITE_USE_MOCKS !== "false";
   if (useMocks) return;
 
@@ -171,7 +238,6 @@ export function connectWs(): void {
     ws.onclose = () => {
       connecting = false;
       ws = null;
-      // auto-reconnect after 2s
       setTimeout(() => connectWs(), 2000);
     };
   } catch {
@@ -200,5 +266,4 @@ export function sendFrame(frame: ClientFrame): void {
   }
 }
 
-// Re-export types for convenience
 export type { Session, Message, SearchHit, ModelInfo, ServerFrame, ClientFrame };
