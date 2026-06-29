@@ -15,10 +15,13 @@ removed (ADR 0003); do not reintroduce it. See `docs/architecture/architecture.m
 
 ## First reads
 
+- `docs/plans/2026-06-29-olympus-long-horizon-roadmap.md` — **START HERE.** The
+  durable roadmap (epics A→P, milestone briefs, gates, live Status Ledger). Tells
+  you what to build next and why; built for autonomous swarm execution.
 - `docs/adrs/0002-olympus-fleet-control-plane.md` — authoritative spec (~24 §).
 - `docs/adrs/0003-remove-convex-rust-native-substrate.md` — substrate decision.
 - `docs/api-contract.md` — UI↔backend wire contract (REST + WSS + shared TS types).
-- `docs/plans/2026-06-28-olympus-mvp.md` — implementation plan (phases 0-8).
+- `docs/plans/2026-06-28-olympus-mvp.md` — granular Epic A/B tasks (phases 0-8).
 
 ## Workspace
 

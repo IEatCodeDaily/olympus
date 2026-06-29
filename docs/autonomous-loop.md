@@ -3,6 +3,14 @@
 Status: **PAUSED** — built but cron NOT enabled. One tick will be hand-run to prove
 the flow before any cron is activated. (Per owner directive.)
 
+> **Task source (CURRENT):** the long-horizon roadmap
+> `docs/plans/2026-06-29-olympus-long-horizon-roadmap.md` is the source of truth
+> for *what to build next* (epics A→P, milestone briefs, gates, Status Ledger).
+> Granular Epic A/B tasks live in `docs/plans/2026-06-28-olympus-mvp.md`
+> (Phases 4–5). The Convex/bun references below are from the superseded
+> migration plan and apply only to that legacy track — the live substrate is
+> Rust (gates: `make verify`, not `bun test`).
+
 ## Roles (model-pinned profiles)
 
 | Role | Profile | Model | Tools |
