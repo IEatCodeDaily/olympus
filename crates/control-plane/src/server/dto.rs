@@ -1,0 +1,175 @@
+//! Wire DTOs: camelCase JSON shapes the UI consumes (see `docs/api-contract.md`).
+//!
+//! The in-memory view rows (`SessionRow`, `MessageRow`) are internal,
+//! snake_case, and not `Serialize`. These DTOs are the *contract* boundary: they
+//! map view rows → the exact JSON the TypeScript client expects. Keeping the
+//! mapping in one module means a contract change touches one file.
+
+use serde::Serialize;
+
+use crate::search::SearchHit as IndexHit;
+use crate::views::{MessageRow, SessionRow};
+
+/// `Session` as the UI consumes it (api-contract.md §Session).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDto {
+    pub id: String,
+    pub hermes_id: String,
+    pub org_id: String,
+    pub owner_id: String,
+    pub context_id: Option<String>,
+    pub source: String,
+    pub model: Option<String>,
+    pub title: Option<String>,
+    pub started_at: f64,
+    pub last_activity: f64,
+    pub message_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub archived: bool,
+    pub forked_from: Option<String>,
+    pub fork_point: Option<u64>,
+    pub fork_type: Option<String>,
+    /// true = Olympus-driven (steerable); false = observed/read-only.
+    pub managed: bool,
+}
+
+impl SessionDto {
+    /// Build the wire DTO from an internal view row.
+    ///
+    /// MVP tenancy is single-org/single-owner; fork lineage is not yet tracked
+    /// in `SessionRow`, so those fields are `None`. `managed` is false for
+    /// imported/observed sessions — only Olympus-created/forked sessions are
+    /// steerable (the POST mutation gate keys off this).
+    pub fn from_row(row: &SessionRow) -> Self {
+        Self {
+            id: row.session_id.clone(),
+            hermes_id: row.hermes_id.clone(),
+            org_id: "personal".to_string(),
+            owner_id: "rpw".to_string(),
+            context_id: None,
+            source: row.source.clone(),
+            model: row.model.clone(),
+            title: row.title.clone(),
+            started_at: row.started_at,
+            last_activity: row.last_activity,
+            message_count: row.message_count,
+            input_tokens: row.input_tokens,
+            output_tokens: row.output_tokens,
+            archived: row.archived,
+            forked_from: None,
+            fork_point: None,
+            fork_type: None,
+            managed: row.source == "acp",
+        }
+    }
+}
+
+/// `Message` as the UI consumes it (api-contract.md §Message).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDto {
+    pub message_id: u64,
+    pub session_id: String,
+    pub role: String,
+    pub content: Option<String>,
+    pub tool_name: Option<String>,
+    /// Tool calls are not yet projected into the message view; always null for now.
+    pub tool_calls: Option<serde_json::Value>,
+    pub reasoning: Option<String>,
+    pub timestamp: f64,
+    pub token_count: Option<u64>,
+    pub finish_reason: Option<String>,
+}
+
+impl MessageDto {
+    pub fn from_row(session_id: &str, row: &MessageRow) -> Self {
+        Self {
+            message_id: row.message_id,
+            session_id: session_id.to_string(),
+            role: row.role.clone(),
+            content: row.content.clone(),
+            tool_name: row.tool_name.clone(),
+            tool_calls: None,
+            reasoning: None,
+            timestamp: row.timestamp,
+            token_count: row.token_count,
+            finish_reason: None,
+        }
+    }
+}
+
+/// `SearchHit` as the UI consumes it (api-contract.md §SearchHit).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitDto {
+    pub session_id: String,
+    pub message_id: u64,
+    pub source: String,
+    pub snippet: String,
+    pub score: f32,
+    pub timestamp: f64,
+}
+
+impl SearchHitDto {
+    /// Build from a tantivy hit, enriching `source` (from the session view) and
+    /// `timestamp` (resolved by the handler) which the index does not store.
+    pub fn from_index_hit(hit: &IndexHit, source: String, timestamp: f64) -> Self {
+        Self {
+            session_id: hit.session_id.clone(),
+            message_id: hit.message_id,
+            source,
+            snippet: hit.snippet.clone(),
+            score: hit.score,
+            timestamp,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::views::SessionRow;
+
+    fn sample_row() -> SessionRow {
+        SessionRow {
+            session_id: "s1".into(),
+            hermes_id: "h1".into(),
+            source: "telegram".into(),
+            model: Some("glm-5.2".into()),
+            title: Some("hi".into()),
+            started_at: 100.0,
+            message_count: 3,
+            input_tokens: 5,
+            output_tokens: 7,
+            archived: false,
+            last_activity: 200.0,
+        }
+    }
+
+    #[test]
+    fn session_dto_serializes_camelcase() {
+        let dto = SessionDto::from_row(&sample_row());
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["hermesId"], "h1");
+        assert_eq!(json["orgId"], "personal");
+        assert_eq!(json["ownerId"], "rpw");
+        assert_eq!(json["lastActivity"], 200.0);
+        assert_eq!(json["messageCount"], 3);
+        assert_eq!(json["forkedFrom"], serde_json::Value::Null);
+        // imported telegram session is observed, not managed
+        assert_eq!(json["managed"], false);
+        // snake_case keys must NOT be present
+        assert!(json.get("hermes_id").is_none());
+        assert!(json.get("last_activity").is_none());
+    }
+
+    #[test]
+    fn acp_session_is_managed() {
+        let mut row = sample_row();
+        row.source = "acp".into();
+        let dto = SessionDto::from_row(&row);
+        assert!(dto.managed);
+    }
+}

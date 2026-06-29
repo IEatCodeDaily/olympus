@@ -264,6 +264,40 @@ impl Log {
         Ok(seq)
     }
 
+    /// Append many events in a SINGLE write transaction, returning the sequence
+    /// number assigned to the first event (subsequent events are contiguous).
+    ///
+    /// `append()` commits (and fsyncs) once per event, which is far too slow for
+    /// bulk import (one transaction per message → ~100k fsyncs). This batches an
+    /// arbitrary number of events into one transaction so a full state.db import
+    /// is a handful of commits instead of one-per-row. Returns `None` if `events`
+    /// is empty.
+    pub fn append_batch(&self, events: &[Event]) -> Result<Option<u64>> {
+        if events.is_empty() {
+            return Ok(None);
+        }
+        let txn = self
+            .db
+            .begin_write()
+            .context("begin write for append_batch")?;
+        let first = {
+            let mut meta = txn.open_table(META)?;
+            let mut next = read_next_seq(&meta)?;
+            let first = next;
+            let mut table = txn.open_table(EVENTS)?;
+            for event in events {
+                let stored = to_stored(event)?;
+                let bytes = postcard::to_allocvec(&stored).context("postcard-encoding event")?;
+                table.insert(next, bytes.as_slice())?;
+                next += 1;
+            }
+            write_next_seq(&mut meta, next)?;
+            first
+        };
+        txn.commit()?;
+        Ok(Some(first))
+    }
+
     /// Read up to `limit` events starting at sequence `seq` (inclusive).
     pub fn read_from(&self, seq: u64, limit: usize) -> Result<Vec<(u64, Event)>> {
         let txn = self.db.begin_read().context("begin read for read_from")?;
@@ -378,6 +412,43 @@ mod tests {
         let events = log.read_all().unwrap();
         let seqs: Vec<u64> = events.iter().map(|(s, _)| *s).collect();
         assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn append_batch_assigns_contiguous_seqs_and_persists_all() {
+        let (_f, log) = fresh_log();
+        let batch = vec![
+            sample_session_created("a"),
+            sample_message("a", 0, "hi"),
+            sample_message("a", 1, "there"),
+        ];
+        let first = log.append_batch(&batch).unwrap();
+        assert_eq!(first, Some(0), "first seq of the batch");
+
+        let events = log.read_all().unwrap();
+        assert_eq!(events.len(), 3);
+        let seqs: Vec<u64> = events.iter().map(|(s, _)| *s).collect();
+        assert_eq!(seqs, vec![0, 1, 2], "batch seqs are contiguous");
+        assert_eq!(&events[2].1, &sample_message("a", 1, "there"));
+    }
+
+    #[test]
+    fn append_batch_continues_seq_after_prior_appends() {
+        let (_f, log) = fresh_log();
+        log.append(&sample_session_created("a")).unwrap(); // seq 0
+        let first = log
+            .append_batch(&[sample_message("a", 0, "x"), sample_message("a", 1, "y")])
+            .unwrap();
+        assert_eq!(first, Some(1), "batch continues from prior seq");
+        let seqs: Vec<u64> = log.read_all().unwrap().iter().map(|(s, _)| *s).collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn append_batch_empty_is_noop() {
+        let (_f, log) = fresh_log();
+        assert_eq!(log.append_batch(&[]).unwrap(), None);
+        assert_eq!(log.read_all().unwrap().len(), 0);
     }
 
     #[test]

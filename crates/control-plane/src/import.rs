@@ -31,12 +31,13 @@ pub fn import_sessions(state_db: &Path, log: &Log) -> Result<ImportStats> {
     )?;
     let mut rows = stmt.query([])?;
     let mut session_count = 0;
+    let mut batch: Vec<Event> = Vec::with_capacity(MESSAGE_BATCH_SIZE as usize);
     while let Some(row) = rows.next()? {
         let id: String = row.get("id")?;
         let message_count = nullable_count_or_zero(row.get("message_count")?, "message_count")?;
         let input_tokens = nullable_count_or_zero(row.get("input_tokens")?, "input_tokens")?;
         let output_tokens = nullable_count_or_zero(row.get("output_tokens")?, "output_tokens")?;
-        log.append(&Event::SessionCreated {
+        batch.push(Event::SessionCreated {
             session_id: id.clone(),
             hermes_id: id,
             source: row.get("source")?,
@@ -46,10 +47,16 @@ pub fn import_sessions(state_db: &Path, log: &Log) -> Result<ImportStats> {
             message_count,
             input_tokens,
             output_tokens,
-        })
-        .context("appending imported session event")?;
+        });
         session_count += 1;
+        if batch.len() >= MESSAGE_BATCH_SIZE as usize {
+            log.append_batch(&batch)
+                .context("appending imported session batch")?;
+            batch.clear();
+        }
     }
+    log.append_batch(&batch)
+        .context("appending final imported session batch")?;
 
     Ok(ImportStats {
         session_count,
@@ -76,6 +83,7 @@ pub fn import_messages(state_db: &Path, log: &Log) -> Result<ImportStats> {
         )?;
         let mut rows = stmt.query(params![MESSAGE_BATCH_SIZE, offset])?;
         let mut rows_in_batch = 0;
+        let mut batch: Vec<Event> = Vec::with_capacity(MESSAGE_BATCH_SIZE as usize);
 
         while let Some(row) = rows.next()? {
             let session_id: String = row.get("session_id")?;
@@ -83,7 +91,7 @@ pub fn import_messages(state_db: &Path, log: &Log) -> Result<ImportStats> {
                 .entry(session_id.clone())
                 .and_modify(|next| *next += 1)
                 .or_insert(0);
-            log.append(&Event::MessageAppended {
+            batch.push(Event::MessageAppended {
                 session_id: session_id.clone(),
                 hermes_session_id: session_id,
                 message_id: *message_id,
@@ -95,11 +103,13 @@ pub fn import_messages(state_db: &Path, log: &Log) -> Result<ImportStats> {
                 timestamp: row.get("timestamp")?,
                 token_count: nullable_token_count(row.get("token_count")?, "token_count")?,
                 finish_reason: row.get("finish_reason")?,
-            })
-            .context("appending imported message event")?;
+            });
             rows_in_batch += 1;
             message_count += 1;
         }
+
+        log.append_batch(&batch)
+            .context("appending imported message batch")?;
 
         if rows_in_batch == 0 {
             break;
