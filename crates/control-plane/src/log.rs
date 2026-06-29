@@ -61,6 +61,11 @@ enum StoredVariant {
         token_count: Option<u64>,
         finish_reason: Option<String>,
     },
+    MessageRemoved {
+        session_id: String,
+        hermes_session_id: String,
+        message_id: u64,
+    },
     SessionUpdated {
         session_id: String,
         title: Option<String>,
@@ -127,6 +132,15 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             timestamp: *timestamp,
             token_count: *token_count,
             finish_reason: finish_reason.clone(),
+        },
+        Event::MessageRemoved {
+            session_id,
+            hermes_session_id,
+            message_id,
+        } => StoredVariant::MessageRemoved {
+            session_id: session_id.clone(),
+            hermes_session_id: hermes_session_id.clone(),
+            message_id: *message_id,
         },
         Event::SessionUpdated {
             session_id,
@@ -211,6 +225,15 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             timestamp,
             token_count,
             finish_reason,
+        },
+        StoredVariant::MessageRemoved {
+            session_id,
+            hermes_session_id,
+            message_id,
+        } => Event::MessageRemoved {
+            session_id,
+            hermes_session_id,
+            message_id,
         },
         StoredVariant::SessionUpdated {
             session_id,

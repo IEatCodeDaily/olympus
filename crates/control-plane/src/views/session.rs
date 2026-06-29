@@ -146,6 +146,7 @@ impl SessionView {
                     }
                 }
             }
+            Event::MessageRemoved { .. } => {}
         }
     }
 

@@ -62,33 +62,55 @@ impl MessageView {
     /// - `SessionCreated` / `SessionUpdated` are ignored (the session view
     ///   owns session metadata).
     pub fn apply(&mut self, event: &Event) {
-        if let Event::MessageAppended {
-            session_id,
-            message_id,
-            role,
-            content,
-            tool_name,
-            timestamp,
-            token_count,
-            ..
-        } = event
-        {
-            // Count every message, independent of window eviction.
-            *self.counts.entry(session_id.clone()).or_insert(0) += 1;
+        match event {
+            Event::MessageAppended {
+                session_id,
+                message_id,
+                role,
+                content,
+                tool_name,
+                timestamp,
+                token_count,
+                ..
+            } => {
+                // Count every message, independent of window eviction.
+                *self.counts.entry(session_id.clone()).or_insert(0) += 1;
 
-            let window = self.hot.entry(session_id.clone()).or_default();
-            window.push_back(MessageRow {
-                message_id: *message_id,
-                role: role.clone(),
-                content: content.clone(),
-                tool_name: tool_name.clone(),
-                timestamp: *timestamp,
-                token_count: *token_count,
-            });
-            // Evict oldest beyond the window.
-            while window.len() > self.window_size {
-                window.pop_front();
+                let window = self.hot.entry(session_id.clone()).or_default();
+                window.push_back(MessageRow {
+                    message_id: *message_id,
+                    role: role.clone(),
+                    content: content.clone(),
+                    tool_name: tool_name.clone(),
+                    timestamp: *timestamp,
+                    token_count: *token_count,
+                });
+                // Evict oldest beyond the window.
+                while window.len() > self.window_size {
+                    window.pop_front();
+                }
             }
+            Event::MessageRemoved {
+                session_id,
+                message_id,
+                ..
+            } => {
+                if let Some(window) = self.hot.get_mut(session_id) {
+                    if let Some(pos) = window.iter().position(|row| row.message_id == *message_id) {
+                        window.remove(pos);
+                        if let Some(count) = self.counts.get_mut(session_id) {
+                            *count = count.saturating_sub(1);
+                            if *count == 0 {
+                                self.counts.remove(session_id);
+                            }
+                        }
+                        if window.is_empty() {
+                            self.hot.remove(session_id);
+                        }
+                    }
+                }
+            }
+            Event::SessionCreated { .. } | Event::SessionUpdated { .. } => {}
         }
     }
 
@@ -112,6 +134,11 @@ impl MessageView {
     /// of window eviction). Zero for an unknown session.
     pub fn count(&self, session_id: &str) -> u64 {
         self.counts.get(session_id).copied().unwrap_or(0)
+    }
+
+    /// Size of the hot window kept in memory.
+    pub fn window_size(&self) -> usize {
+        self.window_size
     }
 }
 
@@ -156,14 +183,19 @@ mod tests {
     }
 
     #[test]
-    fn recent_returns_newest_last_in_arrival_order() {
+    fn message_removed_updates_window_and_count() {
         let mut v = MessageView::new();
-        v.apply(&msg("s", 0, 1.0));
-        v.apply(&msg("s", 1, 2.0));
-        v.apply(&msg("s", 2, 3.0));
-        let r = v.recent("s", 2);
-        assert_eq!(r.len(), 2);
-        assert_eq!(r[0].message_id, 1);
-        assert_eq!(r[1].message_id, 2);
+        v.apply(&msg("s", 1, 1.0));
+        v.apply(&msg("s", 2, 2.0));
+
+        v.apply(&Event::MessageRemoved {
+            session_id: "s".into(),
+            hermes_session_id: "h-s".into(),
+            message_id: 1,
+        });
+
+        assert_eq!(v.count("s"), 1);
+        let ids: Vec<u64> = v.recent("s", 10).iter().map(|m| m.message_id).collect();
+        assert_eq!(ids, vec![2]);
     }
 }

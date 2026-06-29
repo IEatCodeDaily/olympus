@@ -12,4 +12,5 @@ pub mod import;
 pub mod log;
 pub mod search;
 pub mod server;
+pub mod sync;
 pub mod views;

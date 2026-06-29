@@ -17,6 +17,7 @@ use olympus_control_plane::{
     log::Log,
     search::SearchIndex,
     server::{self, AppState, ImportState},
+    sync,
     views::ViewManager,
 };
 use tokio::sync::{broadcast, RwLock};
@@ -56,7 +57,7 @@ async fn main() -> Result<()> {
     let log_path = home.join("eventlog.redb");
     // Rebuild from scratch each boot (MVP): remove any prior log.
     let _ = std::fs::remove_file(&log_path);
-    let log = Log::open(&log_path).context("opening event log")?;
+    let log = Arc::new(Log::open(&log_path).context("opening event log")?);
 
     let state_db = hermes_state_db()?;
     let (snap_sessions, snap_messages) = if state_db.exists() {
@@ -86,7 +87,8 @@ async fn main() -> Result<()> {
 
     // ---- assemble server state ----
     let (deltas, _rx) = broadcast::channel(1024);
-    let log_arc = Arc::new(log);
+    // `log` is already an Arc<Log> (opened at the top); reuse it directly.
+    let log_arc = log;
     let bridge = std::sync::Arc::new(
         olympus_control_plane::server::bridge_mgr::BridgeManager::with_factory(
             log_arc.clone(),
@@ -108,9 +110,26 @@ async fn main() -> Result<()> {
         deltas,
         snapshot_sessions: snap_sessions,
         snapshot_messages: snap_messages,
-        log: log_arc,
+        log: log_arc.clone(),
         bridge,
     };
+
+    let sync_log = Arc::clone(&log_arc);
+    let sync_views = Arc::clone(&state.views);
+    let sync_search = Arc::clone(&state.search);
+    let sync_deltas = state.deltas.clone();
+    let sync_state_db = state_db.clone();
+    std::thread::spawn(move || {
+        if let Err(err) = sync::run_live_sync(
+            sync_state_db,
+            sync_log,
+            sync_views,
+            sync_search,
+            sync_deltas,
+        ) {
+            tracing::error!(error = %err, "live sync worker exited");
+        }
+    });
 
     let app = server::build_router(state);
 

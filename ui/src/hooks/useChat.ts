@@ -82,6 +82,14 @@ export function useChat(sessionId: string | null): UseChatResult {
           if (prev.some((m) => m.messageId === frame.message.messageId)) return prev;
           return [...prev, frame.message];
         });
+      } else if (frame.kind === "session.updated" && frame.sessionId === sessionId) {
+        fetchMessages(sessionId, { limit: 50 })
+          .then((res) => {
+            if (currentSession.current !== sessionId) return;
+            setMessages(res.messages);
+            setHasOlder(res.nextCursor !== null);
+          })
+          .catch(() => {});
       }
     });
   }, [sessionId]);

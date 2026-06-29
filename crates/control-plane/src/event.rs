@@ -40,6 +40,12 @@ pub enum Event {
         token_count: Option<u64>,
         finish_reason: Option<String>,
     },
+    /// A message was removed or tombstoned in Hermes.
+    MessageRemoved {
+        session_id: String,
+        hermes_session_id: String,
+        message_id: u64,
+    },
     /// A session's metadata was updated (title, archived, model, etc).
     SessionUpdated {
         session_id: String,
@@ -100,6 +106,18 @@ mod tests {
             model: None,
             archived: Some(true),
             message_count: Some(42),
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn message_removed_postcard_roundtrips() {
+        let e = Event::MessageRemoved {
+            session_id: "sess-1".into(),
+            hermes_session_id: "h-1".into(),
+            message_id: 5,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();
