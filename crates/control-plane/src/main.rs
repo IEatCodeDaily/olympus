@@ -119,17 +119,33 @@ async fn main() -> Result<()> {
     let sync_search = Arc::clone(&state.search);
     let sync_deltas = state.deltas.clone();
     let sync_state_db = state_db.clone();
-    std::thread::spawn(move || {
-        if let Err(err) = sync::run_live_sync(
-            sync_state_db,
-            sync_log,
-            sync_views,
-            sync_search,
-            sync_deltas,
-        ) {
-            tracing::error!(error = %err, "live sync worker exited");
-        }
-    });
+    std::thread::Builder::new()
+        .name("olympus-live-sync".into())
+        .spawn(move || {
+            tracing::info!(db = %sync_state_db.display(), "live sync worker starting");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sync::run_live_sync(
+                    sync_state_db,
+                    sync_log,
+                    sync_views,
+                    sync_search,
+                    sync_deltas,
+                )
+            }));
+            match result {
+                Ok(Ok(())) => tracing::warn!("live sync worker loop returned (unexpected)"),
+                Ok(Err(err)) => tracing::error!(error = %err, "live sync worker errored"),
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".into());
+                    tracing::error!(panic = %msg, "live sync worker PANICKED");
+                }
+            }
+        })
+        .expect("spawn live sync thread");
 
     let app = server::build_router(state);
 
