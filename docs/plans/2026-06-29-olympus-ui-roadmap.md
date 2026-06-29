@@ -120,10 +120,14 @@ session UI.)
 
 | Phase | Screen | Status | Notes |
 |---|---|---|---|
-| U0 | shell + theme + placeholders | IN PROGRESS | controller-built |
-| U1 | Board | TODO | backend ready (/api/cards) |
-| U2 | Settings | TODO | theme switcher + prefs |
-| U3 | Usage | TODO | mock-first |
-| U4 | Nodes | TODO | mock-first |
-| U5 | Workflows | TODO | mock-first |
+| U0 | shell + theme + placeholders | DONE | 7-view nav, 3 themes, live switch (5402da7) |
+| U1 | Board | DONE | wired to live /api/cards (09da64c) |
+| U2 | Settings | DONE | theme switcher + density + token/routing (a0576ca) |
+| U3 | Usage | DONE | mock-first, /api/usage contract (c68db53) |
+| U4 | Nodes | DONE | mock-first, /api/nodes contract (c68db53) |
+| U5 | Workflows | DONE | mock-first, /api/workflows contract (c68db53) |
 | U6 | New Chat / Fork polish | TODO | depends A2(done)/A3 |
+
+**Design system:** owned by the `design-lead` (opus) agent — `docs/design/DESIGN_SYSTEM.md`
++ `docs/design/VISION.md` (cacb2af). Runs every 3h to keep improving the system +
+the live UI against the north star (cron olympus-design-lead).
