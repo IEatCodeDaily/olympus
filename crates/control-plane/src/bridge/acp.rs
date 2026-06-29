@@ -258,13 +258,14 @@ impl AgentEvent {
                     .unwrap_or_else(|| "error".into()),
             ));
         }
-        let stop_reason = resp
-            .result
-            .get("stopReason")
-            .and_then(|s| s.as_str())
-            .map(|s| s.to_string());
+        // Only a `session/prompt` response carries a `stopReason` and marks the
+        // turn complete. Other responses (initialize, session/new, session/resume,
+        // session/set_model) are handshake/control replies and must NOT be mapped
+        // to a `Done` event — doing so would prematurely end a turn that hasn't
+        // even started.
+        let stop_reason = resp.result.get("stopReason").and_then(|s| s.as_str())?;
         Some(AgentEvent::Done {
-            finish_reason: stop_reason,
+            finish_reason: Some(stop_reason.to_string()),
         })
     }
 }
