@@ -66,6 +66,8 @@ Every color is one of these semantic names. Values per theme:
 |---|---|---|---|---|
 | `--accent` | Primary accent (focus, active, primary CTA) | `#7dd3fc` | `#0284c7` | `#ffb347` |
 | `--accent-dim` | Accent wash (tinted bg/borders) | `rgba(125,211,252,.12)` | `rgba(2,132,199,.10)` | `rgba(255,179,71,.14)` |
+| `--accent-hover` | Hover fill for accent-filled CTAs | `#a5e0ff` | `#0369a1` | `#ffc870` |
+| `--on-accent` | Text/icon color on an `--accent` fill | `#0a0e14` | `#ffffff` | `#1a1308` |
 | `--green` | Success / running / managed / "you-adjacent AI" | `#86efac` | `#16a34a` | `#b6e36b` |
 | `--amber` | Warning / tool / fork / in-flight | `#fcd34d` | `#b45309` | `#ffcf5c` |
 | `--red` | Error / blocked / destructive | `#fca5a5` | `#dc2626` | `#ff8a6b` |
@@ -279,10 +281,13 @@ Ranked by leverage. Each future run picks the top unblocked item, fixes it at
 the system level, verifies, and logs it in §12.
 
 1. **Hardcoded color literals** break the "tokens only" rule and the theme
-   contract. Known offenders in `index.css`:
+   contract. Remaining offenders in `index.css`:
    - scrollbar thumb hover `#3a4452`
-   - `.new-chat-btn` text `#0a0e14`, bg `#22d3ee`, hover `#67e8f9`
-   - `.composer-send` hover `#a5e0ff`
+   - ~~`.new-chat-btn` text `#0a0e14`, bg `#22d3ee`, hover `#67e8f9`~~ **DONE
+     (2026-06-30)** — now `var(--on-accent)` / `var(--accent)` /
+     `var(--accent-hover)`; re-themes correctly in all three themes.
+   - ~~`.composer-send` hover `#a5e0ff`~~ **DONE (2026-06-30)** — now
+     `var(--accent-hover)`.
    - dozens of `rgba(125,211,252,…)` / `rgba(134,239,172,…)` / `rgba(252,211,77,…)`
      accent/green/amber alpha literals (badges, washes, role tints) that should be
      `--accent-dim`-style tokens or theme-defined alpha tokens.
@@ -307,5 +312,6 @@ the system level, verifies, and logs it in §12.
 
 | Date | Change | Why | Files |
 |---|---|---|---|
+| 2026-06-30 | **Theme-correct primary CTAs (debt #1, top offenders).** Added two semantic tokens — `--on-accent` (text/icon color on an accent fill) and `--accent-hover` (hover fill for accent-filled CTAs) — to all three `[data-theme]` blocks, then repointed `.new-chat-btn` (was hardcoded `#22d3ee` bg / `#0a0e14` text / `#67e8f9` hover) and `.composer-send:hover` (was `#a5e0ff`) at them. Updated §2 token table + debt #1. Verified in browser: New Chat renders sky-blue+dark in midnight and deep-sky-blue+white in daylight (previously stuck bright-cyan with weak contrast in light/amber themes). | The two primary CTAs were the only fully off-token, non-re-theming controls left — they stayed midnight-cyan in every theme, breaking the theme contract and failing contrast in daylight/amber-crt. Two tokens close the largest visible part of debt #1 system-wide, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Keyboard focus ring (closed top a11y debt #2).** Added `--ring` token (`var(--accent)`, re-themes for free) + a single shared `:where(button, a, select, textarea, summary, [role="button"], [tabindex]):focus-visible` rule painting a `2px var(--ring)` outline (offset 2px). `:focus-visible` fires for keyboard/programmatic focus only, so pointer users are undisturbed and no per-component focus styling is needed. Wrapped inputs keep their `:focus-within` border. Updated §2 token table, §6 state table + focus note, §9, and the debt list (also reconciled #3/#4: `--space-*` scale + density toggle already shipped). | Every interactive control was keyboard-focusable but showed no focus indicator — the #1 accessibility gap, failing WCAG 2.4.7. One token + one rule fixes it system-wide, theme-correctly and reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-29 | **Created the design system.** Documented all 3 themes + full semantic token table, type scale, spacing rhythm, radius/elevation stance, component inventory with required states, motion table, density target, a11y posture, do/don't, and a ranked debt backlog grounded in the live `index.css` + `shell.tsx`. | First run: establish the canonical system every view worker builds against, and make the existing token-rule violations visible as a fixable backlog. | `docs/design/DESIGN_SYSTEM.md` (new), `docs/design/VISION.md` (new) |

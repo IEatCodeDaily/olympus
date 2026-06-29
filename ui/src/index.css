@@ -17,6 +17,8 @@
   --text-faint: #5a6878;
   --accent: #7dd3fc;
   --accent-dim: rgba(125, 211, 252, 0.12);
+  --accent-hover: #a5e0ff;
+  --on-accent: #0a0e14;
   --green: #86efac;
   --amber: #fcd34d;
   --red: #fca5a5;
@@ -34,6 +36,8 @@
   --text-faint: #8090a4;
   --accent: #0284c7;
   --accent-dim: rgba(2, 132, 199, 0.10);
+  --accent-hover: #0369a1;
+  --on-accent: #ffffff;
   --green: #16a34a;
   --amber: #b45309;
   --red: #dc2626;
@@ -51,6 +55,8 @@
   --text-faint: #8a6a3c;
   --accent: #ffb347;
   --accent-dim: rgba(255, 179, 71, 0.14);
+  --accent-hover: #ffc870;
+  --on-accent: #1a1308;
   --green: #b6e36b;
   --amber: #ffcf5c;
   --red: #ff8a6b;
@@ -257,8 +263,8 @@ html, body, #root {
   padding: 6px 14px;
   font-size: 13px;
   font-weight: 500;
-  color: #0a0e14;
-  background: #22d3ee;
+  color: var(--on-accent);
+  background: var(--accent);
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -266,7 +272,7 @@ html, body, #root {
   transition: opacity 0.15s, background 0.15s;
   flex-shrink: 0;
 }
-.new-chat-btn:hover:not(:disabled) { background: #67e8f9; }
+.new-chat-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .new-chat-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .search-box {
@@ -898,7 +904,7 @@ html, body, #root {
   cursor: pointer;
   transition: opacity 0.15s, background 0.15s;
 }
-.composer-send:hover:not(:disabled) { background: #a5e0ff; }
+.composer-send:hover:not(:disabled) { background: var(--accent-hover); }
 .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
 .composer-error {
   font-size: 11px;
