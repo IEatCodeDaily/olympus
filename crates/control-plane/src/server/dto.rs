@@ -8,7 +8,7 @@
 use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
-use crate::views::{MessageRow, SessionRow};
+use crate::views::{CardRow, MessageRow, SessionRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -123,6 +123,43 @@ impl SearchHitDto {
             snippet: hit.snippet.clone(),
             score: hit.score,
             timestamp,
+        }
+    }
+}
+
+/// `Card` as the UI consumes it (api-contract.md §Card, ADR §6.3).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardDto {
+    pub id: String,
+    pub board_id: String,
+    pub title: String,
+    pub status: String,
+    pub assigned_id: Option<String>,
+    pub assigned_kind: Option<String>,
+    pub current_session_id: Option<String>,
+    pub current_bookmark: Option<String>,
+    pub blocked_by: Vec<String>,
+    pub priority: i64,
+    pub created_at: f64,
+    pub status_changed_at: f64,
+}
+
+impl CardDto {
+    pub fn from_row(row: &CardRow) -> Self {
+        Self {
+            id: row.card_id.clone(),
+            board_id: row.board_id.clone(),
+            title: row.title.clone(),
+            status: row.status.clone(),
+            assigned_id: row.assigned_id.clone(),
+            assigned_kind: row.assigned_kind.clone(),
+            current_session_id: row.current_session_id.clone(),
+            current_bookmark: row.current_bookmark.clone(),
+            blocked_by: row.blocked_by.clone(),
+            priority: row.priority,
+            created_at: row.created_at,
+            status_changed_at: row.status_changed_at,
         }
     }
 }

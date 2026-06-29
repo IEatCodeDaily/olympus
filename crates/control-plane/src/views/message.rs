@@ -110,7 +110,8 @@ impl MessageView {
                     }
                 }
             }
-            Event::SessionCreated { .. } | Event::SessionUpdated { .. } => {}
+            // Session + card events don't affect the message cache.
+            _ => {}
         }
     }
 

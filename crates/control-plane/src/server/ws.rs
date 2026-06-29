@@ -55,6 +55,8 @@ pub enum ServerFrame {
     },
     #[serde(rename = "sync.status")]
     SyncStatus { connected: bool },
+    #[serde(rename = "cards.changed")]
+    CardsChanged,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

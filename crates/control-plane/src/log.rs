@@ -73,6 +73,42 @@ enum StoredVariant {
         archived: Option<bool>,
         message_count: Option<u64>,
     },
+    CardCreated {
+        card_id: String,
+        board_id: String,
+        title: String,
+        created_at: f64,
+    },
+    CardAssigned {
+        card_id: String,
+        assigned_id: String,
+        assigned_kind: String,
+        session_id: String,
+        attempt_bookmark: String,
+        assigned_at: f64,
+    },
+    CardClaimed {
+        card_id: String,
+        claimed_at: f64,
+    },
+    CardBlocked {
+        card_id: String,
+        blocked_by: Vec<String>,
+        blocked_at: f64,
+    },
+    CardCompleted {
+        card_id: String,
+        completed_at: f64,
+    },
+    CardReassigned {
+        card_id: String,
+        assigned_id: String,
+        assigned_kind: String,
+        session_id: String,
+        attempt_bookmark: String,
+        previous_session_id: String,
+        reassigned_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -154,6 +190,72 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             model: model.clone(),
             archived: *archived,
             message_count: *message_count,
+        },
+        Event::CardCreated {
+            card_id,
+            board_id,
+            title,
+            created_at,
+        } => StoredVariant::CardCreated {
+            card_id: card_id.clone(),
+            board_id: board_id.clone(),
+            title: title.clone(),
+            created_at: *created_at,
+        },
+        Event::CardAssigned {
+            card_id,
+            assigned_id,
+            assigned_kind,
+            session_id,
+            attempt_bookmark,
+            assigned_at,
+        } => StoredVariant::CardAssigned {
+            card_id: card_id.clone(),
+            assigned_id: assigned_id.clone(),
+            assigned_kind: assigned_kind.clone(),
+            session_id: session_id.clone(),
+            attempt_bookmark: attempt_bookmark.clone(),
+            assigned_at: *assigned_at,
+        },
+        Event::CardClaimed {
+            card_id,
+            claimed_at,
+        } => StoredVariant::CardClaimed {
+            card_id: card_id.clone(),
+            claimed_at: *claimed_at,
+        },
+        Event::CardBlocked {
+            card_id,
+            blocked_by,
+            blocked_at,
+        } => StoredVariant::CardBlocked {
+            card_id: card_id.clone(),
+            blocked_by: blocked_by.clone(),
+            blocked_at: *blocked_at,
+        },
+        Event::CardCompleted {
+            card_id,
+            completed_at,
+        } => StoredVariant::CardCompleted {
+            card_id: card_id.clone(),
+            completed_at: *completed_at,
+        },
+        Event::CardReassigned {
+            card_id,
+            assigned_id,
+            assigned_kind,
+            session_id,
+            attempt_bookmark,
+            previous_session_id,
+            reassigned_at,
+        } => StoredVariant::CardReassigned {
+            card_id: card_id.clone(),
+            assigned_id: assigned_id.clone(),
+            assigned_kind: assigned_kind.clone(),
+            session_id: session_id.clone(),
+            attempt_bookmark: attempt_bookmark.clone(),
+            previous_session_id: previous_session_id.clone(),
+            reassigned_at: *reassigned_at,
         },
     };
     Ok(StoredEvent { variant })
@@ -247,6 +349,72 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             model,
             archived,
             message_count,
+        },
+        StoredVariant::CardCreated {
+            card_id,
+            board_id,
+            title,
+            created_at,
+        } => Event::CardCreated {
+            card_id,
+            board_id,
+            title,
+            created_at,
+        },
+        StoredVariant::CardAssigned {
+            card_id,
+            assigned_id,
+            assigned_kind,
+            session_id,
+            attempt_bookmark,
+            assigned_at,
+        } => Event::CardAssigned {
+            card_id,
+            assigned_id,
+            assigned_kind,
+            session_id,
+            attempt_bookmark,
+            assigned_at,
+        },
+        StoredVariant::CardClaimed {
+            card_id,
+            claimed_at,
+        } => Event::CardClaimed {
+            card_id,
+            claimed_at,
+        },
+        StoredVariant::CardBlocked {
+            card_id,
+            blocked_by,
+            blocked_at,
+        } => Event::CardBlocked {
+            card_id,
+            blocked_by,
+            blocked_at,
+        },
+        StoredVariant::CardCompleted {
+            card_id,
+            completed_at,
+        } => Event::CardCompleted {
+            card_id,
+            completed_at,
+        },
+        StoredVariant::CardReassigned {
+            card_id,
+            assigned_id,
+            assigned_kind,
+            session_id,
+            attempt_bookmark,
+            previous_session_id,
+            reassigned_at,
+        } => Event::CardReassigned {
+            card_id,
+            assigned_id,
+            assigned_kind,
+            session_id,
+            attempt_bookmark,
+            previous_session_id,
+            reassigned_at,
         },
     })
 }

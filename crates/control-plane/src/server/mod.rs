@@ -18,7 +18,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -29,9 +29,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::bridge::{AgentCommand, AgentEvent};
 use crate::log::Log;
 use crate::search::SearchIndex;
-use crate::views::{Filters, ViewManager};
+use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
-use dto::{MessageDto, SearchHitDto, SessionDto};
+use dto::{CardDto, MessageDto, SearchHitDto, SessionDto};
 use ws::ServerFrame;
 
 /// Import progress, surfaced on `/api/health`.
@@ -85,6 +85,13 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/search", get(search))
         .route("/api/models", get(models))
+        .route("/api/cards", get(list_cards).post(create_card))
+        .route("/api/cards/{id}", get(get_card))
+        .route("/api/cards/{id}/assign", post(assign_card))
+        .route("/api/cards/{id}/claim", post(claim_card))
+        .route("/api/cards/{id}/block", post(block_card))
+        .route("/api/cards/{id}/complete", post(complete_card))
+        .route("/api/cards/{id}/reassign", post(reassign_card))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -110,7 +117,7 @@ fn cors_layer() -> CorsLayer {
                 .map(|o| crate::auth::origin_ok(Some(o)))
                 .unwrap_or(false)
         }))
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
@@ -510,6 +517,205 @@ async fn post_message(
     (StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response()
 }
 
+// ---- card handlers (C1) ----
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CardsQuery {
+    board_id: Option<String>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateCardBody {
+    board_id: String,
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignCardBody {
+    assigned_id: String,
+    assigned_kind: String,
+    session_id: String,
+    attempt_bookmark: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockCardBody {
+    blocked_by: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReassignCardBody {
+    assigned_id: String,
+    assigned_kind: String,
+    session_id: String,
+    attempt_bookmark: String,
+    previous_session_id: String,
+}
+
+/// Append an event to the log + apply it to views + broadcast. Returns 500 on
+/// log/apply failure. This is the shared mutation path for all card write ops.
+async fn append_and_apply(state: &AppState, event: crate::event::Event) -> Response {
+    if let Err(e) = state.log.append(&event) {
+        tracing::error!(error = %e, "failed to append card event");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist event").into_response();
+    }
+    // Apply to views under the write lock.
+    {
+        let mut views = state.views.write().await;
+        views.apply(&event);
+    }
+    // Broadcast a delta frame (fire-and-forget; no subscribers is OK).
+    let _ = state.deltas.send(ServerFrame::CardsChanged);
+    // Read back the updated card row (if it exists) and return it.
+    let views = state.views.read().await;
+    match &event {
+        crate::event::Event::CardCreated { card_id, .. }
+        | crate::event::Event::CardAssigned { card_id, .. }
+        | crate::event::Event::CardClaimed { card_id, .. }
+        | crate::event::Event::CardBlocked { card_id, .. }
+        | crate::event::Event::CardCompleted { card_id, .. }
+        | crate::event::Event::CardReassigned { card_id, .. } => match views.cards.get(card_id) {
+            Some(row) => Json(CardDto::from_row(row)).into_response(),
+            None => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "card not found after apply",
+            )
+                .into_response(),
+        },
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "unexpected event").into_response(),
+    }
+}
+
+async fn list_cards(
+    State(state): State<AppState>,
+    Query(q): Query<CardsQuery>,
+) -> impl IntoResponse {
+    let views = state.views.read().await;
+    let filters = CardFilters {
+        board_id: q.board_id,
+        status: q.status,
+    };
+    let cards: Vec<CardDto> = views
+        .cards
+        .list(&filters)
+        .into_iter()
+        .map(CardDto::from_row)
+        .collect();
+    let total = cards.len();
+    Json(json!({ "cards": cards, "total": total }))
+}
+
+async fn get_card(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let views = state.views.read().await;
+    match views.cards.get(&id) {
+        Some(row) => Json(CardDto::from_row(row)).into_response(),
+        None => (StatusCode::NOT_FOUND, "card not found").into_response(),
+    }
+}
+
+async fn create_card(State(state): State<AppState>, Json(body): Json<CreateCardBody>) -> Response {
+    let card_id = format!("card-{}", uuid::Uuid::new_v4());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::CardCreated {
+        card_id: card_id.clone(),
+        board_id: body.board_id,
+        title: body.title,
+        created_at: now,
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn assign_card(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<AssignCardBody>,
+) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::CardAssigned {
+        card_id: id,
+        assigned_id: body.assigned_id,
+        assigned_kind: body.assigned_kind,
+        session_id: body.session_id,
+        attempt_bookmark: body.attempt_bookmark,
+        assigned_at: now,
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn claim_card(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::CardClaimed {
+        card_id: id,
+        claimed_at: now,
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn block_card(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<BlockCardBody>,
+) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::CardBlocked {
+        card_id: id,
+        blocked_by: body.blocked_by,
+        blocked_at: now,
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn complete_card(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::CardCompleted {
+        card_id: id,
+        completed_at: now,
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn reassign_card(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ReassignCardBody>,
+) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::CardReassigned {
+        card_id: id,
+        assigned_id: body.assigned_id,
+        assigned_kind: body.assigned_kind,
+        session_id: body.session_id,
+        attempt_bookmark: body.attempt_bookmark,
+        previous_session_id: body.previous_session_id,
+        reassigned_at: now,
+    };
+    append_and_apply(&state, event).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +1111,30 @@ mod tests {
         assert!(v["id"].is_string());
     }
 
+    // ---- card CRUD tests (C1) ----
+
+    #[tokio::test]
+    async fn list_cards_empty_by_default() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/cards")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["cards"].is_array());
+    }
+
     #[tokio::test]
     async fn post_message_to_managed_olympus_session_is_202() {
         // A managed olympus session should accept a prompt and return 202
@@ -969,5 +1199,265 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn create_card_returns_camelcase_dto() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cards")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"boardId":"b1","title":"Do stuff"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["id"].as_str().unwrap().starts_with("card-"));
+        assert_eq!(v["boardId"], "b1");
+        assert_eq!(v["title"], "Do stuff");
+        assert_eq!(v["status"], "todo");
+        // snake_case keys must NOT be present
+        assert!(v.get("board_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn assign_card_transitions_to_assigned() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+
+        // Create first
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cards")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"boardId":"b1","title":"T"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let card_id = v["id"].as_str().unwrap().to_string();
+
+        // Assign
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/cards/{card_id}/assign"))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"assignedId":"zephyr","assignedKind":"agent","sessionId":"s1","attemptBookmark":"bm-1"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["status"], "assigned");
+        assert_eq!(v["assignedId"], "zephyr");
+        assert_eq!(v["currentSessionId"], "s1");
+    }
+
+    #[tokio::test]
+    async fn complete_card_transitions_to_done() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+
+        // Create + claim
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cards")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"boardId":"b1","title":"T"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let card_id = v["id"].as_str().unwrap().to_string();
+
+        // Complete
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/cards/{card_id}/complete"))
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["status"], "done");
+    }
+
+    #[tokio::test]
+    async fn get_unknown_card_is_404() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/cards/ghost")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- restart test: cards survive replay from the log (C1 gate) ----
+
+    #[test]
+    fn cards_survive_restart_via_replay() {
+        // Simulate the full lifecycle: append card events to a log, replay into
+        // a fresh ViewManager, verify the card state is fully reconstructed.
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("log.redb");
+        let log = Log::open(&log_path).unwrap();
+
+        // Card 1: create → assign → claim → complete
+        log.append(&Event::CardCreated {
+            card_id: "c1".into(),
+            board_id: "b1".into(),
+            title: "First card".into(),
+            created_at: 100.0,
+        })
+        .unwrap();
+        log.append(&Event::CardAssigned {
+            card_id: "c1".into(),
+            assigned_id: "zephyr".into(),
+            assigned_kind: "agent".into(),
+            session_id: "sess-1".into(),
+            attempt_bookmark: "bm-1".into(),
+            assigned_at: 101.0,
+        })
+        .unwrap();
+        log.append(&Event::CardClaimed {
+            card_id: "c1".into(),
+            claimed_at: 102.0,
+        })
+        .unwrap();
+        log.append(&Event::CardCompleted {
+            card_id: "c1".into(),
+            completed_at: 105.0,
+        })
+        .unwrap();
+
+        // Card 2: create → assign → reassign (previous attempt forwarded)
+        log.append(&Event::CardCreated {
+            card_id: "c2".into(),
+            board_id: "b1".into(),
+            title: "Second card".into(),
+            created_at: 200.0,
+        })
+        .unwrap();
+        log.append(&Event::CardAssigned {
+            card_id: "c2".into(),
+            assigned_id: "zephyr".into(),
+            assigned_kind: "agent".into(),
+            session_id: "sess-2a".into(),
+            attempt_bookmark: "bm-2a".into(),
+            assigned_at: 201.0,
+        })
+        .unwrap();
+        log.append(&Event::CardReassigned {
+            card_id: "c2".into(),
+            assigned_id: "talos".into(),
+            assigned_kind: "agent".into(),
+            session_id: "sess-2b".into(),
+            attempt_bookmark: "bm-2b".into(),
+            previous_session_id: "sess-2a".into(),
+            reassigned_at: 210.0,
+        })
+        .unwrap();
+
+        // Card 3: create → blocked
+        log.append(&Event::CardCreated {
+            card_id: "c3".into(),
+            board_id: "b1".into(),
+            title: "Third card".into(),
+            created_at: 300.0,
+        })
+        .unwrap();
+        log.append(&Event::CardBlocked {
+            card_id: "c3".into(),
+            blocked_by: vec!["c1".into(), "c2".into()],
+            blocked_at: 301.0,
+        })
+        .unwrap();
+
+        // Drop the log, reopen it (simulating restart), replay.
+        drop(log);
+        let reopened = Log::open(&log_path).unwrap();
+        let mut views = ViewManager::new();
+        views.replay(&reopened).unwrap();
+
+        // Card 1: done, one completed attempt
+        let c1 = views.cards.get("c1").expect("c1 must exist after replay");
+        assert_eq!(c1.status, "done");
+        assert_eq!(c1.title, "First card");
+        assert_eq!(c1.attempts.len(), 1);
+        assert_eq!(c1.attempts[0].outcome, "done");
+        assert_eq!(c1.attempts[0].ended_at, Some(105.0));
+
+        // Card 2: assigned (reassigned), two attempts, first closed
+        let c2 = views.cards.get("c2").expect("c2 must exist after replay");
+        assert_eq!(c2.status, "assigned");
+        assert_eq!(c2.assigned_id.as_deref(), Some("talos"));
+        assert_eq!(c2.current_session_id.as_deref(), Some("sess-2b"));
+        assert_eq!(c2.attempts.len(), 2);
+        assert_eq!(c2.attempts[0].session_id, "sess-2a");
+        assert_eq!(c2.attempts[0].outcome, "reassigned");
+        assert_eq!(c2.attempts[1].session_id, "sess-2b");
+        assert!(c2.attempts[1].ended_at.is_none());
+
+        // Card 3: blocked with deps
+        let c3 = views.cards.get("c3").expect("c3 must exist after replay");
+        assert_eq!(c3.status, "blocked");
+        assert_eq!(c3.blocked_by, vec!["c1", "c2"]);
+
+        // The board has 3 cards total
+        let all = views.cards.list(&crate::views::CardFilters {
+            board_id: Some("b1".into()),
+            status: None,
+        });
+        assert_eq!(all.len(), 3);
     }
 }

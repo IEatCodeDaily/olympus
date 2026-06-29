@@ -54,6 +54,45 @@ pub enum Event {
         archived: Option<bool>,
         message_count: Option<u64>,
     },
+    // ---- Card lifecycle events (C1, ADR §6) ----
+    /// A card was created on a board.
+    CardCreated {
+        card_id: String,
+        board_id: String,
+        title: String,
+        created_at: f64,
+    },
+    /// A card was assigned to an agent or human, starting a session attempt.
+    CardAssigned {
+        card_id: String,
+        assigned_id: String,
+        /// "agent" | "user"
+        assigned_kind: String,
+        session_id: String,
+        attempt_bookmark: String,
+        assigned_at: f64,
+    },
+    /// A card was claimed (the assigned agent accepted it and began work).
+    CardClaimed { card_id: String, claimed_at: f64 },
+    /// A card was blocked by one or more dependencies.
+    CardBlocked {
+        card_id: String,
+        blocked_by: Vec<String>,
+        blocked_at: f64,
+    },
+    /// A card reached the done state.
+    CardCompleted { card_id: String, completed_at: f64 },
+    /// A card was reassigned to a new agent/session (previous attempt forwarded
+    /// as a "previous attempt" block per ADR §6.2).
+    CardReassigned {
+        card_id: String,
+        assigned_id: String,
+        assigned_kind: String,
+        session_id: String,
+        attempt_bookmark: String,
+        previous_session_id: String,
+        reassigned_at: f64,
+    },
 }
 
 #[cfg(test)]
@@ -118,6 +157,86 @@ mod tests {
             session_id: "sess-1".into(),
             hermes_session_id: "h-1".into(),
             message_id: 5,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    // ---- Card event roundtrips (C1) ----
+
+    #[test]
+    fn card_created_roundtrips() {
+        let e = Event::CardCreated {
+            card_id: "card-1".into(),
+            board_id: "board-1".into(),
+            title: "Implement cards".into(),
+            created_at: 1_700_000_000.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn card_assigned_roundtrips() {
+        let e = Event::CardAssigned {
+            card_id: "card-1".into(),
+            assigned_id: "agent-zephyr".into(),
+            assigned_kind: "agent".into(),
+            session_id: "sess-1".into(),
+            attempt_bookmark: "attempt-1".into(),
+            assigned_at: 1_700_000_001.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn card_claimed_roundtrips() {
+        let e = Event::CardClaimed {
+            card_id: "card-1".into(),
+            claimed_at: 1_700_000_002.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn card_blocked_roundtrips() {
+        let e = Event::CardBlocked {
+            card_id: "card-1".into(),
+            blocked_by: vec!["card-0".into(), "card-2".into()],
+            blocked_at: 1_700_000_003.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn card_completed_roundtrips() {
+        let e = Event::CardCompleted {
+            card_id: "card-1".into(),
+            completed_at: 1_700_000_004.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn card_reassigned_roundtrips() {
+        let e = Event::CardReassigned {
+            card_id: "card-1".into(),
+            assigned_id: "agent-talos".into(),
+            assigned_kind: "agent".into(),
+            session_id: "sess-2".into(),
+            attempt_bookmark: "attempt-2".into(),
+            previous_session_id: "sess-1".into(),
+            reassigned_at: 1_700_000_005.0,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

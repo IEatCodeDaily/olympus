@@ -147,6 +147,9 @@ impl SessionView {
                 }
             }
             Event::MessageRemoved { .. } => {}
+            // Card events (and any other variant) do not affect the
+            // session-list projection.
+            _ => {}
         }
     }
 

@@ -10,9 +10,11 @@
 //! stubbed only enough to make this file compile-testable; real behavior lands
 //! in GREEN.
 
+pub mod card;
 pub mod message;
 pub mod session;
 
+pub use card::{CardFilters, CardRow, CardView};
 pub use message::{MessageRow, MessageView};
 pub use session::{Filters, SessionRow, SessionView};
 
@@ -31,37 +33,42 @@ pub struct ViewManager {
     pub sessions: SessionView,
     /// Per-session message cache (bounded sliding window).
     pub messages: MessageView,
+    /// Card/board projection (C1).
+    pub cards: CardView,
 }
 
 impl ViewManager {
-    /// Construct an empty manager (no sessions, no messages).
+    /// Construct an empty manager (no sessions, no messages, no cards).
     pub fn new() -> Self {
         Self {
             sessions: SessionView::new(),
             messages: MessageView::new(),
+            cards: CardView::new(),
         }
     }
 
-    /// Rebuild both views by replaying every event in `log` in sequence order.
+    /// Rebuild all views by replaying every event in `log` in sequence order.
     ///
     /// Clears any existing in-memory state first, so this is idempotent and
     /// safe to call on restart.
     pub fn replay(&mut self, log: &Log) -> Result<()> {
         self.sessions = SessionView::new();
         self.messages = MessageView::new();
+        self.cards = CardView::new();
         for (_seq, event) in log.read_all()? {
             self.apply(&event);
         }
         Ok(())
     }
 
-    /// Apply a single live event to both views.
+    /// Apply a single live event to all views.
     ///
     /// Each view is responsible for ignoring variants it does not care about;
     /// this method never returns an error for an unrecognized event shape.
     pub fn apply(&mut self, event: &crate::event::Event) {
         self.sessions.apply(event);
         self.messages.apply(event);
+        self.cards.apply(event);
     }
 }
 
