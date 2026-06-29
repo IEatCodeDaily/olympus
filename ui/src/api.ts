@@ -91,6 +91,20 @@ export async function healthCheck(): Promise<HealthResponse> {
 // ── Mutations ──────────────────────────────────────────
 
 /**
+ * Create a new Olympus-managed chat session. Spawns a bridge runtime (hermes
+ * acp), returns the new Session DTO with source="olympus", managed=true.
+ */
+export async function createSession(): Promise<Session> {
+  const res = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { ...authHeaders(), "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(`create session failed (${res.status})`);
+  return res.json() as Promise<Session>;
+}
+
+/**
  * Send a message to a MANAGED (acp-source) session. The agent's response
  * streams back over the /ws delta channel; this POST just enqueues the prompt.
  * Returns 202 on accept; 409 if the session is observed (must be forked first).

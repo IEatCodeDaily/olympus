@@ -86,6 +86,19 @@ async fn main() -> Result<()> {
 
     // ---- assemble server state ----
     let (deltas, _rx) = broadcast::channel(1024);
+    let log_arc = Arc::new(log);
+    let bridge = std::sync::Arc::new(
+        olympus_control_plane::server::bridge_mgr::BridgeManager::with_factory(
+            log_arc.clone(),
+            std::sync::Arc::new(
+                || -> std::sync::Arc<dyn olympus_control_plane::bridge::AgentRuntime> {
+                    olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(
+                        olympus_control_plane::bridge::hermes::HermesRuntimeConfig::default(),
+                    )
+                },
+            ),
+        ),
+    );
     let state = AppState {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
@@ -95,6 +108,8 @@ async fn main() -> Result<()> {
         deltas,
         snapshot_sessions: snap_sessions,
         snapshot_messages: snap_messages,
+        log: log_arc,
+        bridge,
     };
 
     let app = server::build_router(state);

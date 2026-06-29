@@ -171,6 +171,25 @@ html, body, #root {
 
 .toolbar-row { display: flex; gap: 12px; align-items: center; }
 
+.new-chat-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #0a0e14;
+  background: #22d3ee;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.new-chat-btn:hover:not(:disabled) { background: #67e8f9; }
+.new-chat-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .search-box {
   flex: 1;
   display: flex;

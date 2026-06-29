@@ -39,6 +39,20 @@ pub enum ServerFrame {
         session_id: String,
         message: MessageDto,
     },
+    /// A chunk of assistant text streamed from the agent (token-level delta).
+    #[serde(rename = "message.delta", rename_all = "camelCase")]
+    MessageDelta {
+        session_id: String,
+        message_id: u64,
+        text_delta: String,
+    },
+    /// The agent's turn has finished (stopReason from ACP).
+    #[serde(rename = "message.done", rename_all = "camelCase")]
+    MessageDone {
+        session_id: String,
+        message_id: u64,
+        finish_reason: Option<String>,
+    },
     #[serde(rename = "sync.status")]
     SyncStatus { connected: bool },
 }
@@ -172,5 +186,33 @@ mod tests {
         assert_eq!(v["kind"], "message.appended");
         assert_eq!(v["sessionId"], "s1");
         assert_eq!(v["message"]["messageId"], 7);
+    }
+
+    #[test]
+    fn message_delta_frame_shape() {
+        let f = ServerFrame::MessageDelta {
+            session_id: "s1".into(),
+            message_id: 5,
+            text_delta: "PON".into(),
+        };
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["kind"], "message.delta");
+        assert_eq!(v["sessionId"], "s1");
+        assert_eq!(v["messageId"], 5);
+        assert_eq!(v["textDelta"], "PON");
+    }
+
+    #[test]
+    fn message_done_frame_shape() {
+        let f = ServerFrame::MessageDone {
+            session_id: "s1".into(),
+            message_id: 5,
+            finish_reason: Some("end_turn".into()),
+        };
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["kind"], "message.done");
+        assert_eq!(v["sessionId"], "s1");
+        assert_eq!(v["messageId"], 5);
+        assert_eq!(v["finishReason"], "end_turn");
     }
 }

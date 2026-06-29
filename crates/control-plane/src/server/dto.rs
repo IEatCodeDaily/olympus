@@ -61,7 +61,7 @@ impl SessionDto {
             forked_from: None,
             fork_point: None,
             fork_type: None,
-            managed: row.source == "acp",
+            managed: row.source == "acp" || row.source == "olympus",
         }
     }
 }
@@ -169,6 +169,14 @@ mod tests {
     fn acp_session_is_managed() {
         let mut row = sample_row();
         row.source = "acp".into();
+        let dto = SessionDto::from_row(&row);
+        assert!(dto.managed);
+    }
+
+    #[test]
+    fn olympus_session_is_managed() {
+        let mut row = sample_row();
+        row.source = "olympus".into();
         let dto = SessionDto::from_row(&row);
         assert!(dto.managed);
     }

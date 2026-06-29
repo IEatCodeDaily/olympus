@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useSessions } from "../hooks/useSessions";
-import { connectWs } from "../api";
+import { connectWs, createSession } from "../api";
 import type { Session, SessionSort } from "../types";
 import { relativeTime, formatTokens, SOURCE_META, ALL_SOURCES } from "../lib/format";
 
@@ -44,11 +44,39 @@ export default function SessionList({ selectedId, onOpenSession }: Props) {
     });
   };
 
+  const [creating, setCreating] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+
+  const handleNewChat = async () => {
+    if (creating) return;
+    setCreating(true);
+    setCreateErr(null);
+    try {
+      const session = await createSession();
+      onOpenSession(session.id);
+    } catch (e) {
+      setCreateErr(String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="session-list">
       {/* Toolbar */}
       <div className="toolbar">
         <div className="toolbar-row">
+          <button
+            className="new-chat-btn"
+            onClick={handleNewChat}
+            disabled={creating}
+            title="Start a new Olympus-managed chat"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            {creating ? "Starting…" : "New Chat"}
+          </button>
           <div className="search-box">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="8" />
@@ -103,6 +131,7 @@ export default function SessionList({ selectedId, onOpenSession }: Props) {
 
       {/* List — plain render (no virtualizer). ~29 mock sessions is trivial for the DOM. */}
       <div className="list-scroll">
+        {createErr && <div className="list-error">{createErr}</div>}
         {loading && sessions.length === 0 && <SessionListSkeleton />}
         {error && <div className="list-error">{error}</div>}
         {!loading && sessions.length === 0 && !error && (

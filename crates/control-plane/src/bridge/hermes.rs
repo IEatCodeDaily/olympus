@@ -450,6 +450,10 @@ impl AgentRuntime for HermesAgentRuntime {
         state.session_id = None;
         Ok(())
     }
+
+    async fn hermes_session_id(&self) -> Option<String> {
+        self.session_id_shared.lock().await.clone()
+    }
 }
 
 #[cfg(test)]

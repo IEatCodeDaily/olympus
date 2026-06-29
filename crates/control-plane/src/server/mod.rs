@@ -4,8 +4,12 @@
 //! router, shared state, the auth middleware, and the read-only REST handlers
 //! that back the UI's session list, transcript view, and search.
 
+pub mod bridge_mgr;
 pub mod dto;
 pub mod ws;
+
+#[cfg(test)]
+pub mod test_support;
 
 use std::sync::Arc;
 
@@ -22,8 +26,11 @@ use serde_json::json;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::bridge::{AgentCommand, AgentEvent};
+use crate::log::Log;
 use crate::search::SearchIndex;
 use crate::views::{Filters, ViewManager};
+use bridge_mgr::BridgeManager;
 use dto::{MessageDto, SearchHitDto, SessionDto};
 use ws::ServerFrame;
 
@@ -58,6 +65,11 @@ pub struct AppState {
     pub deltas: broadcast::Sender<ServerFrame>,
     pub snapshot_sessions: u64,
     pub snapshot_messages: u64,
+    /// The durable event log — sole source of truth. Appended to on new
+    /// session creation and message events.
+    pub log: Arc<Log>,
+    /// Bridge manager: owns agent runtimes for managed (olympus-source) sessions.
+    pub bridge: Arc<BridgeManager>,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -65,7 +77,7 @@ pub struct AppState {
 /// probe readiness before it has the token.
 pub fn build_router(state: AppState) -> Router {
     let protected = Router::new()
-        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions/{id}", get(get_session))
         .route(
             "/api/sessions/{id}/messages",
@@ -295,31 +307,102 @@ async fn models(State(_state): State<AppState>) -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 struct PostMessageBody {
-    #[allow(dead_code)]
     text: String,
     #[serde(default)]
-    #[allow(dead_code)]
     model: Option<String>,
+}
+
+/// POST /api/sessions — create a new Olympus-managed chat session.
+///
+/// Spawns a bridge runtime, performs the ACP handshake (session/new), appends a
+/// SessionCreated event to the log, broadcasts session.added, and returns the
+/// new Session DTO with 201.
+async fn create_session(State(state): State<AppState>) -> Response {
+    match state.bridge.create_session().await {
+        Ok(ns) => {
+            // Rebuild the views to pick up the new session from the log.
+            let dto = {
+                let mut views = state.views.write().await;
+                if let Ok(events) = state.log.read_all() {
+                    for (_seq, event) in events.iter().rev() {
+                        if let crate::event::Event::SessionCreated { session_id, .. } = event {
+                            if session_id == &ns.session_id {
+                                views.apply(event);
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Build the DTO from the view row while we hold the lock.
+                match views.sessions.get(&ns.session_id) {
+                    Some(r) => SessionDto::from_row(r),
+                    None => SessionDto {
+                        id: ns.session_id.clone(),
+                        hermes_id: ns.hermes_id.clone(),
+                        org_id: "personal".into(),
+                        owner_id: "rpw".into(),
+                        context_id: None,
+                        source: "olympus".into(),
+                        model: None,
+                        title: None,
+                        started_at: 0.0,
+                        last_activity: 0.0,
+                        message_count: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        archived: false,
+                        forked_from: None,
+                        fork_point: None,
+                        fork_type: None,
+                        managed: true,
+                    },
+                }
+            };
+
+            // Broadcast session.added to WS subscribers.
+            let _ = state.deltas.send(ServerFrame::SessionAdded {
+                session: dto.clone(),
+            });
+
+            (
+                StatusCode::CREATED,
+                Json(serde_json::to_value(&dto).unwrap()),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "bridge create_session failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "bridge_error",
+                    "message": format!("Failed to create agent session: {e}"),
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// POST a message to drive a session.
 ///
-/// Only MANAGED (acp-source) sessions are steerable. Observed sessions
+/// Only MANAGED (olympus/acp-source) sessions are steerable. Observed sessions
 /// (imported telegram/cli/etc.) return 409 — the UI must FORK them into an
-/// acp-owned session first (cross-channel continuation, ADR §6.6). The actual
-/// prompt delivery + streaming lands with the ACP bridge (Phase 4); until then
-/// even managed sessions return 503 so the contract shape is honest and the UI
-/// can render the right affordance.
+/// olympus-owned session first (cross-channel continuation, ADR §6.6).
+///
+/// For managed sessions the prompt is sent to the agent runtime and the response
+/// is streamed over /ws as message.delta / message.done frames. Returns 202.
 async fn post_message(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(_body): Json<PostMessageBody>,
+    Json(body): Json<PostMessageBody>,
 ) -> Response {
     let views = state.views.read().await;
     let Some(session) = views.sessions.get(&id) else {
         return (StatusCode::NOT_FOUND, "session not found").into_response();
     };
-    let managed = session.source == "acp";
+    let managed = session.source == "olympus" || session.source == "acp";
+    let hermes_id = session.hermes_id.clone();
     drop(views);
 
     if !managed {
@@ -333,15 +416,98 @@ async fn post_message(
             .into_response();
     }
 
-    // Managed path: the ACP bridge (Phase 4) is not wired yet.
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({
-            "error": "bridge_unavailable",
-            "message": "The Hermes ACP bridge is not connected yet — driving managed sessions is coming next.",
-        })),
-    )
-        .into_response()
+    // Look up the runtime for this session.
+    let Some(runtime) = state.bridge.get_runtime(&id).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "bridge_unavailable",
+                "message": "No active agent runtime for this session.",
+            })),
+        )
+            .into_response();
+    };
+
+    // Record the user message in the log.
+    if let Err(e) = state
+        .bridge
+        .append_user_message(&id, &hermes_id, &body.text)
+    {
+        tracing::warn!(error = %e, "failed to append user message");
+    }
+
+    // Send the prompt.
+    let cmd = AgentCommand::Prompt {
+        text: body.text,
+        model: body.model,
+    };
+    if let Err(e) = runtime.send(cmd).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "send_failed", "message": format!("{e}") })),
+        )
+            .into_response();
+    }
+
+    // Spawn a task to drain the runtime event stream and broadcast WS frames.
+    let session_id = id.clone();
+    let deltas = state.deltas.clone();
+    let bridge = state.bridge.clone();
+    let hermes_id_clone = hermes_id.clone();
+    tokio::spawn(async move {
+        use futures::stream::StreamExt;
+        let mut stream = runtime.events();
+        let mut assistant_text = String::new();
+        let mut assistant_msg_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        while let Some(event) = stream.next().await {
+            match event {
+                AgentEvent::Text(chunk) => {
+                    assistant_text.push_str(&chunk);
+                    let _ = deltas.send(ServerFrame::MessageDelta {
+                        session_id: session_id.clone(),
+                        message_id: assistant_msg_id,
+                        text_delta: chunk,
+                    });
+                }
+                AgentEvent::Done { finish_reason } => {
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_msg_id,
+                        finish_reason: finish_reason.clone(),
+                    });
+                    // Persist the final assistant message.
+                    let _ = bridge.append_assistant_message(
+                        &session_id,
+                        &hermes_id_clone,
+                        assistant_msg_id,
+                        &assistant_text,
+                        finish_reason.as_deref(),
+                    );
+                    break;
+                }
+                AgentEvent::Error(e) => {
+                    tracing::warn!(error = %e, session = %session_id, "agent error event");
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_msg_id,
+                        finish_reason: Some(format!("error: {e}")),
+                    });
+                    break;
+                }
+                AgentEvent::ToolCall { .. } | AgentEvent::Reasoning(_) => {
+                    // Forward tool calls / reasoning in a future iteration.
+                    // For now, accumulate silently.
+                }
+            }
+            assistant_msg_id += 1;
+        }
+    });
+
+    (StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response()
 }
 
 #[cfg(test)]
@@ -390,6 +556,7 @@ mod tests {
         search.build_from_log(&log).unwrap();
 
         let (tx, _rx) = broadcast::channel(64);
+        let log_arc = Arc::new(log);
         let state = AppState {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),
@@ -399,6 +566,11 @@ mod tests {
             deltas: tx,
             snapshot_sessions: 1,
             snapshot_messages: 1,
+            log: log_arc,
+            bridge: Arc::new(BridgeManager::with_factory(
+                Arc::new(Log::open(&dir.path().join("bridge-log.redb")).unwrap()),
+                test_support::mock_factory(),
+            )),
         };
         (state, dir)
     }
@@ -478,6 +650,11 @@ mod tests {
             deltas: tx,
             snapshot_sessions: 3,
             snapshot_messages: 0,
+            log: Arc::new(log),
+            bridge: Arc::new(BridgeManager::with_factory(
+                Arc::new(Log::open(&dir.path().join("bridge-log.redb")).unwrap()),
+                test_support::mock_factory(),
+            )),
         };
         let app = build_router(state);
 
@@ -690,5 +867,107 @@ mod tests {
         assert!(!v["hits"].as_array().unwrap().is_empty());
         assert_eq!(v["hits"][0]["sessionId"], "s1");
         assert_eq!(v["hits"][0]["source"], "telegram");
+    }
+
+    // ---- A2: POST /api/sessions (new managed Olympus chat) ----
+
+    #[tokio::test]
+    async fn post_sessions_creates_managed_olympus_session() {
+        // POST /api/sessions with no body → creates a new Olympus-managed session
+        // via the bridge, returns 201 with a Session DTO where source="olympus"
+        // and managed=true.
+        let (mut state, _d) = test_state();
+        state.bridge = Arc::new(BridgeManager::with_factory(
+            Arc::new(Log::open(&_d.path().join("bridge-log-a.redb")).unwrap()),
+            test_support::mock_factory(),
+        ));
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["source"], "olympus");
+        assert_eq!(v["managed"], true);
+        assert!(v["hermesId"].is_string());
+        assert!(v["id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn post_message_to_managed_olympus_session_is_202() {
+        // A managed olympus session should accept a prompt and return 202
+        // (not 503 — the bridge is wired).
+        let (mut state, _d) = test_state();
+        // The bridge must use the SAME log as the AppState so create_session's
+        // SessionCreated event is visible to post_message's view lookup.
+        state.bridge = Arc::new(BridgeManager::with_factory(
+            state.log.clone(),
+            test_support::mock_factory(),
+        ));
+        // First create a managed session via the API so the bridge knows about it.
+        let app = build_router(state.clone());
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["id"].as_str().unwrap().to_string();
+
+        // Now POST a message to that session.
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/sessions/{session_id}/messages"))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"text":"say PONG"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn post_sessions_without_token_is_401() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -80,6 +80,9 @@ pub trait AgentRuntime: Send + Sync {
     fn events(&self) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>>;
     /// Stop the runtime (close the child).
     async fn stop(&self) -> anyhow::Result<()>;
+    /// The Hermes session id captured from the ACP session/new or session/resume
+    /// response. Returns None if the runtime hasn't started or captured the id yet.
+    async fn hermes_session_id(&self) -> Option<String>;
 }
 
 #[cfg(test)]
