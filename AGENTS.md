@@ -4,45 +4,69 @@ Short map for coding agents working on Olympus. Detailed guidance lives in `docs
 
 ## What Olympus is
 
-A clean-room AI control plane for Hermes Agent: **React + self-hosted Convex + a
-thin Bun host runtime**. NOT a fork of Hermes Studio. See `docs/architecture/architecture.md`
-and `docs/adrs/0001-clean-room-convex-react-bun.md`.
+A clean-room, Rust-native AI control plane for Hermes Agent: a single-binary
+**event-sourced control plane** (redb log → in-memory materialized views →
+tantivy search → axum REST/WS API) plus a **Vite + React UI** under `ui/`. It
+unifies all Hermes sessions from every channel into one searchable, resumable
+interface. NOT a fork of Hermes Studio. The earlier Convex/Bun/TS design was
+removed (ADR 0003); do not reintroduce it. See `docs/architecture/architecture.md`,
+`docs/adrs/0002-olympus-fleet-control-plane.md`, and
+`docs/adrs/0003-remove-convex-rust-native-substrate.md`.
 
 ## First reads
 
-- `docs/architecture/architecture.md` — doctrine, ownership matrix, command/event flow.
-- `docs/adrs/` — accepted decisions.
-- `docs/plans/` — the migration plan (bite-sized tasks).
+- `docs/adrs/0002-olympus-fleet-control-plane.md` — authoritative spec (~24 §).
+- `docs/adrs/0003-remove-convex-rust-native-substrate.md` — substrate decision.
+- `docs/api-contract.md` — UI↔backend wire contract (REST + WSS + shared TS types).
+- `docs/plans/2026-06-28-olympus-mvp.md` — implementation plan (phases 0-8).
 
 ## Workspace
 
-- `apps/web` — React UI (Convex-subscribed). No business logic here beyond view state.
-- `apps/runtime` — Bun host runtime adapter. Claims Convex commands, runs host effects via the Hermes adapter, streams events back. Keep it small.
-- `convex/` — Convex schema + functions. Source of truth + orchestration intent.
-- `packages/protocol` — shared command/event schemas (dependency-free).
-- `packages/hermes-adapter` — `AgentRuntime` interface + `HermesAgentRuntime` impl.
+- `crates/control-plane/src/` — the Rust control plane:
+  - `event.rs`, `log.rs`, `compress.rs` — event-sourced append-only log (redb + zstd).
+  - `views/` — in-memory materialized projections (session + message views).
+  - `search.rs` — tantivy full-text index.
+  - `import.rs` — read-only bulk import from Hermes `state.db`.
+  - `auth.rs` — per-install token + Bearer/Origin gate.
+  - `server/` — axum REST + `/ws` delta stream + camelCase DTOs + CORS.
+  - `main.rs` — boot: import → build views/search → serve.
+- `ui/` — Vite + React + TypeScript client (own bun setup; MSW mock mode toggled
+  by `VITE_USE_MOCKS`, real backend via `.env.local`).
+- `docs/` — ADRs, plan, api-contract, reviews. `hermes-patches/` — patch-not-fork
+  registry for required Hermes changes.
 
-## Commands (Bun-first)
+## Commands (canonical)
 
 ```bash
-bun install
-bun run convex:dev      # Convex dev deployment
-bun run runtime:dev     # Bun host runtime (health on :8791)
-bun run web:dev         # React dev server (:5177)
-bun run lint            # oxlint (0 warnings policy)
-bun run typecheck       # tsc --noEmit
-bun test                # bun test (protocol + units)
-bun run build           # protocol tests + web build + runtime binary
+make verify          # ALL gates: Rust (test/clippy/fmt) + UI (typecheck/build/e2e)
+make verify-rust     # cargo test --workspace && clippy -D warnings && fmt --check
+make verify-ui       # cd ui && bun run typecheck && bun run build && playwright e2e
+make test            # cargo test --workspace (fast inner loop)
+make run             # cargo run --release (imports state.db, serves API on :8787)
+
+# Direct equivalents (what `make` runs):
+cargo test --workspace
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+cd ui && bun run typecheck && bun run build && bun run test:e2e
 ```
+
+There is NO `bun run test` / `bun run lint` / Convex command — those were the old
+TS scaffold (removed in fe7580b). The UI test target is `test:e2e` (Playwright).
 
 ## Hard rules
 
-- React and Convex MUST NOT import Hermes internals. All host execution goes through `packages/hermes-adapter`'s `AgentRuntime`.
-- Convex functions MUST declare explicit `args` AND `returns` validators.
-- Convex is for state/orchestration; the Bun runtime owns processes/PTY/filesystem. Do not put OS-process supervision in Convex actions.
-- Keep the Bun runtime small and boring; no business logic that belongs in Convex.
-- oxlint must pass with 0 warnings before a PR. Run `react-doctor --diff` on web changes.
-- Every PR must pass code-reviewer AND tester (Maestro web e2e) before merge.
+- The redb event log is the sole source of truth; views are pure projections.
+  Never mutate view state outside an `apply(event)` path.
+- `state.db` is read ONLY (open `SQLITE_OPEN_READ_ONLY`); never write the live
+  Hermes DB. Cross-channel continuation is a FORK, never an in-place edit.
+- Patch Hermes, never fork — via `hermes-patches/patchctl.sh`.
+- The auth gate (token + loopback Origin) applies to all `/api/*` and `/ws`.
+  Bind `127.0.0.1` by default; remote bind is opt-in and fails closed.
+- UI and backend share `docs/api-contract.md`; a contract change updates both
+  sides. The DTO layer (`server/dto.rs`) is the only place view rows become wire
+  JSON (camelCase).
+- `make verify` must be green before a PR.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
