@@ -26,7 +26,7 @@ export interface Session {
 }
 
 export type SessionSource =
-  | "cli" | "telegram" | "discord" | "webui" | "cron" | "subagent" | "api_server" | "acp";
+  | "cli" | "telegram" | "discord" | "webui" | "cron" | "subagent" | "api_server" | "acp" | "olympus";
 
 export interface Message {
   messageId: number;          // monotonic within session

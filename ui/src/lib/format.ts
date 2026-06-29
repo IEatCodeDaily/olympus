@@ -39,9 +39,11 @@ export const SOURCE_META: Record<
   subagent: { label: "Subagent", color: "#f0abfc", glow: "rgba(240,171,252,0.15)" },
   api_server: { label: "API", color: "#a3a3a3", glow: "rgba(163,163,163,0.15)" },
   acp: { label: "ACP", color: "#86efac", glow: "rgba(134,239,172,0.15)" },
+  olympus: { label: "Olympus", color: "#22d3ee", glow: "rgba(34,211,238,0.18)" },
 };
 
 export const ALL_SOURCES: SessionSource[] = [
+  "olympus",
   "cli",
   "telegram",
   "discord",

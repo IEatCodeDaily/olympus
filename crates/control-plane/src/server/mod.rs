@@ -135,6 +135,8 @@ async fn auth_gate(
 struct SessionsQuery {
     source: Option<String>,
     archived: Option<bool>,
+    /// `lastActivity` (default) | `startedAt` | `messageCount`, all descending.
+    sort: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -188,6 +190,30 @@ async fn list_sessions(
         })
         .map(SessionDto::from_row)
         .collect();
+
+    // Apply the requested sort (all descending). Default = lastActivity.
+    // The view returns started_at-desc order; we re-sort here so the UI's
+    // sort selector (lastActivity | startedAt | messageCount) takes effect.
+    match q.sort.as_deref() {
+        Some("startedAt") => rows.sort_by(|a, b| {
+            b.started_at
+                .partial_cmp(&a.started_at)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        Some("messageCount") => rows.sort_by(|a, b| {
+            b.message_count
+                .cmp(&a.message_count)
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        // "lastActivity" and anything unrecognized (incl. None) -> lastActivity desc.
+        _ => rows.sort_by(|a, b| {
+            b.last_activity
+                .partial_cmp(&a.last_activity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+    }
 
     let total = rows.len();
     if let Some(limit) = q.limit {
@@ -415,6 +441,89 @@ mod tests {
         assert_eq!(v["total"], 1);
         assert_eq!(v["sessions"][0]["hermesId"], "h1");
         assert_eq!(v["sessions"][0]["source"], "telegram");
+    }
+
+    #[tokio::test]
+    async fn sort_by_message_count_orders_descending() {
+        // Build a 3-session state where started_at order != messageCount order,
+        // so a working sort is distinguishable from the view's default.
+        let dir = tempfile::tempdir().unwrap();
+        let log = Log::open(&dir.path().join("log.redb")).unwrap();
+        let mk = |id: &str, started: f64, msgs: u64| Event::SessionCreated {
+            session_id: id.into(),
+            hermes_id: id.into(),
+            source: "cli".into(),
+            model: None,
+            title: None,
+            started_at: started,
+            message_count: msgs,
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        // newest started has FEWEST messages, so startedAt-desc != messageCount-desc.
+        log.append(&mk("old_big", 100.0, 500)).unwrap();
+        log.append(&mk("mid", 200.0, 50)).unwrap();
+        log.append(&mk("new_small", 300.0, 5)).unwrap();
+        let mut views = ViewManager::new();
+        views.replay(&log).unwrap();
+        let mut search = SearchIndex::open(&dir.path().join("idx")).unwrap();
+        search.build_from_log(&log).unwrap();
+        let (tx, _rx) = broadcast::channel(64);
+        let state = AppState {
+            views: Arc::new(RwLock::new(views)),
+            search: Arc::new(RwLock::new(search)),
+            token: Arc::new("testtoken".to_string()),
+            import_state: ImportState::Done,
+            hermes_profile: Arc::new("default".to_string()),
+            deltas: tx,
+            snapshot_sessions: 3,
+            snapshot_messages: 0,
+        };
+        let app = build_router(state);
+
+        let fetch = |app: axum::Router, q: &str| {
+            let uri = format!("/api/sessions?{q}");
+            async move {
+                let res = app
+                    .oneshot(
+                        Request::builder()
+                            .uri(&uri)
+                            .header("authorization", "Bearer testtoken")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+
+        // sort=messageCount -> 500, 50, 5
+        let v = fetch(app.clone(), "sort=messageCount").await;
+        let ids: Vec<&str> = v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["old_big", "mid", "new_small"],
+            "messageCount desc"
+        );
+
+        // sort=startedAt -> 300, 200, 100 (different order, proves sort is applied)
+        let v = fetch(app.clone(), "sort=startedAt").await;
+        let ids: Vec<&str> = v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["new_small", "mid", "old_big"], "startedAt desc");
     }
 
     #[tokio::test]

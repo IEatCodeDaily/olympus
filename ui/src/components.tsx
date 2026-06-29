@@ -14,6 +14,7 @@ const SOURCE_COLORS: Record<SessionSource, string> = {
   subagent: "var(--src-subagent)",
   api_server: "var(--src-api_server)",
   acp: "var(--src-acp)",
+  olympus: "var(--src-olympus)",
 };
 
 const SOURCE_LABELS: Record<SessionSource, string> = {
@@ -25,6 +26,7 @@ const SOURCE_LABELS: Record<SessionSource, string> = {
   subagent: "Subagent",
   api_server: "API",
   acp: "ACP",
+  olympus: "Olympus",
 };
 
 export function sourceColor(s: SessionSource): string {
