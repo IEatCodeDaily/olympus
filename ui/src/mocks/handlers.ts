@@ -3,7 +3,11 @@ import {
   SESSIONS,
   MESSAGES_BY_SESSION,
   MODELS_LIST,
+  USAGE_BY_RANGE,
+  WORKFLOWS,
+  WORKFLOW_RUNS,
   generateSearchHits,
+  NODES,
 } from "./fixtures";
 import type {
   SessionListResponse,
@@ -11,14 +15,18 @@ import type {
   SearchResponse,
   ModelsResponse,
   HealthResponse,
+  WorkflowsResponse,
   ServerFrame,
+  UsageRange,
+  UsageResponse,
+  NodesResponse,
 } from "../types";
 
 // ── REST Handlers ─────────────────────────────────────
 
 export const handlers = [
   // GET /api/sessions
-  http.get("http://127.0.0.1:8787/api/sessions", async ({ request }) => {
+  http.get("http://127.0.0.1:8787/api/sessions", async ({ request }: { request: Request }) => {
     const url = new URL(request.url);
     const sourceParam = url.searchParams.get("source");
     const model = url.searchParams.get("model");
@@ -54,7 +62,7 @@ export const handlers = [
   }),
 
   // GET /api/sessions/:id
-  http.get<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id", ({ params }) => {
+  http.get<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id", ({ params }: { params: { id: string } }) => {
     const sess = SESSIONS.find((s) => s.id === params.id);
     if (!sess) return new HttpResponse(null, { status: 404 });
     return HttpResponse.json(sess);
@@ -63,7 +71,7 @@ export const handlers = [
   // GET /api/sessions/:id/messages
   http.get<{ id: string }>(
     "http://127.0.0.1:8787/api/sessions/:id/messages",
-    ({ params }) => {
+    ({ params }: { params: { id: string } }) => {
       const msgs = MESSAGES_BY_SESSION[params.id] ?? [];
       return HttpResponse.json<MessagesResponse>({
         messages: msgs,
@@ -73,7 +81,7 @@ export const handlers = [
   ),
 
   // GET /api/search
-  http.get("http://127.0.0.1:8787/api/search", async ({ request }) => {
+  http.get("http://127.0.0.1:8787/api/search", async ({ request }: { request: Request }) => {
     const q = new URL(request.url).searchParams.get("q") ?? "";
     await delay(200 + Math.random() * 300); // simulate tantivy latency
     return HttpResponse.json<SearchResponse>({
@@ -86,6 +94,19 @@ export const handlers = [
     return HttpResponse.json<ModelsResponse>({ models: MODELS_LIST });
   }),
 
+  // GET /api/usage
+  http.get("http://127.0.0.1:8787/api/usage", async ({ request }) => {
+    const range = (new URL(request.url).searchParams.get("range") ?? "24h") as UsageRange;
+    await delay(120 + Math.random() * 160);
+    return HttpResponse.json<UsageResponse>(USAGE_BY_RANGE[range] ?? USAGE_BY_RANGE["24h"]);
+  }),
+
+  // GET /api/nodes
+  http.get("http://127.0.0.1:8787/api/nodes", async () => {
+    await delay(250 + Math.random() * 250);
+    return HttpResponse.json<NodesResponse>({ nodes: NODES });
+  }),
+
   // GET /api/health
   http.get("http://127.0.0.1:8787/api/health", () => {
     return HttpResponse.json<HealthResponse>({
@@ -94,6 +115,15 @@ export const handlers = [
       snapshot: { sessions: SESSIONS.length, messages: Object.values(MESSAGES_BY_SESSION).flat().length },
       syncConnected: true,
       hermesProfile: "tester",
+    });
+  }),
+
+  // GET /api/workflows
+  http.get("http://127.0.0.1:8787/api/workflows", async () => {
+    await delay(220 + Math.random() * 220);
+    return HttpResponse.json<WorkflowsResponse>({
+      workflows: WORKFLOWS,
+      runs: WORKFLOW_RUNS,
     });
   }),
 ];

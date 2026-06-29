@@ -4,6 +4,13 @@ import type {
   ToolCall,
   ModelInfo,
   SearchHit,
+  UsageRange,
+  UsageResponse,
+  NodeInfo,
+  Workflow,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowStepStatus,
 } from "../types";
 
 // ── Helpers ────────────────────────────────────────────
@@ -26,6 +33,35 @@ const MODELS = [
   "gemini-2.5-pro",
   "deepseek-r1-0528",
   "llama-4-maverick",
+];
+
+const NOW = Math.floor(Date.now() / 1000);
+
+export const NODES: NodeInfo[] = [
+  {
+    id: "local",
+    status: "online",
+    slotsUsed: 2,
+    slotsTotal: 4,
+    lastHeartbeat: NOW - 18,
+    runtime: "hermes-acp",
+  },
+  {
+    id: "gpu-box",
+    status: "draining",
+    slotsUsed: 5,
+    slotsTotal: 6,
+    lastHeartbeat: NOW - 165,
+    runtime: "cuda-worker",
+  },
+  {
+    id: "edge-mini",
+    status: "offline",
+    slotsUsed: 0,
+    slotsTotal: 2,
+    lastHeartbeat: NOW - 5400,
+    runtime: "ssh-runner",
+  },
 ];
 
 const TITLES = [
@@ -273,6 +309,172 @@ export const MODELS_LIST: ModelInfo[] = [
   { provider: "meta", model: "llama-4-maverick", displayName: "Llama 4 Maverick" },
   { provider: "zai", model: "glm-4.6", displayName: "GLM 4.6" },
   { provider: "mistral", model: "mistral-large", displayName: "Mistral Large" },
+];
+
+export const USAGE_BY_RANGE: Record<UsageRange, UsageResponse> = {
+  "24h": {
+    range: "24h",
+    generatedAt: Date.now(),
+    summaries: [
+      {
+        model: "gpt-5.4",
+        provider: "openai",
+        tokensIn: 182_400,
+        tokensOut: 468_900,
+        estCost: 12.84,
+        subscriptionLimit: 4_000_000,
+        used: 2_680_000,
+      },
+      {
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        tokensIn: 136_800,
+        tokensOut: 391_200,
+        estCost: 9.46,
+        subscriptionLimit: 3_500_000,
+        used: 2_140_000,
+      },
+      {
+        model: "glm-5.2",
+        provider: "z.ai",
+        tokensIn: 224_300,
+        tokensOut: 512_700,
+        estCost: 5.18,
+        subscriptionLimit: 5_000_000,
+        used: 1_960_000,
+      },
+    ],
+  },
+  "7d": {
+    range: "7d",
+    generatedAt: Date.now(),
+    summaries: [
+      {
+        model: "gpt-5.4",
+        provider: "openai",
+        tokensIn: 1_042_000,
+        tokensOut: 2_934_000,
+        estCost: 78.12,
+        subscriptionLimit: 4_000_000,
+        used: 3_120_000,
+      },
+      {
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        tokensIn: 864_000,
+        tokensOut: 2_186_000,
+        estCost: 64.7,
+        subscriptionLimit: 3_500_000,
+        used: 2_730_000,
+      },
+      {
+        model: "glm-5.2",
+        provider: "z.ai",
+        tokensIn: 1_225_000,
+        tokensOut: 2_911_000,
+        estCost: 36.24,
+        subscriptionLimit: 5_000_000,
+        used: 3_040_000,
+      },
+    ],
+  },
+  "30d": {
+    range: "30d",
+    generatedAt: Date.now(),
+    summaries: [
+      {
+        model: "gpt-5.4",
+        provider: "openai",
+        tokensIn: 4_916_000,
+        tokensOut: 14_820_000,
+        estCost: 286.44,
+        subscriptionLimit: 4_000_000,
+        used: 3_760_000,
+      },
+      {
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        tokensIn: 4_108_000,
+        tokensOut: 10_644_000,
+        estCost: 241.86,
+        subscriptionLimit: 3_500_000,
+        used: 3_180_000,
+      },
+      {
+        model: "glm-5.2",
+        provider: "z.ai",
+        tokensIn: 5_804_000,
+        tokensOut: 13_922_000,
+        estCost: 129.34,
+        subscriptionLimit: 5_000_000,
+        used: 4_280_000,
+      },
+    ],
+  },
+};
+
+// ── Workflows (Epic H mock-first contract) ──────────────
+
+export const WORKFLOWS: Workflow[] = [
+  {
+    id: "code-review-loop",
+    name: "Code review loop",
+    description: "Coder → reviewer → validator → merge with durable handoffs.",
+    stepCount: 4,
+  },
+  {
+    id: "incident-triage",
+    name: "Incident triage",
+    description: "Detect, classify, escalate, and hand off with operator notes.",
+    stepCount: 4,
+  },
+];
+
+function runStep(id: string, label: string, status: WorkflowStepStatus) {
+  return { id, label, status };
+}
+
+function workflowRun(
+  id: string,
+  workflowId: string,
+  status: WorkflowRunStatus,
+  startedAt: number,
+  steps: WorkflowRun["steps"]
+): WorkflowRun {
+  return { id, workflowId, status, startedAt, steps };
+}
+
+export const WORKFLOW_RUNS: WorkflowRun[] = [
+  workflowRun("run_cr_1042", "code-review-loop", "running", epoch(0, 2), [
+    runStep("coder", "Coder", "done"),
+    runStep("reviewer", "Reviewer", "done"),
+    runStep("validator", "Validator", "running"),
+    runStep("merge", "Merge", "pending"),
+  ]),
+  workflowRun("run_cr_1038", "code-review-loop", "done", epoch(1, 5), [
+    runStep("coder", "Coder", "done"),
+    runStep("reviewer", "Reviewer", "done"),
+    runStep("validator", "Validator", "done"),
+    runStep("merge", "Merge", "done"),
+  ]),
+  workflowRun("run_cr_1034", "code-review-loop", "failed", epoch(2, 6), [
+    runStep("coder", "Coder", "done"),
+    runStep("reviewer", "Reviewer", "failed"),
+    runStep("validator", "Validator", "pending"),
+    runStep("merge", "Merge", "pending"),
+  ]),
+  workflowRun("run_it_0417", "incident-triage", "done", epoch(0, 8), [
+    runStep("detect", "Detect", "done"),
+    runStep("classify", "Classify", "done"),
+    runStep("escalate", "Escalate", "done"),
+    runStep("handoff", "Handoff", "done"),
+  ]),
+  workflowRun("run_it_0412", "incident-triage", "running", epoch(1, 3), [
+    runStep("detect", "Detect", "done"),
+    runStep("classify", "Classify", "running"),
+    runStep("escalate", "Escalate", "pending"),
+    runStep("handoff", "Handoff", "pending"),
+  ]),
 ];
 
 // ── Search fixture helper ──────────────────────────────

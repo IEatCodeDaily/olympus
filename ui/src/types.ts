@@ -97,6 +97,24 @@ export interface ModelsResponse {
   models: ModelInfo[];
 }
 
+export interface UsageSummary {
+  model: string;
+  provider: string;
+  tokensIn: number;
+  tokensOut: number;
+  estCost: number;
+  subscriptionLimit: number;
+  used: number;
+}
+
+export type UsageRange = "24h" | "7d" | "30d";
+
+export interface UsageResponse {
+  range: UsageRange;
+  generatedAt: number;
+  summaries: UsageSummary[];
+}
+
 export interface HealthResponse {
   status: "ok";
   importState: "idle" | "running" | "done";
@@ -145,6 +163,52 @@ export interface BlockCardBody {
 
 export interface ReassignCardBody extends AssignCardBody {
   previousSessionId: string;
+}
+
+// Nodes (U4, mock-first — backend Epic L)
+export type NodeStatus = "online" | "draining" | "offline";
+
+export interface NodeInfo {
+  id: string;
+  status: NodeStatus;
+  slotsUsed: number;
+  slotsTotal: number;
+  lastHeartbeat: number;
+  runtime: string;
+}
+
+export interface NodesResponse {
+  nodes: NodeInfo[];
+}
+
+// Workflows (U5, mock-first — backend Epic H)
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  stepCount: number;
+}
+
+export type WorkflowRunStatus = "running" | "done" | "failed";
+export type WorkflowStepStatus = "pending" | "running" | "done" | "failed";
+
+export interface WorkflowRunStep {
+  id: string;
+  label: string;
+  status: WorkflowStepStatus;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  status: WorkflowRunStatus;
+  startedAt: number;
+  steps: WorkflowRunStep[];
+}
+
+export interface WorkflowsResponse {
+  workflows: Workflow[];
+  runs: WorkflowRun[];
 }
 
 export type SessionSort = "lastActivity" | "startedAt" | "messageCount";
