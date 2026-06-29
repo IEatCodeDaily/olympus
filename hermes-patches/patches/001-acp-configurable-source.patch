@@ -1,0 +1,67 @@
+diff --git a/acp_adapter/session.py b/acp_adapter/session.py
+index bbe34b067..e53592d7d 100644
+--- a/acp_adapter/session.py
++++ b/acp_adapter/session.py
+@@ -120,6 +120,24 @@ def _acp_stderr_print(*args, **kwargs) -> None:
+     print(*args, **kwargs)
+ 
+ 
++def _session_source() -> str:
++    """Source tag for sessions this ACP adapter owns.
++
++    Defaults to ``"acp"`` (editor integrations: VS Code, Zed, JetBrains). A host
++    that drives ``hermes acp`` as its own first-class channel can override this
++    via ``HERMES_ACP_SESSION_SOURCE`` so its sessions are tagged distinctly in
++    ``state.db`` (e.g. Olympus sets ``HERMES_ACP_SESSION_SOURCE=olympus``) and
++    show up as their own channel in ``session_search`` / Studio / Olympus.
++
++    The value is sanitised to a conservative ``[a-z0-9_]`` slug; an empty or
++    invalid override falls back to ``"acp"`` so a bad env var can never produce
++    an unfilterable/blank source.
++    """
++    raw = (os.environ.get("HERMES_ACP_SESSION_SOURCE") or "").strip().lower()
++    slug = re.sub(r"[^a-z0-9_]", "", raw)
++    return slug or "acp"
++
++
+ def _register_task_cwd(task_id: str, cwd: str) -> None:
+     """Bind a task/session id to the editor's working directory for tools.
+ 
+@@ -288,7 +306,7 @@ class SessionManager:
+ 
+         if db is not None:
+             try:
+-                for row in db.list_sessions_rich(source="acp", limit=1000):
++                for row in db.list_sessions_rich(source=_session_source(), limit=1000):
+                     persisted_rows[str(row["id"])] = dict(row)
+             except Exception:
+                 logger.debug("Failed to load ACP sessions from DB", exc_info=True)
+@@ -377,7 +395,7 @@ class SessionManager:
+         db = self._get_db()
+         if db is not None:
+             try:
+-                rows = db.search_sessions(source="acp", limit=10000)
++                rows = db.search_sessions(source=_session_source(), limit=10000)
+                 for row in rows:
+                     sid = row["id"]
+                     _clear_task_cwd(sid)
+@@ -450,7 +468,7 @@ class SessionManager:
+             if existing is None:
+                 db.create_session(
+                     session_id=state.session_id,
+-                    source="acp",
++                    source=_session_source(),
+                     model=model_str,
+                     model_config={"cwd": state.cwd},
+                 )
+@@ -485,8 +503,8 @@ class SessionManager:
+         if row is None:
+             return None
+ 
+-        # Only restore ACP sessions.
+-        if row.get("source") != "acp":
++        # Only restore sessions this adapter owns (its configured source).
++        if row.get("source") != _session_source():
+             return None
+ 
+         # Extract cwd from model_config.

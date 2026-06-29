@@ -12,12 +12,18 @@ checkout = "~/.hermes/hermes-agent"
 base_commit = "d712a7fd7"
 
 # Active patches, applied in array order. Each .patch file lives under patches/.
-# (Empty until the create_fork patch lands post-spike — see README "Planned".)
-#
+
+[[patch]]
+file    = "001-acp-configurable-source.patch"
+purpose = "Configurable ACP session source via HERMES_ACP_SESSION_SOURCE so Olympus-driven `hermes acp` sessions are tagged source='olympus' (a dedicated channel), distinct from editor 'acp' sessions. Read-gates (list/cleanup/restore) track the same configured source for clean per-instance isolation; default stays 'acp' (back-compat)."
+targets = ["acp_adapter/session.py"]
+adr_ref = "§6 fork model / dedicated channel"
+verify  = "venv/bin/python -m pytest tests/acp_adapter/ -q"
+
+# Planned:
 # [[patch]]
-# file    = "001-sessiondb-create-fork.patch"
+# file    = "002-sessiondb-create-fork.patch"
 # purpose = "SessionDB.create_fork() for Olympus cross-channel resume (ADR 0002 §6.6)"
 # targets = ["hermes_state.py"]
 # adr_ref = "§6.6"
 # verify  = "venv/bin/python -m pytest tests/test_hermes_state.py -k fork -q"
-patch = []
