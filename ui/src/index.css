@@ -61,6 +61,9 @@
   --sans: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
   --radius: 6px;
   --radius-sm: 4px;
+  /* Keyboard focus ring. Derives from --accent, so it re-themes for free
+     (accent is redefined in every [data-theme] block). a11y debt §9. */
+  --ring: var(--accent);
   --sidebar-w: 220px;
   --space-view-y: 20px;
   --space-view-x: 24px;
@@ -103,6 +106,19 @@ html, body, #root {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4452; }
+
+/* ── Keyboard focus ring (a11y, §9) ──────────────────────
+   A single shared :focus-visible outline for every interactive control.
+   :focus-visible fires for keyboard/programmatic focus only, never on mouse
+   click, so it never disturbs pointer users. `outline` isn't set by any of the
+   class-level styles (.nav-item, .btn-primary, …), so there is no specificity
+   collision — the ring lands consistently on every control. Wrapped inputs
+   (.search-box, .composer) route focus to their container via :focus-within
+   and keep their own border treatment. */
+:where(button, a, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 
 /* ── App layout ──────────────────────────────────────── */
 

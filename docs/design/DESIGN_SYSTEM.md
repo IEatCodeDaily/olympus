@@ -84,6 +84,7 @@ Every color is one of these semantic names. Values per theme:
 | `--sans` | `"IBM Plex Sans", -apple-system, system-ui, sans-serif` | All prose & UI text |
 | `--radius` | `6px` | Default corner radius (cards, inputs) |
 | `--radius-sm` | `4px` | Small radius (buttons, pills, badges) |
+| `--ring` | `var(--accent)` | Keyboard focus ring; re-themes via `--accent` |
 | `--sidebar-w` | `220px` | Fixed sidebar width |
 
 ---
@@ -164,18 +165,27 @@ state set below.
 
 | Element | default | hover | active/selected | focus | disabled | loading | empty |
 |---|---|---|---|---|---|---|---|
-| **Nav item** (`.nav-item`) | dim text | bg-hover, text | accent text + bg-elev2 | — *(gap)* | — | — | — |
-| **Primary button** (`.btn-primary`) | accent bg | opacity .88 | — | — *(gap)* | opacity .4 | — | — |
-| **New-chat button** (`.new-chat-btn`) | cyan bg | brighter | — | — | opacity .5 | — | — |
-| **Back / ghost button** (`.back-btn`) | border-bright | accent border+text | — | — *(gap)* | — | — | — |
+| **Nav item** (`.nav-item`) | dim text | bg-hover, text | accent text + bg-elev2 | `--ring` outline | — | — | — |
+| **Primary button** (`.btn-primary`) | accent bg | opacity .88 | — | `--ring` outline | opacity .4 | — | — |
+| **New-chat button** (`.new-chat-btn`) | cyan bg | brighter | — | `--ring` outline | opacity .5 | — | — |
+| **Back / ghost button** (`.back-btn`) | border-bright | accent border+text | — | `--ring` outline | — | — | — |
 | **Search box** (`.search-box`) | border-bright | — | — | accent border (`:focus-within`) | — | spinner | placeholder |
 | **Composer** (`.composer-input-row`) | border-bright | — | — | accent border | send btn .35 | spinner | placeholder |
-| **Send button** (`.composer-send`) | accent bg | brighter | — | — | opacity .35 | spinner | — |
-| **Source pill** (`.source-pill`) | dim outline | text-dim border | (filter on) | — | — | — | — |
-| **Session row** (`.session-row`) | hairline | bg-elev | bg-elev2 + inset accent bar + accent title | — | — | skeleton rows | list-empty |
-| **Sort select** (`.sort-select`) | border-bright | accent border | — | — *(gap)* | — | — | — |
-| **Theme swatch** (`.theme-swatch`) | border | — | accent border | — *(gap)* | — | — | — |
-| **Tool-call card** (`.tool-call-card`) | hairline | header bg-hover | expanded | — | — | spin status | — |
+| **Send button** (`.composer-send`) | accent bg | brighter | — | `--ring` outline | opacity .35 | spinner | — |
+| **Source pill** (`.source-pill`) | dim outline | text-dim border | (filter on) | `--ring` outline | — | — | — |
+| **Session row** (`.session-row`) | hairline | bg-elev | bg-elev2 + inset accent bar + accent title | — *(non-tabbable div; selection via list)* | — | skeleton rows | list-empty |
+| **Sort select** (`.sort-select`) | border-bright | accent border | — | `--ring` outline | — | — | — |
+| **Theme swatch** (`.theme-swatch`) | border | — | accent border | `--ring` outline | — | — | — |
+| **Tool-call card** (`.tool-call-card`) | hairline | header bg-hover | expanded | `--ring` outline (header button) | — | spin status | — |
+
+> **Focus ring:** a single shared `:where(button, a, select, textarea, summary,
+> [role="button"], [tabindex]):focus-visible` rule in `index.css` paints a
+> `2px var(--ring)` outline (offset 2px) on every interactive control for
+> keyboard/programmatic focus only — `:focus-visible` never fires on mouse
+> click, so pointer users are undisturbed. `--ring` derives from `--accent`, so
+> it re-themes for free. Don't add per-component focus styling; rely on the
+> shared rule (wrapped inputs are the documented exception — they show focus on
+> their container border via `:focus-within`).
 
 ### Loading & empty patterns
 
@@ -230,9 +240,11 @@ per-component overrides, so one token swap reflows the whole cockpit.
 - **Contrast:** primary text on `--bg` meets WCAG AA in all three themes;
   `--text-dim` is for secondary content only, `--text-faint` for non-essential
   meta — do not put primary information in faint.
-- **Focus:** *current gap* — most controls show hover/active but **no dedicated
-  keyboard focus ring**. Target: a single `--ring` token + a shared
-  `:focus-visible` outline applied to every interactive element. (Top a11y debt.)
+- **Focus:** every interactive control shows a keyboard focus ring — a shared
+  `:focus-visible` rule paints a `2px var(--ring)` outline (offset 2px). It
+  fires for keyboard/programmatic focus only, never on mouse click, and
+  `--ring` derives from `--accent` so it re-themes automatically. (Closed the
+  former top a11y debt — see §6 focus note + §12.)
 - **Targets:** interactive rows/buttons keep a ≥28–32px hit height.
 - **Color is never the only signal:** status uses badge text + color (e.g.
   `RUNNING`/`BLOCKED` labels), role uses a labeled badge + gutter tint, not hue
@@ -275,12 +287,16 @@ the system level, verifies, and logs it in §12.
      accent/green/amber alpha literals (badges, washes, role tints) that should be
      `--accent-dim`-style tokens or theme-defined alpha tokens.
    - `.reasoning-content` purple `rgba(240,171,252,…)` — also violates the no-purple anchor.
-2. **No keyboard focus ring** (a11y, §9). Add a `--ring` token + shared
-   `:focus-visible` rule across nav, buttons, selects, swatches.
-3. **No spacing/type/motion scale tokens** (§3, §4, §7). Inline literals block a
-   clean density toggle and consistent rhythm. Introduce `--space-*`,
-   `--font-*`, `--dur-*`/`--ease-*`.
-4. **Density toggle** (§8) — depends on (3).
+2. ~~**No keyboard focus ring** (a11y, §9).~~ **DONE (2026-06-30).** Added a
+   `--ring` token (derives from `--accent`) + a shared
+   `:where(…):focus-visible` rule across all interactive elements.
+3. **No type/motion scale tokens** (§3, §7). Inline literals block consistent
+   rhythm. Introduce `--font-*` and `--dur-*`/`--ease-*`. *(Spacing scale
+   `--space-*` and the `[data-density]` block already exist — see §4/§8; type +
+   motion scales remain.)*
+4. ~~**Density toggle** (§8).~~ **Shipped** — `[data-density="compact"]` block +
+   Settings toggle rescale via `--space-*`. (Comfortable/compact only; further
+   modes can extend the same pattern.)
 5. **`prefers-reduced-motion`** not honored (§7).
 6. **No `Toolbar` / `SkeletonRows` shared primitives** in `shell.tsx` though the
    roadmap names them; loading/filter UI is re-implemented per view.
@@ -291,4 +307,5 @@ the system level, verifies, and logs it in §12.
 
 | Date | Change | Why | Files |
 |---|---|---|---|
+| 2026-06-30 | **Keyboard focus ring (closed top a11y debt #2).** Added `--ring` token (`var(--accent)`, re-themes for free) + a single shared `:where(button, a, select, textarea, summary, [role="button"], [tabindex]):focus-visible` rule painting a `2px var(--ring)` outline (offset 2px). `:focus-visible` fires for keyboard/programmatic focus only, so pointer users are undisturbed and no per-component focus styling is needed. Wrapped inputs keep their `:focus-within` border. Updated §2 token table, §6 state table + focus note, §9, and the debt list (also reconciled #3/#4: `--space-*` scale + density toggle already shipped). | Every interactive control was keyboard-focusable but showed no focus indicator — the #1 accessibility gap, failing WCAG 2.4.7. One token + one rule fixes it system-wide, theme-correctly and reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-29 | **Created the design system.** Documented all 3 themes + full semantic token table, type scale, spacing rhythm, radius/elevation stance, component inventory with required states, motion table, density target, a11y posture, do/don't, and a ranked debt backlog grounded in the live `index.css` + `shell.tsx`. | First run: establish the canonical system every view worker builds against, and make the existing token-rule violations visible as a fixable backlog. | `docs/design/DESIGN_SYSTEM.md` (new), `docs/design/VISION.md` (new) |
