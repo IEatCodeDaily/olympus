@@ -81,6 +81,21 @@ the merged tree — never trust a worker's self-report):
 - **Real browser e2e for any UI change** — never claim UI works from a build alone.
 - Adversarial source-review BEFORE building any new Hermes-integration code.
 
+**Worker run policy (per operator directive):** seed cards with a high runtime
+cap (`--max-runtime 1d` — effectively unbounded; normal milestones finish well
+inside it) and `--max-retries 1`. Rationale: the small 50m cap caused doom-loops
+(a worker hit the cap mid-task, the dispatcher restarted it, and the restart
+re-derived from scratch instead of resuming). `max-retries 1` means a genuinely
+stuck/failed run **blocks for the orchestrator instead of silently auto-restarting**.
+The orchestrator does progress checks (`kanban show <id>` — heartbeats advancing?
+worktree gaining test-passing code?) rather than relying on a guillotine cap.
+If a long-runner is genuinely churning (re-deriving, not progressing), salvage
+its worktree + re-scope into a smaller card (see the split pattern below). To
+change runtime on an already-seeded card, `kanban edit` can't do it — UPDATE
+`max_runtime_seconds`/`max_retries` directly in
+`~/.hermes/kanban/boards/<slug>/kanban.db` (back up + `PRAGMA integrity_check`
+after).
+
 ---
 
 ## Epic map (the whole arc)
