@@ -139,7 +139,7 @@ export default function App() {
             </div>
             {selectedSessionId && (
               <div className="chat-pane">
-                <ChatView sessionId={selectedSessionId} onBack={backToList} />
+                <ChatView sessionId={selectedSessionId} onBack={backToList} onOpenSession={openSession} />
               </div>
             )}
           </>

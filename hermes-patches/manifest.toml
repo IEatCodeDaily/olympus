@@ -20,10 +20,9 @@ targets = ["acp_adapter/session.py"]
 adr_ref = "§6 fork model / dedicated channel"
 verify  = "venv/bin/python -m pytest tests/acp_adapter/ -q"
 
-# Planned:
-# [[patch]]
-# file    = "002-sessiondb-create-fork.patch"
-# purpose = "SessionDB.create_fork() for Olympus cross-channel resume (ADR 0002 §6.6)"
-# targets = ["hermes_state.py"]
-# adr_ref = "§6.6"
-# verify  = "venv/bin/python -m pytest tests/test_hermes_state.py -k fork -q"
+[[patch]]
+file    = "002-sessiondb-create-fork.patch"
+purpose = "SessionDB.create_fork() for Olympus cross-channel resume (ADR 0002 §6.6): copy active source history into a fresh ACP/Olympus-owned branch with parent lineage and exact counters."
+targets = ["hermes_state.py", "acp_adapter/session.py", "tests/test_sessiondb_create_fork.py", "tests/acp_adapter/test_acp_commands.py"]
+adr_ref = "§6.6"
+verify  = "venv/bin/python -m pytest tests/test_sessiondb_create_fork.py tests/acp_adapter/test_acp_commands.py::test_acp_fork_session_can_branch_observed_source_session -q"

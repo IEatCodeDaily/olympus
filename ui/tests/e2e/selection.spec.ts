@@ -141,4 +141,27 @@ test.describe("Session selection and chat-view switching", () => {
       expect(await chatId(page)).toBe(expectedId);
     }
   });
+
+  test("forking an observed session opens the managed fork", async ({ page }) => {
+    let sourceId = "";
+    let forkButton = page.getByRole("button", { name: "Fork to continue" });
+
+    for (let n = 1; n <= 6; n += 1) {
+      await (await row(page, n)).click();
+      await page.waitForSelector(".chat-view", { timeout: 5_000 });
+      if ((await forkButton.count()) > 0) {
+        sourceId = await chatId(page);
+        break;
+      }
+    }
+
+    expect(sourceId).not.toBe("");
+    await expect(forkButton).toBeEnabled();
+    await forkButton.click();
+
+    await expect(page.locator(".chat-managed-badge")).toHaveText("live");
+    const forkedId = await chatId(page);
+    expect(forkedId).not.toBe(sourceId);
+    await expect(page.locator(".chat-view")).toHaveAttribute("data-session-id", forkedId);
+  });
 });

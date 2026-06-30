@@ -84,6 +84,7 @@ pub fn build_router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions/{id}", get(get_session))
+        .route("/api/sessions/{id}/fork", axum::routing::post(fork_session))
         .route(
             "/api/sessions/{id}/messages",
             get(get_messages).post(post_message),
@@ -324,6 +325,13 @@ struct PostMessageBody {
     model: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ForkSessionBody {
+    #[serde(default)]
+    fork_type: Option<String>,
+}
+
 /// POST /api/sessions — create a new Olympus-managed chat session.
 ///
 /// Spawns a bridge runtime, performs the ACP handshake (session/new), appends a
@@ -394,6 +402,119 @@ async fn create_session(State(state): State<AppState>) -> Response {
                 .into_response()
         }
     }
+}
+
+/// POST /api/sessions/:id/fork — fork an observed session into Olympus.
+async fn fork_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ForkSessionBody>,
+) -> Response {
+    let (source, messages) = {
+        let views = state.views.read().await;
+        let Some(source) = views.sessions.get(&id).cloned() else {
+            return (StatusCode::NOT_FOUND, "session not found").into_response();
+        };
+        let messages = views
+            .messages
+            .recent(&id, usize::MAX)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        (source, messages)
+    };
+
+    let fork_type = body.fork_type.unwrap_or_else(|| "sub".to_string());
+    let fork = match state
+        .bridge
+        .fork_session(
+            &source.hermes_id,
+            source.model.clone(),
+            source.title.clone(),
+            messages.len() as u64,
+        )
+        .await
+    {
+        Ok(fork) => fork,
+        Err(e) => {
+            tracing::error!(error = %e, source_session = %id, "bridge fork_session failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "bridge_error",
+                    "message": format!("Failed to fork agent session: {e}"),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    for (idx, msg) in messages.iter().enumerate() {
+        if let Err(e) = state.log.append(&crate::event::Event::MessageAppended {
+            session_id: fork.session_id.clone(),
+            hermes_session_id: fork.hermes_id.clone(),
+            message_id: idx as u64,
+            role: msg.role.clone(),
+            content: msg.content.clone(),
+            tool_name: msg.tool_name.clone(),
+            tool_calls: None,
+            reasoning: None,
+            timestamp: msg.timestamp,
+            token_count: msg.token_count,
+            finish_reason: None,
+        }) {
+            tracing::warn!(error = %e, fork_session = %fork.session_id, "failed to append forked message");
+        }
+    }
+
+    let mut dto = {
+        let mut views = state.views.write().await;
+        if let Ok(events) = state.log.read_all() {
+            for (_seq, event) in events {
+                match &event {
+                    crate::event::Event::SessionCreated { session_id, .. }
+                    | crate::event::Event::MessageAppended { session_id, .. }
+                    | crate::event::Event::SessionUpdated { session_id, .. }
+                        if session_id == &fork.session_id =>
+                    {
+                        views.apply(&event);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match views.sessions.get(&fork.session_id) {
+            Some(row) => SessionDto::from_row(row),
+            None => SessionDto {
+                id: fork.session_id.clone(),
+                hermes_id: fork.hermes_id.clone(),
+                org_id: "personal".into(),
+                owner_id: "rpw".into(),
+                context_id: None,
+                source: "olympus".into(),
+                model: source.model.clone(),
+                title: source.title.clone(),
+                started_at: 0.0,
+                last_activity: 0.0,
+                message_count: messages.len() as u64,
+                input_tokens: 0,
+                output_tokens: 0,
+                archived: false,
+                forked_from: None,
+                fork_point: None,
+                fork_type: None,
+                managed: true,
+            },
+        }
+    };
+    dto.forked_from = Some(id);
+    dto.fork_type = Some(fork_type);
+
+    let _ = state.deltas.send(ServerFrame::SessionAdded {
+        session: dto.clone(),
+    });
+
+    Json(json!({ "session": dto })).into_response()
 }
 
 /// POST a message to drive a session.
@@ -1057,6 +1178,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_fork_observed_session_returns_managed_fork_and_leaves_source() {
+        let (mut state, _d) = test_state();
+        state.bridge = Arc::new(BridgeManager::with_factory(
+            state.log.clone(),
+            test_support::mock_factory(),
+        ));
+        let app = build_router(state.clone());
+
+        let source_before = {
+            let views = state.views.read().await;
+            SessionDto::from_row(views.sessions.get("s1").unwrap())
+        };
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions/s1/fork")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"forkType":"sub"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(v["session"]["source"], "olympus");
+        assert_eq!(v["session"]["managed"], true);
+        assert_eq!(v["session"]["forkedFrom"], "s1");
+        assert_eq!(v["session"]["forkType"], "sub");
+        assert!(v["session"]["id"].as_str().unwrap() != "s1");
+
+        let source_after = {
+            let views = state.views.read().await;
+            SessionDto::from_row(views.sessions.get("s1").unwrap())
+        };
+        assert_eq!(source_after, source_before);
     }
 
     #[tokio::test]

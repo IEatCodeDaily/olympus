@@ -6,15 +6,16 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useChat } from "../hooks/useChat";
 import { useSessions } from "../hooks/useSessions";
 import { formatTime, SOURCE_META, formatTokens } from "../lib/format";
-import { sendMessage } from "../api";
-import type { Message, ToolCall } from "../types";
+import { forkSession, sendMessage } from "../api";
+import type { Message, Session, ToolCall } from "../types";
 
 interface Props {
   sessionId: string;
   onBack: () => void;
+  onOpenSession: (id: string) => void;
 }
 
-export default function ChatView({ sessionId, onBack }: Props) {
+export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
   const { messages, loading, error, streamingText, loadOlder, hasOlder } = useChat(sessionId);
   const sessionMeta = useSessions({});
   const session = sessionMeta.sessions.find((s) => s.id === sessionId);
@@ -96,15 +97,34 @@ export default function ChatView({ sessionId, onBack }: Props) {
       )}
 
       {/* Composer */}
-      <Composer sessionId={sessionId} managed={managed} sourceLabel={sourceMeta?.label ?? session?.source ?? ""} />
+      <Composer
+        sessionId={sessionId}
+        managed={managed}
+        sourceLabel={sourceMeta?.label ?? session?.source ?? ""}
+        onForked={(forked) => {
+          sessionMeta.refetch();
+          onOpenSession(forked.id);
+        }}
+      />
     </div>
   );
 }
 
 // ── Composer ───────────────────────────────────────────
-function Composer({ sessionId, managed, sourceLabel }: { sessionId: string; managed: boolean; sourceLabel: string }) {
+function Composer({
+  sessionId,
+  managed,
+  sourceLabel,
+  onForked,
+}: {
+  sessionId: string;
+  managed: boolean;
+  sourceLabel: string;
+  onForked: (session: Session) => void;
+}) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [forking, setForking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -138,17 +158,31 @@ function Composer({ sessionId, managed, sourceLabel }: { sessionId: string; mana
     }
   };
 
+  const fork = useCallback(async () => {
+    if (forking) return;
+    setForking(true);
+    setErr(null);
+    try {
+      onForked(await forkSession(sessionId));
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setForking(false);
+    }
+  }, [forking, onForked, sessionId]);
+
   if (!managed) {
     return (
       <div className="composer composer-locked">
+        {err && <div className="composer-error">{err}</div>}
         <div className="composer-locked-text">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
           This is an observed <strong>{sourceLabel}</strong> session — read-only. Fork it to continue from Olympus.
         </div>
-        <button className="composer-fork-btn" disabled title="Fork — coming with the ACP bridge">
-          Fork to continue
+        <button className="composer-fork-btn" disabled={forking} onClick={fork}>
+          {forking ? "Forking…" : "Fork to continue"}
         </button>
       </div>
     );

@@ -128,6 +128,20 @@ pub fn build_session_resume_request(session_id: &str, cwd: &str, id: AcpId) -> A
     }
 }
 
+/// Build the ACP `session/fork` request.
+pub fn build_session_fork_request(session_id: &str, cwd: &str, id: AcpId) -> AcpRequest {
+    AcpRequest {
+        jsonrpc: "2.0".into(),
+        id,
+        method: "session/fork".into(),
+        params: json!({
+            "sessionId": session_id,
+            "cwd": cwd,
+            "mcpServers": [],
+        }),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Message → AgentEvent mapping
 // ---------------------------------------------------------------------------
@@ -367,6 +381,73 @@ impl AgentRuntime for HermesAgentRuntime {
             if std::time::Instant::now() >= deadline {
                 anyhow::bail!(
                     "timed out after {}s waiting for ACP session/new response",
+                    self.config.start_timeout_secs
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Ok(())
+    }
+
+    async fn fork_session(&self, session_id: &str) -> Result<()> {
+        let mut state = self.state.lock().await;
+
+        if state.child.is_some() {
+            anyhow::bail!("runtime already started");
+        }
+
+        let mut cmd = tokio::process::Command::new(&self.config.command[0]);
+        cmd.args(&self.config.command[1..]);
+        cmd.current_dir(&self.config.cwd);
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::inherit());
+        if let Some(source) = &self.config.session_source {
+            cmd.env("HERMES_ACP_SESSION_SOURCE", source);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("spawning {:?}", self.config.command))?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("child stdin pipe was not captured")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("child stdout pipe was not captured")?;
+
+        *self.session_id_shared.lock().await = None;
+        state.child = Some(child);
+        state.stdin = Some(stdin);
+        drop(state);
+
+        Self::spawn_reader(
+            stdout,
+            self.event_tx.clone(),
+            Arc::clone(&self.session_id_shared),
+        );
+
+        let init_req = build_initialize_request(self.alloc_id());
+        debug!(target: "olympus.bridge.hermes", method = %init_req.method, "ACP send");
+        self.write_message(&AcpMessage::Request(init_req)).await?;
+
+        let fork_req = build_session_fork_request(session_id, &self.config.cwd, self.alloc_id());
+        debug!(target: "olympus.bridge.hermes", method = %fork_req.method, "ACP send");
+        self.write_message(&AcpMessage::Request(fork_req)).await?;
+
+        let deadline =
+            std::time::Instant::now() + Duration::from_secs(self.config.start_timeout_secs);
+        loop {
+            if let Some(sid) = self.session_id_shared.lock().await.clone() {
+                self.state.lock().await.session_id = Some(sid);
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "timed out after {}s waiting for ACP session/fork response",
                     self.config.start_timeout_secs
                 );
             }

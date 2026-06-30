@@ -1,0 +1,303 @@
+diff --git a/acp_adapter/session.py b/acp_adapter/session.py
+index bbe34b067..0db334834 100644
+--- a/acp_adapter/session.py
++++ b/acp_adapter/session.py
+@@ -120,6 +120,24 @@ def _acp_stderr_print(*args, **kwargs) -> None:
+     print(*args, **kwargs)
+ 
+ 
++def _session_source() -> str:
++    """Source tag for sessions this ACP adapter owns.
++
++    Defaults to ``"acp"`` (editor integrations: VS Code, Zed, JetBrains). A host
++    that drives ``hermes acp`` as its own first-class channel can override this
++    via ``HERMES_ACP_SESSION_SOURCE`` so its sessions are tagged distinctly in
++    ``state.db`` (e.g. Olympus sets ``HERMES_ACP_SESSION_SOURCE=olympus``) and
++    show up as their own channel in ``session_search`` / Studio / Olympus.
++
++    The value is sanitised to a conservative ``[a-z0-9_]`` slug; an empty or
++    invalid override falls back to ``"acp"`` so a bad env var can never produce
++    an unfilterable/blank source.
++    """
++    raw = (os.environ.get("HERMES_ACP_SESSION_SOURCE") or "").strip().lower()
++    slug = re.sub(r"[^a-z0-9_]", "", raw)
++    return slug or "acp"
++
++
+ def _register_task_cwd(task_id: str, cwd: str) -> None:
+     """Bind a task/session id to the editor's working directory for tools.
+ 
+@@ -257,7 +275,22 @@ class SessionManager:
+         cwd = _translate_acp_cwd(cwd)
+         original = self.get_session(session_id)  # checks DB too
+         if original is None:
+-            return None
++            db = self._get_db()
++            if db is None or not hasattr(db, "create_fork"):
++                return None
++            try:
++                new_id = db.create_fork(
++                    session_id,
++                    source=_session_source(),
++                    new_cwd=cwd,
++                    fork_type="cross-channel",
++                )
++            except Exception:
++                logger.warning("Failed to fork persisted session %s", session_id, exc_info=True)
++                return None
++            if not new_id:
++                return None
++            return self._restore(new_id)
+ 
+         new_id = str(uuid.uuid4())
+         agent = self._make_agent(
+@@ -288,7 +321,7 @@ class SessionManager:
+ 
+         if db is not None:
+             try:
+-                for row in db.list_sessions_rich(source="acp", limit=1000):
++                for row in db.list_sessions_rich(source=_session_source(), limit=1000):
+                     persisted_rows[str(row["id"])] = dict(row)
+             except Exception:
+                 logger.debug("Failed to load ACP sessions from DB", exc_info=True)
+@@ -377,7 +410,7 @@ class SessionManager:
+         db = self._get_db()
+         if db is not None:
+             try:
+-                rows = db.search_sessions(source="acp", limit=10000)
++                rows = db.search_sessions(source=_session_source(), limit=10000)
+                 for row in rows:
+                     sid = row["id"]
+                     _clear_task_cwd(sid)
+@@ -450,7 +483,7 @@ class SessionManager:
+             if existing is None:
+                 db.create_session(
+                     session_id=state.session_id,
+-                    source="acp",
++                    source=_session_source(),
+                     model=model_str,
+                     model_config={"cwd": state.cwd},
+                 )
+@@ -485,8 +518,8 @@ class SessionManager:
+         if row is None:
+             return None
+ 
+-        # Only restore ACP sessions.
+-        if row.get("source") != "acp":
++        # Only restore sessions this adapter owns (its configured source).
++        if row.get("source") != _session_source():
+             return None
+ 
+         # Extract cwd from model_config.
+diff --git a/hermes_state.py b/hermes_state.py
+index a7938f716..52a4f27c2 100644
+--- a/hermes_state.py
++++ b/hermes_state.py
+@@ -21,6 +21,7 @@ import re
+ import sqlite3
+ import threading
+ import time
++import uuid
+ from pathlib import Path
+ 
+ from agent.memory_manager import sanitize_context
+@@ -1460,6 +1461,155 @@ class SessionDB:
+         """Create a new session record. Returns the session_id."""
+         self._insert_session_row(session_id, source, **kwargs)
+         return session_id
++
++    def create_fork(
++        self,
++        src_id: str,
++        fork_point_msg_id: int = None,
++        *,
++        source: str = "acp",
++        fork_type: str = "cross-channel",
++        new_cwd: str = None,
++        model: str = None,
++        new_session_id: str = None,
++    ) -> Optional[str]:
++        """Create an ACP-resumable fork of an existing session.
++
++        Copies active messages from ``src_id`` up to ``fork_point_msg_id`` into a
++        fresh branch session without mutating the source. The fork is marked as a
++        branch child via both ``parent_session_id`` and
++        ``model_config._branched_from`` so Hermes session lists keep it visible
++        rather than treating it as an ephemeral delegate child.
++
++        Returns the new session id, or ``None`` if the source session does not
++        exist or the selected fork range contains no active messages.
++        """
++        if not src_id:
++            return None
++
++        fork_id = new_session_id or str(uuid.uuid4())
++        target_source = (source or "acp").strip() or "acp"
++        fork_kind = (fork_type or "cross-channel").strip() or "cross-channel"
++
++        def _do(conn):
++            src = conn.execute(
++                "SELECT * FROM sessions WHERE id = ?",
++                (src_id,),
++            ).fetchone()
++            if src is None:
++                return None
++
++            point_clause = ""
++            params: List[Any] = [src_id]
++            if fork_point_msg_id is not None:
++                point_clause = " AND id <= ?"
++                params.append(fork_point_msg_id)
++
++            active_count = conn.execute(
++                "SELECT COUNT(*) AS c FROM messages "
++                "WHERE session_id = ? AND active = 1" + point_clause,
++                params,
++            ).fetchone()["c"]
++            if int(active_count or 0) <= 0:
++                return None
++
++            src_meta: Dict[str, Any] = {}
++            raw_meta = src["model_config"]
++            if raw_meta:
++                try:
++                    parsed = json.loads(raw_meta)
++                    if isinstance(parsed, dict):
++                        src_meta = parsed
++                except (json.JSONDecodeError, TypeError):
++                    src_meta = {}
++
++            fork_cwd = new_cwd or src_meta.get("cwd") or src["cwd"] or "."
++            fork_meta = dict(src_meta)
++            fork_meta["cwd"] = fork_cwd
++            fork_meta["_branched_from"] = src_id
++            fork_meta["_fork_type"] = fork_kind
++            if fork_point_msg_id is not None:
++                fork_meta["_fork_point_msg_id"] = fork_point_msg_id
++
++            conn.execute(
++                """
++                INSERT INTO sessions (
++                    id, source, user_id, model, model_config, system_prompt,
++                    parent_session_id, cwd, started_at,
++                    message_count, tool_call_count,
++                    input_tokens, output_tokens,
++                    cache_read_tokens, cache_write_tokens, reasoning_tokens,
++                    title, archived
++                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, NULL, 0)
++                """,
++                (
++                    fork_id,
++                    target_source,
++                    src["user_id"],
++                    model or src["model"],
++                    json.dumps(fork_meta),
++                    src["system_prompt"],
++                    src_id,
++                    fork_cwd,
++                    time.time(),
++                ),
++            )
++
++            copy_params: List[Any] = [fork_id, src_id]
++            copy_point_clause = ""
++            if fork_point_msg_id is not None:
++                copy_point_clause = " AND id <= ?"
++                copy_params.append(fork_point_msg_id)
++            conn.execute(
++                """
++                INSERT INTO messages (
++                    session_id, role, content, tool_call_id, tool_calls, tool_name,
++                    timestamp, token_count, finish_reason,
++                    reasoning, reasoning_content, reasoning_details,
++                    codex_reasoning_items, codex_message_items,
++                    platform_message_id, observed, active, compacted
++                )
++                SELECT
++                    ?, role, content, tool_call_id, tool_calls, tool_name,
++                    timestamp, token_count, finish_reason,
++                    reasoning, reasoning_content, reasoning_details,
++                    codex_reasoning_items, codex_message_items,
++                    platform_message_id, COALESCE(observed, 0), 1, 0
++                FROM messages
++                WHERE session_id = ? AND active = 1
++                """
++                + copy_point_clause
++                + " ORDER BY id",
++                copy_params,
++            )
++
++            conn.execute(
++                """
++                UPDATE sessions
++                SET
++                    message_count = (
++                        SELECT COUNT(*) FROM messages
++                        WHERE session_id = ? AND active = 1
++                    ),
++                    tool_call_count = (
++                        SELECT COALESCE(SUM(
++                            CASE
++                                WHEN tool_calls IS NOT NULL AND json_valid(tool_calls)
++                                THEN json_array_length(tool_calls)
++                                ELSE 0
++                            END
++                        ), 0)
++                        FROM messages
++                        WHERE session_id = ? AND active = 1
++                    )
++                WHERE id = ?
++                """,
++                (fork_id, fork_id, fork_id),
++            )
++            return fork_id
++
++        return self._execute_write(_do)
++
+     def end_session(self, session_id: str, end_reason: str) -> None:
+         """Mark a session as ended.
+ 
+diff --git a/tests/acp_adapter/test_acp_commands.py b/tests/acp_adapter/test_acp_commands.py
+index 4a95367a6..b2d83476f 100644
+--- a/tests/acp_adapter/test_acp_commands.py
++++ b/tests/acp_adapter/test_acp_commands.py
+@@ -114,6 +114,39 @@ def test_acp_real_agent_gets_session_db_for_recall(monkeypatch):
+     assert captured["session_id"] == "acp-session"
+ 
+ 
++def test_acp_fork_session_can_branch_observed_source_session(tmp_path, monkeypatch):
++    """Cross-channel continuation forks observed DB rows into this ACP source."""
++    from hermes_state import SessionDB
++
++    db = SessionDB(db_path=tmp_path / "state.db")
++    db.create_session(
++        session_id="telegram-src",
++        source="telegram",
++        model="fake-model",
++        model_config={"cwd": "/chat"},
++        cwd="/chat",
++    )
++    db.append_message("telegram-src", role="user", content="hello from telegram")
++
++    monkeypatch.setenv("HERMES_ACP_SESSION_SOURCE", "olympus")
++    fake = FakeAgent()
++    manager = SessionManager(agent_factory=lambda **kwargs: fake, db=db)
++
++    forked = manager.fork_session("telegram-src", cwd="/olympus")
++
++    assert forked is not None
++    assert forked.session_id != "telegram-src"
++    assert forked.cwd == "/olympus"
++    assert [(m.get("role"), m.get("content")) for m in forked.history] == [
++        ("user", "hello from telegram")
++    ]
++
++    fork_row = db.get_session(forked.session_id)
++    assert fork_row["source"] == "olympus"
++    assert fork_row["parent_session_id"] == "telegram-src"
++    assert db.get_session("telegram-src")["source"] == "telegram"
++
++
+ @pytest.mark.asyncio
+ async def test_acp_steer_slash_command_injects_into_running_agent():
+     acp_agent, state, fake, _conn = make_agent_and_state()

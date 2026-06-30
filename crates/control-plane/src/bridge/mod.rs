@@ -74,6 +74,8 @@ pub trait AgentRuntime: Send + Sync {
     /// Start (or resume) a session. Spawns the child process if needed and
     /// performs the ACP handshake + `session/new` / `session/resume`.
     async fn start(&self, session_id: Option<&str>) -> anyhow::Result<()>;
+    /// Fork an existing Hermes session into a new runtime-owned session.
+    async fn fork_session(&self, session_id: &str) -> anyhow::Result<()>;
     /// Send a command to the active session.
     async fn send(&self, cmd: AgentCommand) -> anyhow::Result<()>;
     /// Borrow the stream of agent events.

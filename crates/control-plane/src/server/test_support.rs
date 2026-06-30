@@ -36,6 +36,12 @@ impl AgentRuntime for MockAgentRuntime {
         Ok(())
     }
 
+    async fn fork_session(&self, _session_id: &str) -> anyhow::Result<()> {
+        let id = format!("mock-fork-{}", uuid_short());
+        *self.session_id.lock().await = Some(id);
+        Ok(())
+    }
+
     async fn send(&self, cmd: AgentCommand) -> anyhow::Result<()> {
         if let AgentCommand::Prompt { text, .. } = &cmd {
             // Simulate the agent echoing the prompt text back as a response.

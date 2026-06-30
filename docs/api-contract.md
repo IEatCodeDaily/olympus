@@ -6,9 +6,8 @@
 > §10.3.1 (delta streaming) + §3.5 (tenancy) + the PRD features. Changes here are
 > breaking — update both sides together.
 >
-> Status: MVP / read-only-first. Drive/fork endpoints are present but gated on the
-> ACP + fork spikes (see plan Phase 4/5). Fields marked `(post-spike)` are not
-> wired until those land.
+> Status: MVP. New chat, send, streaming, and fork-to-continue are wired; fields
+> marked `(post-spike)` are not wired until those land.
 
 ## Transport & auth
 
@@ -121,14 +120,18 @@ GET /api/health
           "syncConnected": boolean, "hermesProfile": string }
 ```
 
-### Mutations (post-spike — gated on ACP + fork)
+### Mutations
 
 ```
-POST /api/sessions/:id/fork            # (post-spike) cross-channel continuation
+POST /api/sessions                     # start a new Olympus-managed chat
+  body {}
+  → 201 Session
+
+POST /api/sessions/:id/fork            # cross-channel continuation
   body { forkType: "sub"|"parallel", forkPoint?: number }
   → 200 { "session": Session }         # the new managed fork; source untouched
 
-POST /api/sessions/:id/messages        # (post-spike) drive a MANAGED session
+POST /api/sessions/:id/messages        # drive a MANAGED session
   body { text: string, model?: string }
   → 202 { "accepted": true }           # response streams over /ws
   → 409 if session is not `managed` (observed sessions must be forked first)

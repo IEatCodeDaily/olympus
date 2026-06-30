@@ -30,6 +30,12 @@ pub struct NewSession {
     pub hermes_id: String,
 }
 
+/// The result of forking an observed session into a managed one.
+pub struct ForkedSession {
+    pub session_id: String,
+    pub hermes_id: String,
+}
+
 /// Manages the lifecycle of agent runtimes for managed (olympus-source) sessions.
 pub struct BridgeManager {
     /// Event log (for appending SessionCreated / MessageAppended events).
@@ -96,6 +102,51 @@ impl BridgeManager {
             .insert(session_id.clone(), runtime);
 
         Ok(NewSession {
+            session_id,
+            hermes_id,
+        })
+    }
+
+    /// Fork an existing Hermes session into a new managed Olympus session,
+    /// append the SessionCreated event, and register the runtime for prompts.
+    pub async fn fork_session(
+        &self,
+        source_hermes_id: &str,
+        model: Option<String>,
+        title: Option<String>,
+        message_count: u64,
+    ) -> Result<ForkedSession> {
+        let runtime = (self.factory)();
+        runtime
+            .fork_session(source_hermes_id)
+            .await
+            .context("forking agent runtime session")?;
+
+        let hermes_id = runtime
+            .hermes_session_id()
+            .await
+            .unwrap_or_else(|| format!("fork-{}", chrono_millis()));
+        let session_id = format!("oly-{}", &hermes_id[..hermes_id.len().min(8)]);
+
+        let now = chrono_epoch();
+        self.log.append(&Event::SessionCreated {
+            session_id: session_id.clone(),
+            hermes_id: hermes_id.clone(),
+            source: "olympus".into(),
+            model,
+            title,
+            started_at: now,
+            message_count,
+            input_tokens: 0,
+            output_tokens: 0,
+        })?;
+
+        self.runtimes
+            .write()
+            .await
+            .insert(session_id.clone(), runtime);
+
+        Ok(ForkedSession {
             session_id,
             hermes_id,
         })
