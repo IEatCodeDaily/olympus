@@ -227,7 +227,27 @@ final visible frame. This is safe because no motion carries information that
 text doesn't (every live state has a label — see §9); the reduced view loses no
 meaning, only movement.
 
-> Debt: no `--dur-*` / `--ease-*` tokens; durations are inline literals.
+### Motion tokens (§11 debt #3, motion half — CLOSED 2026-07-01)
+
+Interaction-transition timings are now tokens in `:root` (referenced as
+`var(--token)`; never inline a duration in a component). Three duration steps map
+to the table above; two easing tokens name the curves:
+
+| Token | Value | Use |
+|---|---|---|
+| `--dur-1` | `0.08s` | Immediate — direct-manipulation hover (session/message/search rows). |
+| `--dur-2` | `0.12s` | Fast — nav items, focus borders, pills, lightweight controls. |
+| `--dur-3` | `0.15s` | Base — buttons, cards, composer, panels, settings controls. |
+| `--ease-standard` | `ease` | Default control transitions. |
+| `--ease-in-out` | `ease-in-out` | Looping skeleton / thinking animations. |
+
+Scope: these cover **interaction transitions** only. Looping keyframe durations
+(`shimmer` 1.3s, `pulse` 1.5s, `spin` 0.7–1s, `olympus-pulse` 1.6s,
+`thinking-bounce` 1.2s) stay per-animation — each is a characteristic rhythm, not
+an interaction step, so a shared scale would flatten distinct signals. Their
+*easing* is tokenized (`--ease-in-out`) where shared. All interaction durations
+stay ≤150ms per the rules above; the two former `0.1s` one-offs snapped to
+`--dur-2` (a sub-perceptual +20ms) to land on the scale.
 
 ---
 
@@ -308,10 +328,13 @@ the system level, verifies, and logs it in §12.
 2. ~~**No keyboard focus ring** (a11y, §9).~~ **DONE (2026-06-30).** Added a
    `--ring` token (derives from `--accent`) + a shared
    `:where(…):focus-visible` rule across all interactive elements.
-3. **No type/motion scale tokens** (§3, §7). Inline literals block consistent
-   rhythm. Introduce `--font-*` and `--dur-*`/`--ease-*`. *(Spacing scale
-   `--space-*` and the `[data-density]` block already exist — see §4/§8; type +
-   motion scales remain.)*
+3. **No type scale tokens** (§3). **Motion half CLOSED (2026-07-01)** —
+   `--dur-1/2/3` + `--ease-standard`/`--ease-in-out` now live in `:root`; every
+   interaction transition in `index.css` references them (see §7 motion tokens).
+   Remaining: the **type scale** — promote the inline `font-size`/`weight`
+   literals (§3) to a `--font-*` set so rhythm is consistent and rescalable.
+   *(Spacing scale `--space-*` and the `[data-density]` block already shipped —
+   see §4/§8.)*
 4. ~~**Density toggle** (§8).~~ **Shipped** — `[data-density="compact"]` block +
    Settings toggle rescale via `--space-*`. (Comfortable/compact only; further
    modes can extend the same pattern.)
@@ -328,6 +351,7 @@ the system level, verifies, and logs it in §12.
 
 | Date | Change | Why | Files |
 |---|---|---|---|
+| 2026-07-01 | **Introduced the motion scale — closed the motion half of debt #3.** Added five tokens to `:root` — `--dur-1` (0.08s), `--dur-2` (0.12s), `--dur-3` (0.15s), `--ease-standard` (ease), `--ease-in-out` (ease-in-out) — and repointed **all ~40 inline interaction-transition literals** across `index.css` at them (nav, pills, rows, buttons, composer, search, board/nodes/workflows/settings controls, theme swatches/toggle, etc.), plus the two shared looping easings (`shimmer`, `thinking-bounce`). Verified by regex sweep: **zero** inline transition durations remain (`transition:` … `Ns`). The two former `0.1s` one-offs (`.search-group-header`, `.group-open-icon`) snapped to `--dur-2` — a sub-perceptual +20ms — to land on the scale. Per-animation keyframe durations (shimmer/pulse/spin/olympus-pulse/thinking-bounce) intentionally stay per-animation: each is a characteristic rhythm, not an interaction step, and a shared scale would flatten distinct live-state signals. Added a §7 "Motion tokens" table, updated debt #3 (now type-scale-only). Gate green (typecheck + build exit 0). | This was the top unblocked debt item and a direct mirror of the already-shipped `--space-*` work: motion timing was the last interaction dimension still living as ~40 scattered literals (0.08/0.1/0.12/0.15s with mixed/implicit easing), which blocks consistent rhythm and means a future "snappier/calmer" tuning pass would require editing dozens of rules instead of three tokens. Tokenizing it makes the motion language enforceable ("no inline duration in a component", same invariant as color/space) and tunable from one place, with zero layout change and near-zero visual change (CSS default easing is already `ease`; only the two 0.1s→0.12s consolidations move, sub-perceptually). Reverses by inversion. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-07-01 | **Tokenized the last hardcoded color literals in `index.css` — CSS portion of debt #1 now fully closed.** The three `.diff-line` washes (the syntax-diff renderer in tool-call cards) were the only remaining off-token colors in the stylesheet: `.add` `rgba(134,239,172,.10)`, `.del` `rgba(248,113,113,.10)`, `.hunk` `rgba(125,211,252,.06)`. Repointed them to the existing semantic wash tokens `var(--green-soft)` / `var(--red-soft)` / `var(--accent-soft)`, which are defined in all three `[data-theme]` blocks. Verified with a regex sweep: **zero** hardcoded hex/`rgba()` now exist outside the theme token blocks. Updated debt #1. Gate green (typecheck + build exit 0). | These three literals broke both the "tokens only" rule and the theme contract — diff backgrounds stayed midnight-tinted in daylight/amber-crt instead of re-theming. Worse, `.del` used `rgba(248,113,113,…)` = `#f87171`, which isn't even the theme's `--red` (`#fca5a5`) — so it was off-token *and* off-palette; the token swap corrects the hue too. Closing the entire CSS surface of debt #1 (not just chipping one offender) is the high-leverage move: it makes "no literal lives in index.css" an enforceable invariant going forward, and the only remaining debt-#1 work is inline `style={{}}` in TSX components. Three one-line token references, theme-correct, reverses by inversion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Honored `prefers-reduced-motion` (closed a11y debt #5).** Added a global `@media (prefers-reduced-motion: reduce)` block in `index.css` (placed beside the shared focus-ring rule, keeping the a11y system rules together) that collapses all transitions to instant and settles every looping keyframe — `shimmer`, `spin`, `pulse`, `thinking-bounce`, `olympus-pulse` — on its final visible, original-position frame via `animation-iteration-count: 1`. Five infinite animations previously ran unconditionally regardless of OS preference. Updated §7 motion rules, §9 a11y, and debt #5. Gate green (typecheck + build exit 0). | This was the top clean a11y debt — vestibular-disorder users get continuous motion (skeleton shimmer, spinners, the live pulse) with no escape hatch, a WCAG 2.3.3 failure the docs already promised to fix. The reset is safe by design: the system mandates "color is never the only signal", so every animated live state (RUNNING/streaming/loading) also carries a text label — removing motion loses movement, not meaning. One `@media` block, theme-agnostic, reverses by deletion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Fixed circular self-referential tokens in the default (midnight) theme — a same-day regression.** Four midnight tokens had been left as invalid self-references: `--accent-dim: var(--accent-soft)`, `--accent-soft: var(--accent-soft)`, `--accent-hover-fill: var(--accent-hover-fill)`, and `--amber-soft: var(--amber-soft)` (introduced in `0ab805f`, the structured-tool-calls PR). A `var()` that references itself is invalid and resolves to the *guaranteed-invalid* value (effectively unset/transparent), so in the **default theme only** every surface backed by these tokens rendered with no fill: the brand-mark, board-card / node-card / workflow selected states, the node-session-dot glow, the placeholder/ready/warning badges, the user role badge, the composer-fork hover, and the density toggle. Daylight and amber-crt were unaffected (they carry literal rgba). Repointed all four to explicit rgba matching their documented values and the structure of the other two themes (`--accent-dim`/`--accent-soft` = `rgba(125,211,252,.12)`, `--accent-hover-fill` = `.10`, `--amber-soft` = `.13`). Gate green (typecheck + build exit 0). | This was the single highest-leverage fix available: a broken default-theme token contract silently degrading ~8 surfaces for every user (midnight is the default), invisible in code review because the value *looks* token-shaped. Four one-line literals restore the whole token layer with zero layout change, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
