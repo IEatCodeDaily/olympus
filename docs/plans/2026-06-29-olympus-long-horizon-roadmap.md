@@ -102,10 +102,10 @@ after).
 
 | Epic | Theme | ADR refs | Status |
 |---|---|---|---|
-| **A** | MVP completion — drive Hermes from Olympus | §10, §19, §6.6 | IN PROGRESS |
-| **B** | Reactivity hardening + state.db live sync | §6.7, §10.3.1, §2.5 | TODO |
-| **C** | Cards & board (work becomes durable) | §6 | TODO |
-| **D** | Scheduler core + AgentRuntime second impl | §10.5/.6, §19, §23.1-2 | TODO |
+| **A** | MVP completion — drive Hermes from Olympus | §10, §19, §6.6 | DONE (`0dbfa82`) — v0.1-mvp |
+| **B** | Reactivity hardening + state.db live sync | §6.7, §10.3.1, §2.5 | IN PROGRESS (B1 done; B2 re-dispatching) |
+| **C** | Cards & board (work becomes durable) | §6 | DONE (C1+C2) |
+| **D** | Scheduler core + AgentRuntime second impl | §10.5/.6, §19, §23.1-2 | IN PROGRESS (D1 re-dispatching) |
 | **E** | Filesystem hierarchy + workdir lifecycle + jj | §5 | TODO |
 | **F** | Sandboxing + port reservation | §12 | TODO |
 | **G** | Observability admin surface | §10B | TODO |
@@ -436,15 +436,15 @@ coordination plane (A–O) is solid.
 | Milestone | Status | Commit / tag | Notes |
 |---|---|---|---|
 | (pre-A) MVP read + channel foundation | DONE | `d0ed69c` | import, views, search, REST/WS, UI, auth, CORS, configurable acp source |
-| A1 ACP bridge | TODO | | next up; spike already done |
-| A2 New Chat + send + streaming | TODO | | depends A1 |
-| A3 Fork-to-continue | TODO | | depends A2 + patch 002 |
-| B1 state.db live sync | TODO | | |
-| B2 delta correctness under load | TODO | | |
-| C1 card model | TODO | | |
-| C2 board UI | TODO | | |
-| D1 scheduler core | TODO | | correctness spine |
-| D2 AgentRuntime 2nd impl | TODO | | |
+| A1 ACP bridge | DONE | `b998700`,`3be2dac` | AgentRuntime trait + ACP framing + HermesAgentRuntime; live-proven (PONG) |
+| A2 New Chat + send + streaming | DONE | `6615842` | POST /api/sessions → bridge session/new; UI New Chat + streaming |
+| A3 Fork-to-continue | DONE | `0dbfa82` | patch 002 applied+reverse-clean; live-proven: forked subagent session → managed olympus session (40 msgs copied, source untouched). Follow-up `t_450b7c68`: lineage fields lost in projection |
+| B1 state.db live sync | DONE | `8edd335`,`dbb90bc` | live sync now surfaces post-boot sessions (reconcile emits SessionCreated for unknown ids); syncConnected wired; live-proven ~3s |
+| B2 delta correctness under load | TODO | | WIP lost to host restart (uncommitted worktree); re-dispatching `t_42f9750a` |
+| C1 card model | DONE | `c6752a8` | card model + events + /api/cards CRUD |
+| C2 board UI | DONE | `09da64c` | U1 Board wired to live /api/cards |
+| D1 scheduler core | TODO | | WIP lost to host restart (uncommitted worktree); re-dispatching `t_f9935ddc` |
+| D2 AgentRuntime 2nd impl | TODO | | depends D1 |
 | E filesystem + jj | TODO | | |
 | F sandboxing | TODO | | |
 | G observability admin | TODO | | |
