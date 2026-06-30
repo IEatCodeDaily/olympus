@@ -285,6 +285,14 @@ fn now_epoch() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Extract the timestamp from a MessageAppended event (for DTO building).
+fn event_timestamp(event: &crate::event::Event) -> f64 {
+    match event {
+        crate::event::Event::MessageAppended { timestamp, .. } => *timestamp,
+        _ => now_epoch(),
+    }
+}
+
 async fn get_messages(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -773,8 +781,27 @@ async fn post_message(
         .append_user_message(&id, &hermes_id, next_id, &body.text)
     {
         Ok(event) => {
-            let mut views = state.views.write().await;
-            views.apply(&event);
+            {
+                let mut views = state.views.write().await;
+                views.apply(&event);
+            }
+            // Broadcast so the user bubble appears immediately (no refetch).
+            let dto = crate::server::dto::MessageDto {
+                message_id: next_id,
+                session_id: id.clone(),
+                role: "user".into(),
+                content: Some(body.text.clone()),
+                tool_name: None,
+                tool_calls: None,
+                reasoning: None,
+                timestamp: event_timestamp(&event),
+                token_count: None,
+                finish_reason: None,
+            };
+            let _ = state.deltas.send(ServerFrame::MessageAppended {
+                session_id: id.clone(),
+                message: dto,
+            });
         }
         Err(e) => tracing::warn!(error = %e, "failed to append user message"),
     }
@@ -833,7 +860,11 @@ async fn post_message(
                         Some(serde_json::Value::Array(tool_calls_acc.clone()).to_string())
                     };
                     // Persist the final assistant message AND apply it to the
-                    // views so a subsequent GET /messages reflects it.
+                    // views so a subsequent GET /messages reflects it. Also
+                    // broadcast a message.appended frame so the streaming UI
+                    // replaces the in-flight bubble with the final message (the
+                    // streamingText is cleared on message.done, but the final
+                    // message only enters the list via this append frame).
                     if let Ok(event) = bridge.append_assistant_message(
                         &session_id,
                         &hermes_id_clone,
@@ -842,8 +873,28 @@ async fn post_message(
                         &tool_calls_json,
                         finish_reason.as_deref(),
                     ) {
-                        let mut v = views.write().await;
-                        v.apply(&event);
+                        {
+                            let mut v = views.write().await;
+                            v.apply(&event);
+                        }
+                        let dto = crate::server::dto::MessageDto {
+                            message_id: assistant_msg_id,
+                            session_id: session_id.clone(),
+                            role: "assistant".into(),
+                            content: Some(assistant_text.clone()),
+                            tool_name: None,
+                            tool_calls: tool_calls_json
+                                .as_deref()
+                                .and_then(crate::server::dto::parse_tool_calls),
+                            reasoning: None,
+                            timestamp: event_timestamp(&event),
+                            token_count: None,
+                            finish_reason: finish_reason.clone(),
+                        };
+                        let _ = deltas.send(ServerFrame::MessageAppended {
+                            session_id: session_id.clone(),
+                            message: dto,
+                        });
                     }
                     break;
                 }

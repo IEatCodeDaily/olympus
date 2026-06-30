@@ -82,6 +82,14 @@ export function useChat(sessionId: string | null): UseChatResult {
           if (prev.some((m) => m.messageId === frame.message.messageId)) return prev;
           return [...prev, frame.message];
         });
+        // The final message has landed; stop streaming it (clears the in-flight
+        // bubble so only the persisted message shows).
+        setStreamingText((prev) => {
+          if (!(frame.message.messageId in prev)) return prev;
+          const next = { ...prev };
+          delete next[frame.message.messageId];
+          return next;
+        });
       } else if (frame.kind === "session.updated" && frame.sessionId === sessionId) {
         fetchMessages(sessionId, { limit: 50 })
           .then((res) => {
