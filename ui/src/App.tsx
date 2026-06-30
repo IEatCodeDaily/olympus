@@ -26,6 +26,42 @@ interface NavDef {
   icon: JSX.Element;
 }
 
+const VIEW_NAMES: ViewName[] = [
+  "sessions",
+  "search",
+  "board",
+  "nodes",
+  "workflows",
+  "usage",
+  "settings",
+];
+
+/// Parse the current URL path into a (view, sessionId) pair. The address bar is
+/// the source of truth for what's open, so a session is shareable/bookmarkable:
+///   /                       → sessions list
+///   /sessions               → sessions list
+///   /sessions/<id>          → that session open in the chat pane
+///   /<view>                 → one of the other nav views
+function parseLocation(path: string): { view: ViewName; sessionId: string | null } {
+  const parts = path.replace(/^\/+|\/+$/g, "").split("/");
+  const head = parts[0] || "sessions";
+  if (head === "sessions") {
+    return { view: "sessions", sessionId: parts[1] ? decodeURIComponent(parts[1]) : null };
+  }
+  if ((VIEW_NAMES as string[]).includes(head)) {
+    return { view: head as ViewName, sessionId: null };
+  }
+  return { view: "sessions", sessionId: null };
+}
+
+/// Build the URL path for a (view, sessionId) pair — inverse of parseLocation.
+function pathFor(view: ViewName, sessionId: string | null): string {
+  if (view === "sessions") {
+    return sessionId ? `/sessions/${encodeURIComponent(sessionId)}` : "/sessions";
+  }
+  return `/${view}`;
+}
+
 const ICON = (d: string, extra?: JSX.Element) => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d={d} />
@@ -44,8 +80,9 @@ const NAV: NavDef[] = [
 ];
 
 export default function App() {
-  const [view, setView] = useState<ViewName>("sessions");
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const initial = parseLocation(window.location.pathname);
+  const [view, setView] = useState<ViewName>(initial.view);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initial.sessionId);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [syncConnected, setSyncConnected] = useState(true);
   const [theme, setTheme] = useTheme();
@@ -58,6 +95,26 @@ export default function App() {
       if (frame.kind === "hello") setSyncConnected(true);
     });
   }, []);
+
+  // Keep the address bar in sync with the active view/session (shareable URLs),
+  // and react to browser back/forward via popstate.
+  useEffect(() => {
+    const onPop = () => {
+      const loc = parseLocation(window.location.pathname);
+      setView(loc.view);
+      setSelectedSessionId(loc.sessionId);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // Push a history entry whenever the view/session changes and the URL is stale.
+  useEffect(() => {
+    const target = pathFor(view, selectedSessionId);
+    if (window.location.pathname !== target) {
+      window.history.pushState(null, "", target);
+    }
+  }, [view, selectedSessionId]);
 
   const openSession = (id: string) => {
     setView("sessions");
