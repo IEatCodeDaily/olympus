@@ -97,6 +97,8 @@ mod tests {
             message_count: 0,
             input_tokens: 0,
             output_tokens: 0,
+            agent: None,
+            node: None,
         }
     }
 
@@ -275,6 +277,9 @@ mod tests {
             model: None,
             archived: None,
             message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -295,6 +300,9 @@ mod tests {
             model: None,
             archived: Some(true),
             message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -312,6 +320,9 @@ mod tests {
             model: None,
             archived: None,
             message_count: Some(42),
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -329,6 +340,9 @@ mod tests {
             model: Some("claude-sonnet-4".into()),
             archived: None,
             message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -345,6 +359,9 @@ mod tests {
             model: None,
             archived: None,
             message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
         assert!(mgr.sessions.get("ghost").is_none());
         assert_eq!(mgr.sessions.list(&Filters::default()).len(), 0);
@@ -385,6 +402,9 @@ mod tests {
             model: None,
             archived: Some(true),
             message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
 
         let active = mgr.sessions.list(&Filters {
@@ -414,6 +434,9 @@ mod tests {
             model: None,
             archived: Some(true),
             message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
 
         let result = mgr.sessions.list(&Filters {

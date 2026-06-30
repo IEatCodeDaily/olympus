@@ -68,6 +68,103 @@ export const handlers = [
     return HttpResponse.json(sess);
   }),
 
+  // POST /api/sessions — optimistic create (no runtime spawned). Mirrors the
+  // backend: instant draft with source=olympus, managed=true, empty hermesId,
+  // optional agent/node binding from the body.
+  http.post("http://127.0.0.1:8787/api/sessions", async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as {
+      agent?: string;
+      node?: string;
+    };
+    const now = Date.now() / 1000;
+    const id = `oly-draft-${Math.floor(now * 1000)}`;
+    const draft = {
+      id,
+      hermesId: "",
+      orgId: "personal",
+      ownerId: "rpw",
+      contextId: null,
+      source: "olympus" as const,
+      model: null,
+      title: null,
+      startedAt: now,
+      lastActivity: now,
+      messageCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      archived: false,
+      forkedFrom: null,
+      forkPoint: null,
+      forkType: null,
+      managed: true,
+      agent: body.agent ?? null,
+      node: body.node ?? null,
+    };
+    SESSIONS.unshift(draft);
+    MESSAGES_BY_SESSION[id] = [];
+    return HttpResponse.json(draft, { status: 201 });
+  }),
+
+  // PATCH /api/sessions/:id — bind/rebind agent, node, model, title.
+  http.patch<{ id: string }>(
+    "http://127.0.0.1:8787/api/sessions/:id",
+    async ({ params, request }) => {
+      const sess = SESSIONS.find((s) => s.id === params.id);
+      if (!sess) return new HttpResponse(null, { status: 404 });
+      const patch = (await request.json().catch(() => ({}))) as {
+        agent?: string;
+        node?: string;
+        model?: string;
+        title?: string;
+      };
+      if (patch.agent !== undefined) sess.agent = patch.agent;
+      if (patch.node !== undefined) sess.node = patch.node;
+      if (patch.model !== undefined) sess.model = patch.model;
+      if (patch.title !== undefined) sess.title = patch.title;
+      return HttpResponse.json(sess);
+    }
+  ),
+
+  // POST /api/sessions/:id/messages — accept the prompt (202). Observed
+  // sessions are read-only (409); managed sessions lazily "spawn" and echo a
+  // reply over the next tick (mock).
+  http.post<{ id: string }>(
+    "http://127.0.0.1:8787/api/sessions/:id/messages",
+    async ({ params, request }) => {
+      const sess = SESSIONS.find((s) => s.id === params.id);
+      if (!sess) return new HttpResponse(null, { status: 404 });
+      if (!sess.managed) {
+        return HttpResponse.json(
+          {
+            error: "observed",
+            message:
+              "This session is observed (read-only). Fork it into an Olympus-managed session to continue.",
+          },
+          { status: 409 }
+        );
+      }
+      const body = (await request.json().catch(() => ({}))) as { text?: string };
+      const now = Date.now() / 1000;
+      const msgs = MESSAGES_BY_SESSION[params.id] ?? (MESSAGES_BY_SESSION[params.id] = []);
+      msgs.push({
+        messageId: msgs.length,
+        sessionId: params.id,
+        role: "user",
+        content: body.text ?? "",
+        toolName: null,
+        toolCalls: null,
+        reasoning: null,
+        timestamp: now,
+        tokenCount: null,
+        finishReason: null,
+      });
+      sess.messageCount = msgs.length;
+      sess.lastActivity = now;
+      if (!sess.hermesId) sess.hermesId = `mock-${params.id}`;
+      return HttpResponse.json({ accepted: true }, { status: 202 });
+    }
+  ),
+
   // POST /api/sessions/:id/fork
   http.post<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id/fork", ({ params }) => {
     const source = SESSIONS.find((session) => session.id === params.id);

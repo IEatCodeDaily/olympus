@@ -20,6 +20,13 @@ pub enum Event {
         message_count: u64,
         input_tokens: u64,
         output_tokens: u64,
+        /// Agent (Hermes profile) bound to this session, if any. Olympus-created
+        /// sessions can be created without one and have it assigned later.
+        #[serde(default)]
+        agent: Option<String>,
+        /// Node the session's runtime runs on ("local" for now).
+        #[serde(default)]
+        node: Option<String>,
     },
     /// A message was appended to a session.
     MessageAppended {
@@ -53,6 +60,13 @@ pub enum Event {
         model: Option<String>,
         archived: Option<bool>,
         message_count: Option<u64>,
+        /// Agent (Hermes profile) bound to this session. `None` = leave unchanged.
+        agent: Option<String>,
+        /// Node the session's runtime runs on ("local" for now). `None` = unchanged.
+        node: Option<String>,
+        /// Backfill the real Hermes session id once a lazily-spawned runtime
+        /// captures it from `session/new`. `None` = leave unchanged.
+        hermes_id: Option<String>,
     },
     // ---- Card lifecycle events (C1, ADR §6) ----
     /// A card was created on a board.
@@ -111,6 +125,8 @@ mod tests {
             message_count: 0,
             input_tokens: 10,
             output_tokens: 20,
+            agent: None,
+            node: None,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();
@@ -145,6 +161,9 @@ mod tests {
             model: None,
             archived: Some(true),
             message_count: Some(42),
+            agent: None,
+            node: None,
+            hermes_id: None,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

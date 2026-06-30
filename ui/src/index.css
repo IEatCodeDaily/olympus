@@ -868,6 +868,46 @@ html, body, #root {
   padding: 10px 16px 12px;
   flex-shrink: 0;
 }
+.composer-assign-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.composer-assign {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.composer-assign-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+.composer-assign-select,
+.composer-assign-input {
+  background: var(--bg);
+  border: 1px solid var(--border-bright);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 3px 8px;
+  min-width: 120px;
+}
+.composer-assign-select:focus,
+.composer-assign-input:focus { border-color: var(--accent); outline: none; }
+.composer-assign-select:disabled,
+.composer-assign-input:disabled { opacity: 0.55; cursor: not-allowed; }
+.composer-assign-locked {
+  font-size: 11px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  margin-left: auto;
+}
 .composer-input-row {
   display: flex;
   align-items: flex-end;

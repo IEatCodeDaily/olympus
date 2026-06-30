@@ -413,6 +413,8 @@ pub fn reconcile_session(
             message_count: meta.message_count,
             input_tokens: meta.input_tokens,
             output_tokens: meta.output_tokens,
+            agent: None,
+            node: None,
         });
     }
     let mut stale_db_ids: Vec<u64> = current_map
@@ -490,6 +492,9 @@ pub fn reconcile_session(
             model: meta.model,
             archived: Some(meta.archived),
             message_count: Some(meta.message_count),
+            agent: None,
+            node: None,
+            hermes_id: None,
         });
     }
 
@@ -607,6 +612,9 @@ fn apply_events(
                 model,
                 archived,
                 message_count,
+                agent,
+                node,
+                hermes_id,
             } => {
                 let mut changes = serde_json::Map::new();
                 if let Some(title) = title {
@@ -622,6 +630,18 @@ fn apply_events(
                     changes.insert(
                         "messageCount".into(),
                         serde_json::Value::Number((*message_count).into()),
+                    );
+                }
+                if let Some(agent) = agent {
+                    changes.insert("agent".into(), serde_json::Value::String(agent.clone()));
+                }
+                if let Some(node) = node {
+                    changes.insert("node".into(), serde_json::Value::String(node.clone()));
+                }
+                if let Some(hermes_id) = hermes_id {
+                    changes.insert(
+                        "hermesId".into(),
+                        serde_json::Value::String(hermes_id.clone()),
                     );
                 }
                 let _ = deltas.send(ServerFrame::SessionUpdated {
@@ -900,6 +920,8 @@ mod tests {
             message_count: 2,
             input_tokens: 0,
             output_tokens: 0,
+            agent: None,
+            node: None,
         });
         views.apply(&Event::MessageAppended {
             session_id: "sess-1".into(),

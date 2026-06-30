@@ -91,5 +91,7 @@ fn uuid_short() -> String {
 /// A factory function (for `BridgeManager::with_factory`) that produces mock
 /// runtimes.
 pub fn mock_factory() -> super::bridge_mgr::RuntimeFactory {
-    Arc::new(|| Arc::new(MockAgentRuntime::new()) as Arc<dyn AgentRuntime>)
+    Arc::new(|_spec: &super::bridge_mgr::RuntimeSpec| {
+        Arc::new(MockAgentRuntime::new()) as Arc<dyn AgentRuntime>
+    })
 }

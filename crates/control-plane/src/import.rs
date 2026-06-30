@@ -47,6 +47,8 @@ pub fn import_sessions(state_db: &Path, log: &Log) -> Result<ImportStats> {
             message_count,
             input_tokens,
             output_tokens,
+            agent: None,
+            node: None,
         });
         session_count += 1;
         if batch.len() >= MESSAGE_BATCH_SIZE as usize {
@@ -235,6 +237,8 @@ mod tests {
                     message_count: 1,
                     input_tokens: 3,
                     output_tokens: 5,
+                    agent: None,
+                    node: None,
                 },
                 &Event::SessionCreated {
                     session_id: "sess-b".into(),
@@ -246,6 +250,8 @@ mod tests {
                     message_count: 2,
                     input_tokens: 11,
                     output_tokens: 13,
+                    agent: None,
+                    node: None,
                 },
             ]
         );

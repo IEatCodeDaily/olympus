@@ -291,6 +291,8 @@ export const SESSIONS: Session[] = Array.from({ length: 32 }, (_, i) => {
     forkPoint: i === 7 ? 12 : null,
     forkType: i === 7 ? "sub" : null,
     managed: source === "acp" || (i % 8 === 0 && i < 16),
+    agent: source === "acp" ? "coding-agent" : null,
+    node: source === "acp" ? "local" : null,
   };
 
   // Store messages keyed by session

@@ -19,15 +19,29 @@ use crate::bridge::AgentRuntime;
 use crate::event::Event;
 use crate::log::Log;
 
+/// What an agent runtime needs to spawn: which agent (Hermes profile) drives it
+/// and on which node. The factory turns this into a concrete runtime.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeSpec {
+    /// Hermes profile to run as (`None` → the server's default profile).
+    pub agent: Option<String>,
+    /// Node to run on ("local" for now; multi-node is post-MVP).
+    pub node: Option<String>,
+}
+
 /// A type-erased runtime factory. Production uses HermesAgentRuntime; tests
-/// inject a mock.
-pub type RuntimeFactory = Arc<dyn Fn() -> Arc<dyn AgentRuntime> + Send + Sync>;
+/// inject a mock. The spec carries the agent/node binding so the factory can
+/// route to the right Hermes profile.
+pub type RuntimeFactory = Arc<dyn Fn(&RuntimeSpec) -> Arc<dyn AgentRuntime> + Send + Sync>;
 
 /// The result of creating a new managed session: the Olympus session id and the
 /// Hermes session id captured from the ACP `session/new` response.
 pub struct NewSession {
     pub session_id: String,
     pub hermes_id: String,
+    /// Creation timestamp (epoch seconds) — lets the caller build the view row /
+    /// DTO without re-reading the whole log.
+    pub started_at: f64,
 }
 
 /// The result of forking an observed session into a managed one.
@@ -56,33 +70,23 @@ impl BridgeManager {
         }
     }
 
-    /// Create a new managed session: spawn a runtime, start it (ACP handshake +
-    /// session/new), append a SessionCreated event to the log, and register the
-    /// runtime for later prompt calls.
+    /// Create a new managed session **optimistically** — no agent runtime is
+    /// spawned. This returns instantly: it allocates an Olympus session id,
+    /// appends a `SessionCreated` event (source=olympus, managed) with the
+    /// chosen agent/node, and returns. The expensive ACP handshake is deferred
+    /// to the first [`Self::ensure_runtime`] call (i.e. the first send).
     ///
-    /// Returns the session ids so the caller can build the DTO.
-    pub async fn create_session(&self) -> Result<NewSession> {
-        let runtime = (self.factory)();
-        runtime
-            .start(None)
-            .await
-            .context("starting agent runtime")?;
-
-        // The runtime has captured the Hermes session id from session/new.
-        // We need to retrieve it. HermesAgentRuntime stores it internally;
-        // for the trait we add a method to expose it.
-        let hermes_id = runtime
-            .hermes_session_id()
-            .await
-            .unwrap_or_else(|| format!("sess-{}", chrono_millis()));
-
-        let session_id = format!("oly-{}", &hermes_id[..hermes_id.len().min(8)]);
-
-        // Append SessionCreated to the durable log.
+    /// `hermes_id` is empty until the runtime actually starts and captures it;
+    /// it is backfilled via a `SessionUpdated{hermes_id}` event on first send.
+    pub fn create_draft(&self, spec: &RuntimeSpec) -> Result<NewSession> {
         let now = chrono_epoch();
+        // A client-stable id derived from creation time; the real Hermes id is
+        // backfilled lazily so the UI never blocks on the handshake.
+        let session_id = format!("oly-draft-{}", chrono_millis());
+
         let event = Event::SessionCreated {
             session_id: session_id.clone(),
-            hermes_id: hermes_id.clone(),
+            hermes_id: String::new(),
             source: "olympus".into(),
             model: None,
             title: None,
@@ -90,21 +94,59 @@ impl BridgeManager {
             message_count: 0,
             input_tokens: 0,
             output_tokens: 0,
+            agent: spec.agent.clone(),
+            node: spec.node.clone(),
         };
         self.log
             .append(&event)
-            .context("appending SessionCreated")?;
-
-        // Register the runtime.
-        self.runtimes
-            .write()
-            .await
-            .insert(session_id.clone(), runtime);
+            .context("appending SessionCreated (draft)")?;
 
         Ok(NewSession {
             session_id,
-            hermes_id,
+            hermes_id: String::new(),
+            started_at: now,
         })
+    }
+
+    /// Ensure a runtime exists for a managed session, spawning it lazily on the
+    /// first send. Returns the runtime plus the (possibly newly captured)
+    /// Hermes session id.
+    ///
+    /// - If a runtime is already registered, returns it (no spawn).
+    /// - Otherwise spawns one via the factory and performs the ACP handshake.
+    ///   When `resume_hermes_id` is `Some` and non-empty, it resumes that Hermes
+    ///   session (survives server restarts); otherwise it creates a fresh one.
+    ///
+    /// On a fresh start the captured Hermes id is returned in `NewSession` so the
+    /// caller can backfill it onto the session row.
+    pub async fn ensure_runtime(
+        &self,
+        session_id: &str,
+        spec: &RuntimeSpec,
+        resume_hermes_id: Option<&str>,
+    ) -> Result<(Arc<dyn AgentRuntime>, String)> {
+        if let Some(rt) = self.runtimes.read().await.get(session_id).cloned() {
+            let hid = rt.hermes_session_id().await.unwrap_or_default();
+            return Ok((rt, hid));
+        }
+
+        let runtime = (self.factory)(spec);
+        let resume = resume_hermes_id.filter(|s| !s.is_empty());
+        runtime
+            .start(resume)
+            .await
+            .context("starting agent runtime (lazy)")?;
+        let hermes_id = runtime
+            .hermes_session_id()
+            .await
+            .unwrap_or_else(|| format!("sess-{}", chrono_millis()));
+
+        self.runtimes
+            .write()
+            .await
+            .insert(session_id.to_string(), runtime.clone());
+
+        Ok((runtime, hermes_id))
     }
 
     /// Fork an existing Hermes session into a new managed Olympus session,
@@ -116,7 +158,7 @@ impl BridgeManager {
         title: Option<String>,
         message_count: u64,
     ) -> Result<ForkedSession> {
-        let runtime = (self.factory)();
+        let runtime = (self.factory)(&RuntimeSpec::default());
         runtime
             .fork_session(source_hermes_id)
             .await
@@ -139,6 +181,8 @@ impl BridgeManager {
             message_count,
             input_tokens: 0,
             output_tokens: 0,
+            agent: None,
+            node: None,
         })?;
 
         self.runtimes
@@ -159,13 +203,37 @@ impl BridgeManager {
         self.runtimes.read().await.get(session_id).cloned()
     }
 
-    /// Append a user message event to the log for a session.
-    pub fn append_user_message(&self, session_id: &str, hermes_id: &str, text: &str) -> Result<()> {
+    /// Append a SessionUpdated event that backfills the real Hermes id captured
+    /// when a lazily-spawned runtime started.
+    pub fn backfill_hermes_id(&self, session_id: &str, hermes_id: &str) -> Result<()> {
+        self.log.append(&Event::SessionUpdated {
+            session_id: session_id.to_string(),
+            title: None,
+            model: None,
+            archived: None,
+            message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: Some(hermes_id.to_string()),
+        })?;
+        Ok(())
+    }
+
+    /// Append a user message event to the log for a session, returning the event
+    /// so the caller can also apply it to the in-memory views (the log is the
+    /// source of truth, but the views serve reads and must stay current).
+    pub fn append_user_message(
+        &self,
+        session_id: &str,
+        hermes_id: &str,
+        message_id: u64,
+        text: &str,
+    ) -> Result<Event> {
         let now = chrono_epoch();
-        self.log.append(&Event::MessageAppended {
+        let event = Event::MessageAppended {
             session_id: session_id.to_string(),
             hermes_session_id: hermes_id.to_string(),
-            message_id: now as u64,
+            message_id,
             role: "user".into(),
             content: Some(text.to_string()),
             tool_name: None,
@@ -174,11 +242,13 @@ impl BridgeManager {
             timestamp: now,
             token_count: None,
             finish_reason: None,
-        })?;
-        Ok(())
+        };
+        self.log.append(&event)?;
+        Ok(event)
     }
 
-    /// Append the final assistant message to the log.
+    /// Append the final assistant message to the log, returning the event so the
+    /// caller can apply it to the views.
     pub fn append_assistant_message(
         &self,
         session_id: &str,
@@ -186,9 +256,9 @@ impl BridgeManager {
         message_id: u64,
         text: &str,
         finish_reason: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Event> {
         let now = chrono_epoch();
-        self.log.append(&Event::MessageAppended {
+        let event = Event::MessageAppended {
             session_id: session_id.to_string(),
             hermes_session_id: hermes_id.to_string(),
             message_id,
@@ -200,8 +270,9 @@ impl BridgeManager {
             timestamp: now,
             token_count: None,
             finish_reason: finish_reason.map(|s| s.to_string()),
-        })?;
-        Ok(())
+        };
+        self.log.append(&event)?;
+        Ok(event)
     }
 }
 

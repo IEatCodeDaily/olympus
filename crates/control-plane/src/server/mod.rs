@@ -83,7 +83,7 @@ pub struct AppState {
 pub fn build_router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
-        .route("/api/sessions/{id}", get(get_session))
+        .route("/api/sessions/{id}", get(get_session).patch(patch_session))
         .route("/api/sessions/{id}/fork", axum::routing::post(fork_session))
         .route(
             "/api/sessions/{id}/messages",
@@ -325,6 +325,32 @@ struct PostMessageBody {
     model: Option<String>,
 }
 
+/// Body for `POST /api/sessions` — optional agent/node binding at creation. All
+/// fields optional so a bare `{}` creates an unbound draft.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CreateSessionBody {
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    node: Option<String>,
+}
+
+/// Body for `PATCH /api/sessions/:id` — bind/rebind agent, node, model, or title
+/// before the first send. All fields optional; only present fields are changed.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PatchSessionBody {
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct ForkSessionBody {
@@ -332,31 +358,46 @@ struct ForkSessionBody {
     fork_type: Option<String>,
 }
 
-/// POST /api/sessions — create a new Olympus-managed chat session.
+/// POST /api/sessions — create a new Olympus-managed chat session **optimistically**.
 ///
-/// Spawns a bridge runtime, performs the ACP handshake (session/new), appends a
-/// SessionCreated event to the log, broadcasts session.added, and returns the
-/// new Session DTO with 201.
-async fn create_session(State(state): State<AppState>) -> Response {
-    match state.bridge.create_session().await {
+/// Returns instantly with the new Session DTO (201). No agent runtime is
+/// spawned — the expensive ACP handshake is deferred to the first send
+/// (`ensure_runtime`). The session can be assigned an agent/node at creation
+/// (via the body) or later via PATCH, any time before the first send.
+async fn create_session(
+    State(state): State<AppState>,
+    body: Option<Json<CreateSessionBody>>,
+) -> Response {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let spec = crate::server::bridge_mgr::RuntimeSpec {
+        agent: body.agent.clone(),
+        node: body.node.clone(),
+    };
+    match state.bridge.create_draft(&spec) {
         Ok(ns) => {
-            // Rebuild the views to pick up the new session from the log.
+            // Apply the one SessionCreated event directly into the view — do NOT
+            // re-scan the whole log (that's O(all events) and made create slow).
+            let created = crate::event::Event::SessionCreated {
+                session_id: ns.session_id.clone(),
+                hermes_id: ns.hermes_id.clone(),
+                source: "olympus".into(),
+                model: None,
+                title: None,
+                started_at: ns.started_at,
+                message_count: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                agent: body.agent.clone(),
+                node: body.node.clone(),
+            };
             let dto = {
                 let mut views = state.views.write().await;
-                if let Ok(events) = state.log.read_all() {
-                    for (_seq, event) in events.iter().rev() {
-                        if let crate::event::Event::SessionCreated { session_id, .. } = event {
-                            if session_id == &ns.session_id {
-                                views.apply(event);
-                                break;
-                            }
-                        }
-                    }
-                }
-                // Build the DTO from the view row while we hold the lock.
-                match views.sessions.get(&ns.session_id) {
-                    Some(r) => SessionDto::from_row(r),
-                    None => SessionDto {
+                views.apply(&created);
+                views
+                    .sessions
+                    .get(&ns.session_id)
+                    .map(SessionDto::from_row)
+                    .unwrap_or_else(|| SessionDto {
                         id: ns.session_id.clone(),
                         hermes_id: ns.hermes_id.clone(),
                         org_id: "personal".into(),
@@ -365,8 +406,8 @@ async fn create_session(State(state): State<AppState>) -> Response {
                         source: "olympus".into(),
                         model: None,
                         title: None,
-                        started_at: 0.0,
-                        last_activity: 0.0,
+                        started_at: ns.started_at,
+                        last_activity: ns.started_at,
                         message_count: 0,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -375,11 +416,11 @@ async fn create_session(State(state): State<AppState>) -> Response {
                         fork_point: None,
                         fork_type: None,
                         managed: true,
-                    },
-                }
+                        agent: body.agent.clone(),
+                        node: body.node.clone(),
+                    })
             };
 
-            // Broadcast session.added to WS subscribers.
             let _ = state.deltas.send(ServerFrame::SessionAdded {
                 session: dto.clone(),
             });
@@ -391,16 +432,95 @@ async fn create_session(State(state): State<AppState>) -> Response {
                 .into_response()
         }
         Err(e) => {
-            tracing::error!(error = %e, "bridge create_session failed");
+            tracing::error!(error = %e, "bridge create_draft failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "bridge_error",
-                    "message": format!("Failed to create agent session: {e}"),
+                    "message": format!("Failed to create session: {e}"),
                 })),
             )
                 .into_response()
         }
+    }
+}
+
+/// PATCH /api/sessions/:id — bind/rebind agent, node, model, or title.
+///
+/// Appends a `SessionUpdated` event and broadcasts the change. Intended to be
+/// called before the first send (the typical optimistic-create flow: create
+/// instantly, pick agent/model, then send). Rebinding the agent after a runtime
+/// has spawned takes effect on the next runtime (not yet hot-swapped).
+async fn patch_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<PatchSessionBody>>,
+) -> Response {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+
+    // The session must exist and be managed (you can't reassign observed sessions).
+    {
+        let views = state.views.read().await;
+        let Some(row) = views.sessions.get(&id) else {
+            return (StatusCode::NOT_FOUND, "session not found").into_response();
+        };
+        if !(row.source == "olympus" || row.source == "acp") {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "observed",
+                    "message": "Observed sessions can't be reassigned. Fork it first.",
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let event = crate::event::Event::SessionUpdated {
+        session_id: id.clone(),
+        title: body.title.clone(),
+        model: body.model.clone(),
+        archived: None,
+        message_count: None,
+        agent: body.agent.clone(),
+        node: body.node.clone(),
+        hermes_id: None,
+    };
+    if let Err(e) = state.log.append(&event) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+        )
+            .into_response();
+    }
+
+    let dto = {
+        let mut views = state.views.write().await;
+        views.apply(&event);
+        views.sessions.get(&id).map(SessionDto::from_row)
+    };
+
+    let mut changes = serde_json::Map::new();
+    if let Some(a) = &body.agent {
+        changes.insert("agent".into(), serde_json::Value::String(a.clone()));
+    }
+    if let Some(n) = &body.node {
+        changes.insert("node".into(), serde_json::Value::String(n.clone()));
+    }
+    if let Some(m) = &body.model {
+        changes.insert("model".into(), serde_json::Value::String(m.clone()));
+    }
+    if let Some(t) = &body.title {
+        changes.insert("title".into(), serde_json::Value::String(t.clone()));
+    }
+    let _ = state.deltas.send(ServerFrame::SessionUpdated {
+        session_id: id.clone(),
+        changes: serde_json::Value::Object(changes),
+    });
+
+    match dto {
+        Some(dto) => Json(serde_json::to_value(&dto).unwrap()).into_response(),
+        None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
 }
 
@@ -504,6 +624,8 @@ async fn fork_session(
                 fork_point: None,
                 fork_type: None,
                 managed: true,
+                agent: None,
+                node: None,
             },
         }
     };
@@ -530,13 +652,19 @@ async fn post_message(
     Path(id): Path<String>,
     Json(body): Json<PostMessageBody>,
 ) -> Response {
-    let views = state.views.read().await;
-    let Some(session) = views.sessions.get(&id) else {
-        return (StatusCode::NOT_FOUND, "session not found").into_response();
+    let (managed, hermes_id, agent, node) = {
+        let views = state.views.read().await;
+        let Some(session) = views.sessions.get(&id) else {
+            return (StatusCode::NOT_FOUND, "session not found").into_response();
+        };
+        let managed = session.source == "olympus" || session.source == "acp";
+        (
+            managed,
+            session.hermes_id.clone(),
+            session.agent.clone(),
+            session.node.clone(),
+        )
     };
-    let managed = session.source == "olympus" || session.source == "acp";
-    let hermes_id = session.hermes_id.clone();
-    drop(views);
 
     if !managed {
         return (
@@ -549,24 +677,69 @@ async fn post_message(
             .into_response();
     }
 
-    // Look up the runtime for this session.
-    let Some(runtime) = state.bridge.get_runtime(&id).await else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": "bridge_unavailable",
-                "message": "No active agent runtime for this session.",
-            })),
-        )
-            .into_response();
+    // Lazily ensure a runtime exists: spawn (or resume) the agent on the first
+    // send. This is where the ACP handshake cost lands — NOT on session create.
+    // A draft (empty hermes_id) creates a fresh Hermes session; a session with a
+    // known hermes_id (e.g. after a server restart) resumes it.
+    let spec = crate::server::bridge_mgr::RuntimeSpec { agent, node };
+    let resume = if hermes_id.is_empty() {
+        None
+    } else {
+        Some(hermes_id.as_str())
+    };
+    let (runtime, captured_hermes_id) = match state.bridge.ensure_runtime(&id, &spec, resume).await
+    {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::error!(error = %e, session = %id, "ensure_runtime failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "bridge_error",
+                    "message": format!("Failed to start agent runtime: {e}"),
+                })),
+            )
+                .into_response();
+        }
     };
 
-    // Record the user message in the log.
-    if let Err(e) = state
+    // Backfill the real Hermes id onto the session row the first time we capture
+    // it (draft → live), so restarts can resume and the UI shows the binding.
+    let hermes_id = if hermes_id.is_empty() && !captured_hermes_id.is_empty() {
+        let _ = state.bridge.backfill_hermes_id(&id, &captured_hermes_id);
+        {
+            let mut views = state.views.write().await;
+            views.apply(&crate::event::Event::SessionUpdated {
+                session_id: id.clone(),
+                title: None,
+                model: None,
+                archived: None,
+                message_count: None,
+                agent: None,
+                node: None,
+                hermes_id: Some(captured_hermes_id.clone()),
+            });
+        }
+        captured_hermes_id
+    } else {
+        hermes_id
+    };
+
+    // Record the user message in the log AND apply it to the views so reads
+    // reflect it immediately (the streaming reply is applied the same way).
+    let next_id = {
+        let views = state.views.read().await;
+        views.messages.recent(&id, usize::MAX).len() as u64
+    };
+    match state
         .bridge
-        .append_user_message(&id, &hermes_id, &body.text)
+        .append_user_message(&id, &hermes_id, next_id, &body.text)
     {
-        tracing::warn!(error = %e, "failed to append user message");
+        Ok(event) => {
+            let mut views = state.views.write().await;
+            views.apply(&event);
+        }
+        Err(e) => tracing::warn!(error = %e, "failed to append user message"),
     }
 
     // Send the prompt.
@@ -586,15 +759,14 @@ async fn post_message(
     let session_id = id.clone();
     let deltas = state.deltas.clone();
     let bridge = state.bridge.clone();
+    let views = state.views.clone();
     let hermes_id_clone = hermes_id.clone();
+    let assistant_seed_id = next_id + 1;
     tokio::spawn(async move {
         use futures::stream::StreamExt;
         let mut stream = runtime.events();
         let mut assistant_text = String::new();
-        let mut assistant_msg_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let mut assistant_msg_id = assistant_seed_id;
 
         while let Some(event) = stream.next().await {
             match event {
@@ -612,14 +784,18 @@ async fn post_message(
                         message_id: assistant_msg_id,
                         finish_reason: finish_reason.clone(),
                     });
-                    // Persist the final assistant message.
-                    let _ = bridge.append_assistant_message(
+                    // Persist the final assistant message AND apply it to the
+                    // views so a subsequent GET /messages reflects it.
+                    if let Ok(event) = bridge.append_assistant_message(
                         &session_id,
                         &hermes_id_clone,
                         assistant_msg_id,
                         &assistant_text,
                         finish_reason.as_deref(),
-                    );
+                    ) {
+                        let mut v = views.write().await;
+                        v.apply(&event);
+                    }
                     break;
                 }
                 AgentEvent::Error(e) => {
@@ -864,6 +1040,8 @@ mod tests {
             message_count: 1,
             input_tokens: 2,
             output_tokens: 3,
+            agent: None,
+            node: None,
         })
         .unwrap();
         log.append(&Event::MessageAppended {
@@ -898,9 +1076,9 @@ mod tests {
             deltas: tx,
             snapshot_sessions: 1,
             snapshot_messages: 1,
-            log: log_arc,
+            log: log_arc.clone(),
             bridge: Arc::new(BridgeManager::with_factory(
-                Arc::new(Log::open(&dir.path().join("bridge-log.redb")).unwrap()),
+                log_arc.clone(),
                 test_support::mock_factory(),
             )),
             sync_connected: Arc::new(AtomicBool::new(true)),
@@ -964,6 +1142,8 @@ mod tests {
             message_count: msgs,
             input_tokens: 0,
             output_tokens: 0,
+            agent: None,
+            node: None,
         };
         // newest started has FEWEST messages, so startedAt-desc != messageCount-desc.
         log.append(&mk("old_big", 100.0, 500)).unwrap();
@@ -1254,8 +1434,9 @@ mod tests {
     #[tokio::test]
     async fn post_sessions_creates_managed_olympus_session() {
         // POST /api/sessions with no body → creates a new Olympus-managed session
-        // via the bridge, returns 201 with a Session DTO where source="olympus"
-        // and managed=true.
+        // OPTIMISTICALLY (no runtime spawned), returns 201 with a Session DTO
+        // where source="olympus", managed=true, and an empty hermesId (the real
+        // id is backfilled lazily on the first send).
         let (mut state, _d) = test_state();
         state.bridge = Arc::new(BridgeManager::with_factory(
             Arc::new(Log::open(&_d.path().join("bridge-log-a.redb")).unwrap()),
@@ -1281,8 +1462,110 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["source"], "olympus");
         assert_eq!(v["managed"], true);
-        assert!(v["hermesId"].is_string());
-        assert!(v["id"].is_string());
+        // Optimistic: id is allocated immediately; hermesId is empty until the
+        // first send spawns the runtime.
+        assert!(v["id"].as_str().unwrap().starts_with("oly-draft-"));
+        assert_eq!(v["hermesId"], "");
+    }
+
+    #[tokio::test]
+    async fn post_sessions_with_agent_binds_it_at_creation() {
+        // POST /api/sessions {agent, node} → the draft carries the binding.
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"agent":"coding-agent","node":"local"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["agent"], "coding-agent");
+        assert_eq!(v["node"], "local");
+    }
+
+    #[tokio::test]
+    async fn patch_session_assigns_agent_and_model() {
+        // PATCH /api/sessions/:id sets agent/model on an existing managed draft.
+        let (state, _d) = test_state();
+        // Create a draft first.
+        let ns = state
+            .bridge
+            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default())
+            .unwrap();
+        {
+            let mut views = state.views.write().await;
+            if let Ok(events) = state.log.read_all() {
+                for (_s, e) in events {
+                    views.apply(&e);
+                }
+            }
+            let _ = views.sessions.get(&ns.session_id); // ensure present
+        }
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/sessions/{}", ns.session_id))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"agent":"glm52","model":"glm-5.2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["agent"], "glm52");
+        assert_eq!(v["model"], "glm-5.2");
+    }
+
+    #[tokio::test]
+    async fn post_message_lazily_spawns_runtime_for_draft_session() {
+        // A draft (no runtime, empty hermesId) accepts a send: the handler
+        // lazily spawns the runtime via the factory and returns 202 — it does
+        // NOT 503 "bridge_unavailable" (the pre-fix regression).
+        let (state, _d) = test_state();
+        let ns = state
+            .bridge
+            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default())
+            .unwrap();
+        {
+            let mut views = state.views.write().await;
+            if let Ok(events) = state.log.read_all() {
+                for (_s, e) in events {
+                    views.apply(&e);
+                }
+            }
+        }
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/sessions/{}/messages", ns.session_id))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"text":"hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
     }
 
     // ---- card CRUD tests (C1) ----

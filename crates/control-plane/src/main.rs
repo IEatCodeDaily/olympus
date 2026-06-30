@@ -96,10 +96,19 @@ async fn main() -> Result<()> {
         olympus_control_plane::server::bridge_mgr::BridgeManager::with_factory(
             log_arc.clone(),
             std::sync::Arc::new(
-                || -> std::sync::Arc<dyn olympus_control_plane::bridge::AgentRuntime> {
-                    olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(
-                        olympus_control_plane::bridge::hermes::HermesRuntimeConfig::default(),
-                    )
+                |spec: &olympus_control_plane::server::bridge_mgr::RuntimeSpec|
+                 -> std::sync::Arc<dyn olympus_control_plane::bridge::AgentRuntime> {
+                    let mut config =
+                        olympus_control_plane::bridge::hermes::HermesRuntimeConfig::default();
+                    // Route the chosen agent (Hermes profile) to the child via the
+                    // standard `-p <profile>` flag; absent → server default profile.
+                    if let Some(agent) = &spec.agent {
+                        if !agent.is_empty() {
+                            config.command =
+                                vec!["hermes".into(), "-p".into(), agent.clone(), "acp".into()];
+                        }
+                    }
+                    olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(config)
                 },
             ),
         ),

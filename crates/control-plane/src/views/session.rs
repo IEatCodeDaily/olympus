@@ -52,6 +52,11 @@ pub struct SessionRow {
     /// Most recent activity timestamp known for this session. Seeded from
     /// `started_at` on creation, advanced on each `MessageAppended`.
     pub last_activity: f64,
+    /// Agent (Hermes profile) bound to this session, if assigned. Olympus
+    /// sessions start unbound and have this set before the first send.
+    pub agent: Option<String>,
+    /// Node the session's runtime runs on ("local" for now).
+    pub node: Option<String>,
 }
 
 /// In-memory projection of sessions from the event log (ADR §2.4).
@@ -92,6 +97,8 @@ impl SessionView {
                 message_count,
                 input_tokens,
                 output_tokens,
+                agent,
+                node,
             } => {
                 // TODO(tenancy): carry orgId/ownerId/contextId from the event
                 // once the Event enum has them. Project what exists for now.
@@ -109,6 +116,8 @@ impl SessionView {
                         output_tokens: *output_tokens,
                         archived: false,
                         last_activity: *started_at,
+                        agent: agent.clone(),
+                        node: node.clone(),
                     },
                 );
             }
@@ -118,6 +127,9 @@ impl SessionView {
                 model,
                 archived,
                 message_count,
+                agent,
+                node,
+                hermes_id,
             } => {
                 // Patch in place; ignore unknown sessions (no phantom rows).
                 if let Some(row) = self.sessions.get_mut(session_id) {
@@ -132,6 +144,15 @@ impl SessionView {
                     }
                     if let Some(c) = message_count {
                         row.message_count = *c;
+                    }
+                    if let Some(ag) = agent {
+                        row.agent = Some(ag.clone());
+                    }
+                    if let Some(n) = node {
+                        row.node = Some(n.clone());
+                    }
+                    if let Some(h) = hermes_id {
+                        row.hermes_id = h.clone();
                     }
                 }
             }
@@ -204,6 +225,8 @@ mod tests {
             message_count: 0,
             input_tokens: 0,
             output_tokens: 0,
+            agent: None,
+            node: None,
         }
     }
 

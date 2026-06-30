@@ -44,6 +44,10 @@ enum StoredVariant {
         message_count: u64,
         input_tokens: u64,
         output_tokens: u64,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        node: Option<String>,
     },
     MessageAppended {
         session_id: String,
@@ -72,6 +76,12 @@ enum StoredVariant {
         model: Option<String>,
         archived: Option<bool>,
         message_count: Option<u64>,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        node: Option<String>,
+        #[serde(default)]
+        hermes_id: Option<String>,
     },
     CardCreated {
         card_id: String,
@@ -124,6 +134,8 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             message_count,
             input_tokens,
             output_tokens,
+            agent,
+            node,
         } => StoredVariant::SessionCreated {
             session_id: session_id.clone(),
             hermes_id: hermes_id.clone(),
@@ -134,6 +146,8 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             message_count: *message_count,
             input_tokens: *input_tokens,
             output_tokens: *output_tokens,
+            agent: agent.clone(),
+            node: node.clone(),
         },
         Event::MessageAppended {
             session_id,
@@ -184,12 +198,18 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             model,
             archived,
             message_count,
+            agent,
+            node,
+            hermes_id,
         } => StoredVariant::SessionUpdated {
             session_id: session_id.clone(),
             title: title.clone(),
             model: model.clone(),
             archived: *archived,
             message_count: *message_count,
+            agent: agent.clone(),
+            node: node.clone(),
+            hermes_id: hermes_id.clone(),
         },
         Event::CardCreated {
             card_id,
@@ -274,6 +294,8 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             message_count,
             input_tokens,
             output_tokens,
+            agent,
+            node,
         } => Event::SessionCreated {
             session_id,
             hermes_id,
@@ -284,6 +306,8 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             message_count,
             input_tokens,
             output_tokens,
+            agent,
+            node,
         },
         StoredVariant::MessageAppended {
             session_id,
@@ -343,12 +367,18 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             model,
             archived,
             message_count,
+            agent,
+            node,
+            hermes_id,
         } => Event::SessionUpdated {
             session_id,
             title,
             model,
             archived,
             message_count,
+            agent,
+            node,
+            hermes_id,
         },
         StoredVariant::CardCreated {
             card_id,
@@ -563,6 +593,8 @@ mod tests {
             message_count: 0,
             input_tokens: 0,
             output_tokens: 0,
+            agent: None,
+            node: None,
         }
     }
 

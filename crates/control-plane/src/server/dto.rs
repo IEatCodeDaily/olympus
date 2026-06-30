@@ -33,6 +33,10 @@ pub struct SessionDto {
     pub fork_type: Option<String>,
     /// true = Olympus-driven (steerable); false = observed/read-only.
     pub managed: bool,
+    /// Agent (Hermes profile) bound to this session, if assigned.
+    pub agent: Option<String>,
+    /// Node the session's runtime runs on ("local" for now).
+    pub node: Option<String>,
 }
 
 impl SessionDto {
@@ -62,6 +66,8 @@ impl SessionDto {
             fork_point: None,
             fork_type: None,
             managed: row.source == "acp" || row.source == "olympus",
+            agent: row.agent.clone(),
+            node: row.node.clone(),
         }
     }
 }
@@ -182,6 +188,8 @@ mod tests {
             output_tokens: 7,
             archived: false,
             last_activity: 200.0,
+            agent: None,
+            node: None,
         }
     }
 

@@ -23,6 +23,8 @@ export interface Session {
   forkType: "sub" | "parallel" | null;
   // origin marker for forks: "forked from telegram", etc. (PRD Flow B)
   managed: boolean;           // true = Olympus-driven (steerable); false = observed/read-only
+  agent: string | null;       // Hermes profile bound to this session (assignable)
+  node: string | null;        // node the runtime runs on ("local" for now)
 }
 
 export type SessionSource =

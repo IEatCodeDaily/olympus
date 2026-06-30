@@ -136,16 +136,39 @@ export async function fetchCard(id: string): Promise<Card> {
 // ── Mutations ──────────────────────────────────────────
 
 /**
- * Create a new Olympus-managed chat session. Spawns a bridge runtime (hermes
- * acp), returns the new Session DTO with source="olympus", managed=true.
+ * Create a new Olympus-managed chat session OPTIMISTICALLY. Returns instantly
+ * with a draft Session (source="olympus", managed=true, empty hermesId) — no
+ * agent runtime is spawned until the first send. Optionally bind agent/node at
+ * creation; otherwise assign them later via updateSession() before sending.
  */
-export async function createSession(): Promise<Session> {
+export async function createSession(opts?: {
+  agent?: string;
+  node?: string;
+}): Promise<Session> {
   const res = await fetch(`${BASE}/api/sessions`, {
     method: "POST",
     headers: jsonHeaders(),
-    body: "{}",
+    body: JSON.stringify(opts ?? {}),
   });
   if (!res.ok) throw new Error(`create session failed (${res.status})`);
+  return res.json() as Promise<Session>;
+}
+
+/**
+ * Bind/rebind agent, node, model, or title on an existing managed session.
+ * Used in the optimistic-create flow: create instantly, then assign the
+ * agent/model before the first send. Returns the updated Session.
+ */
+export async function updateSession(
+  sessionId: string,
+  patch: { agent?: string; node?: string; model?: string; title?: string }
+): Promise<Session> {
+  const res = await fetch(`${BASE}/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: jsonHeaders(),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`update session failed (${res.status})`);
   return res.json() as Promise<Session>;
 }
 

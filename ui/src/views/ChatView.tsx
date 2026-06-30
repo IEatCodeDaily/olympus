@@ -6,7 +6,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useChat } from "../hooks/useChat";
 import { useSessions } from "../hooks/useSessions";
 import { formatTime, SOURCE_META, formatTokens } from "../lib/format";
-import { forkSession, sendMessage } from "../api";
+import { forkSession, sendMessage, updateSession } from "../api";
 import type { Message, Session, ToolCall } from "../types";
 
 interface Props {
@@ -100,7 +100,11 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
       <Composer
         sessionId={sessionId}
         managed={managed}
+        agent={session?.agent ?? null}
+        model={session?.model ?? null}
+        hermesId={session?.hermesId ?? ""}
         sourceLabel={sourceMeta?.label ?? session?.source ?? ""}
+        onAssigned={() => sessionMeta.refetch()}
         onForked={(forked) => {
           sessionMeta.refetch();
           onOpenSession(forked.id);
@@ -110,16 +114,35 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
   );
 }
 
+// Known agent profiles operators can assign (Hermes profiles). Kept small and
+// explicit for the MVP; a future /api/agents endpoint can populate this live.
+const AGENT_OPTIONS = [
+  { value: "", label: "Default agent" },
+  { value: "coding-agent", label: "coding-agent" },
+  { value: "glm52", label: "glm52" },
+  { value: "gpt55", label: "gpt55" },
+  { value: "tester", label: "tester" },
+  { value: "design-lead", label: "design-lead" },
+];
+
 // ── Composer ───────────────────────────────────────────
 function Composer({
   sessionId,
   managed,
+  agent,
+  model,
+  hermesId,
   sourceLabel,
+  onAssigned,
   onForked,
 }: {
   sessionId: string;
   managed: boolean;
+  agent: string | null;
+  model: string | null;
+  hermesId: string;
   sourceLabel: string;
+  onAssigned: () => void;
   onForked: (session: Session) => void;
 }) {
   const [text, setText] = useState("");
@@ -128,12 +151,29 @@ function Composer({
   const [err, setErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
+  // The runtime is live once a Hermes id has been captured (after first send).
+  // Before that the agent/model are still re-bindable.
+  const bound = hermesId !== "";
+
   const autosize = useCallback(() => {
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
   }, []);
+
+  const assign = useCallback(
+    async (patch: { agent?: string; model?: string }) => {
+      setErr(null);
+      try {
+        await updateSession(sessionId, patch);
+        onAssigned();
+      } catch (e) {
+        setErr(String(e));
+      }
+    },
+    [sessionId, onAssigned]
+  );
 
   const submit = useCallback(async () => {
     const body = text.trim();
@@ -144,12 +184,13 @@ function Composer({
       await sendMessage(sessionId, body);
       setText("");
       if (taRef.current) taRef.current.style.height = "auto";
+      onAssigned(); // refresh so the captured hermesId / "live" badge shows
     } catch (e) {
       setErr(String(e));
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionId]);
+  }, [text, sending, sessionId, onAssigned]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -191,6 +232,38 @@ function Composer({
   return (
     <div className="composer">
       {err && <div className="composer-error">{err}</div>}
+      <div className="composer-assign-row">
+        <label className="composer-assign">
+          <span className="composer-assign-label">Agent</span>
+          <select
+            className="composer-assign-select"
+            value={agent ?? ""}
+            disabled={bound}
+            title={bound ? "Agent is locked once the session is live" : "Pick the agent that drives this session"}
+            onChange={(e) => assign({ agent: e.target.value })}
+          >
+            {AGENT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="composer-assign">
+          <span className="composer-assign-label">Model</span>
+          <input
+            className="composer-assign-input"
+            type="text"
+            placeholder="default"
+            defaultValue={model ?? ""}
+            disabled={bound}
+            title={bound ? "Model is locked once the session is live" : "Optional model override (e.g. glm-5.2)"}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v && v !== (model ?? "")) assign({ model: v });
+            }}
+          />
+        </label>
+        {bound && <span className="composer-assign-locked">runtime live · binding locked</span>}
+      </div>
       <div className="composer-input-row">
         <textarea
           ref={taRef}
