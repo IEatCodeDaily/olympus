@@ -183,6 +183,24 @@ html, body, #root {
   outline-offset: 2px;
 }
 
+/* ── Reduced motion (a11y, §7/§9) ────────────────────────
+   Honor the OS "reduce motion" preference. The cockpit's motion is, by design,
+   purely confirmatory (hover/state transitions ≤150ms) or a live-state signal
+   (spin/pulse/shimmer). None of it carries information that text doesn't already
+   carry — the design system mandates "color is never the only signal", so every
+   RUNNING/streaming/loading state has an accompanying label. That makes it safe
+   to neutralize all animation here: transitions collapse to instant, looping
+   keyframes settle on their final (visible, original-position) frame. This is
+   the canonical robust reset; it re-themes nothing and reverses by removal. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ── App layout ──────────────────────────────────────── */
 
 .app {

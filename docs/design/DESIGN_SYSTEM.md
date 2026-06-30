@@ -220,8 +220,12 @@ Calm and quick. Motion confirms an action; it never entertains.
 
 Rules: durations ≤ 150ms for direct manipulation; no easing flourishes
 (no bounce/elastic); reserve infinite animation for genuine live state
-(streaming, running, loading). Respect `prefers-reduced-motion` *(debt: not yet
-wired)*.
+(streaming, running, loading). **`prefers-reduced-motion` is honored** — a
+single `@media (prefers-reduced-motion: reduce)` block in `index.css` collapses
+all transitions/animations to instant and settles looping keyframes on their
+final visible frame. This is safe because no motion carries information that
+text doesn't (every live state has a label — see §9); the reduced view loses no
+meaning, only movement.
 
 > Debt: no `--dur-*` / `--ease-*` tokens; durations are inline literals.
 
@@ -251,7 +255,9 @@ per-component overrides, so one token swap reflows the whole cockpit.
 - **Color is never the only signal:** status uses badge text + color (e.g.
   `RUNNING`/`BLOCKED` labels), role uses a labeled badge + gutter tint, not hue
   alone.
-- **Motion:** honor `prefers-reduced-motion` (debt — see §7).
+- **Motion:** honors `prefers-reduced-motion` — a global `@media` reset in
+  `index.css` neutralizes all animation/transition for users who request it
+  (WCAG 2.3.3). Safe because every live state also carries a text label.
 
 ---
 
@@ -305,7 +311,10 @@ the system level, verifies, and logs it in §12.
 4. ~~**Density toggle** (§8).~~ **Shipped** — `[data-density="compact"]` block +
    Settings toggle rescale via `--space-*`. (Comfortable/compact only; further
    modes can extend the same pattern.)
-5. **`prefers-reduced-motion`** not honored (§7).
+5. ~~**`prefers-reduced-motion`** not honored (§7).~~ **DONE (2026-06-30).**
+   Global `@media (prefers-reduced-motion: reduce)` reset in `index.css`
+   neutralizes all transitions + looping keyframes (shimmer/spin/pulse/
+   thinking-bounce/olympus-pulse). Safe — every live state carries a text label.
 6. **No `Toolbar` / `SkeletonRows` shared primitives** in `shell.tsx` though the
    roadmap names them; loading/filter UI is re-implemented per view.
 
@@ -315,6 +324,7 @@ the system level, verifies, and logs it in §12.
 
 | Date | Change | Why | Files |
 |---|---|---|---|
+| 2026-06-30 | **Honored `prefers-reduced-motion` (closed a11y debt #5).** Added a global `@media (prefers-reduced-motion: reduce)` block in `index.css` (placed beside the shared focus-ring rule, keeping the a11y system rules together) that collapses all transitions to instant and settles every looping keyframe — `shimmer`, `spin`, `pulse`, `thinking-bounce`, `olympus-pulse` — on its final visible, original-position frame via `animation-iteration-count: 1`. Five infinite animations previously ran unconditionally regardless of OS preference. Updated §7 motion rules, §9 a11y, and debt #5. Gate green (typecheck + build exit 0). | This was the top clean a11y debt — vestibular-disorder users get continuous motion (skeleton shimmer, spinners, the live pulse) with no escape hatch, a WCAG 2.3.3 failure the docs already promised to fix. The reset is safe by design: the system mandates "color is never the only signal", so every animated live state (RUNNING/streaming/loading) also carries a text label — removing motion loses movement, not meaning. One `@media` block, theme-agnostic, reverses by deletion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Fixed circular self-referential tokens in the default (midnight) theme — a same-day regression.** Four midnight tokens had been left as invalid self-references: `--accent-dim: var(--accent-soft)`, `--accent-soft: var(--accent-soft)`, `--accent-hover-fill: var(--accent-hover-fill)`, and `--amber-soft: var(--amber-soft)` (introduced in `0ab805f`, the structured-tool-calls PR). A `var()` that references itself is invalid and resolves to the *guaranteed-invalid* value (effectively unset/transparent), so in the **default theme only** every surface backed by these tokens rendered with no fill: the brand-mark, board-card / node-card / workflow selected states, the node-session-dot glow, the placeholder/ready/warning badges, the user role badge, the composer-fork hover, and the density toggle. Daylight and amber-crt were unaffected (they carry literal rgba). Repointed all four to explicit rgba matching their documented values and the structure of the other two themes (`--accent-dim`/`--accent-soft` = `rgba(125,211,252,.12)`, `--accent-hover-fill` = `.10`, `--amber-soft` = `.13`). Gate green (typecheck + build exit 0). | This was the single highest-leverage fix available: a broken default-theme token contract silently degrading ~8 surfaces for every user (midnight is the default), invisible in code review because the value *looks* token-shaped. Four one-line literals restore the whole token layer with zero layout change, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Removed the purple reasoning wash (closed the only *anchor* violation in debt #1).** `.reasoning-content` was the lone control breaking the core "no purple gradients" design anchor — a hardcoded `rgba(240,171,252,…)` violet background + left border that read as foreign in every theme (and stayed purple even in amber-crt, where nothing else is). Repointed it to neutral system tokens: `var(--bg-elev2)` surface + `var(--border-bright)` left rule. Reasoning now reads as what it is — a recessive, italic editorial aside — and re-themes correctly across midnight/daylight/amber-crt. Updated §10 Don't and debt #1. Gate green (typecheck + build exit 0). | The purple was the single most visible breach of the stated personality ("NOT generic AI slop, no purple gradients") and the only off-anchor color left in the UI. Two neutral token references kill it system-wide, reversibly, with zero layout change — higher design leverage than chipping at the remaining same-hue accent/green/amber alpha literals, which are on-anchor and merely need tokenizing. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Theme-correct primary CTAs (debt #1, top offenders).** Added two semantic tokens — `--on-accent` (text/icon color on an accent fill) and `--accent-hover` (hover fill for accent-filled CTAs) — to all three `[data-theme]` blocks, then repointed `.new-chat-btn` (was hardcoded `#22d3ee` bg / `#0a0e14` text / `#67e8f9` hover) and `.composer-send:hover` (was `#a5e0ff`) at them. Updated §2 token table + debt #1. Verified in browser: New Chat renders sky-blue+dark in midnight and deep-sky-blue+white in daylight (previously stuck bright-cyan with weak contrast in light/amber themes). | The two primary CTAs were the only fully off-token, non-re-theming controls left — they stayed midnight-cyan in every theme, breaking the theme contract and failing contrast in daylight/amber-crt. Two tokens close the largest visible part of debt #1 system-wide, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
