@@ -417,6 +417,7 @@ async fn create_session(
     let spec = crate::server::bridge_mgr::RuntimeSpec {
         agent: body.agent.clone(),
         node: body.node.clone(),
+        cwd: None,
     };
     match state.bridge.create_draft(&spec) {
         Ok(ns) => {
@@ -789,7 +790,14 @@ async fn post_message(
     let deltas = state.deltas.clone();
     let bridge = state.bridge.clone();
     let views = state.views.clone();
-    let spec = crate::server::bridge_mgr::RuntimeSpec { agent, node };
+    // Bind the agent to its session space (working directory). The space was
+    // materialized eagerly at create time; derive its path here so the lazily
+    // spawned runtime runs scoped to it, not the host cwd.
+    let cwd = state
+        .bridge
+        .space_path(&id)
+        .map(|p| p.to_string_lossy().into_owned());
+    let spec = crate::server::bridge_mgr::RuntimeSpec { agent, node, cwd };
     let resume_hermes = if hermes_id.is_empty() {
         None
     } else {
@@ -1617,9 +1625,14 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["source"], "olympus");
         assert_eq!(v["managed"], true);
-        // Optimistic: id is allocated immediately; hermesId is empty until the
-        // first send spawns the runtime.
-        assert!(v["id"].as_str().unwrap().starts_with("oly-draft-"));
+        // Optimistic: a durable id is allocated immediately (`<utc>-<node>-<hash>`);
+        // hermesId is empty until the first send spawns the runtime.
+        let id = v["id"].as_str().unwrap();
+        assert!(id.contains("-local-"), "id should embed node segment: {id}");
+        assert!(
+            id.starts_with("20") || id.starts_with("19"),
+            "id should start with a UTC datetime stamp: {id}"
+        );
         assert_eq!(v["hermesId"], "");
     }
 

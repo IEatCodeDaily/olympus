@@ -108,10 +108,18 @@ async fn main() -> Result<()> {
                                 vec!["hermes".into(), "-p".into(), agent.clone(), "acp".into()];
                         }
                     }
+                    // Run the agent in its scoped session space, not the host cwd.
+                    if let Some(cwd) = &spec.cwd {
+                        if !cwd.is_empty() {
+                            config.cwd = cwd.clone();
+                        }
+                    }
                     olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(config)
                 },
             ),
-        ),
+        )
+        .with_spaces_root(home.join("spaces"))
+        .with_node_id(std::env::var("OLYMPUS_NODE_ID").unwrap_or_else(|_| "local".to_string())),
     );
     let sync_connected = Arc::new(AtomicBool::new(false));
     let state = AppState {

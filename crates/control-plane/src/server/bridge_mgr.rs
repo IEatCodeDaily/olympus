@@ -10,6 +10,7 @@
 //! the real binary.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -27,6 +28,10 @@ pub struct RuntimeSpec {
     pub agent: Option<String>,
     /// Node to run on ("local" for now; multi-node is post-MVP).
     pub node: Option<String>,
+    /// The session space — the agent's working directory. `None` falls back to
+    /// the server's cwd (legacy behavior); production always sets this to the
+    /// per-session space so agents operate in a scoped directory, not the host.
+    pub cwd: Option<String>,
 }
 
 /// A type-erased runtime factory. Production uses HermesAgentRuntime; tests
@@ -42,6 +47,8 @@ pub struct NewSession {
     /// Creation timestamp (epoch seconds) — lets the caller build the view row /
     /// DTO without re-reading the whole log.
     pub started_at: f64,
+    /// The materialized session-space path, if a spaces root is configured.
+    pub space: Option<String>,
 }
 
 /// The result of forking an observed session into a managed one.
@@ -61,6 +68,13 @@ pub struct BridgeManager {
     /// Sessions with a turn currently in-flight (prompt sent, awaiting Done).
     /// Authoritative liveness signal for Olympus-managed sessions.
     in_flight: RwLock<HashSet<String>>,
+    /// Root directory under which per-session spaces are materialized
+    /// (`<spaces_root>/<session_id>/`). `None` disables space creation — used by
+    /// tests so they never touch the filesystem. Set in production from config.
+    spaces_root: Option<PathBuf>,
+    /// This host's node id, embedded into new session ids so identity encodes
+    /// placement (`<datetime>-<node>-<hash>`). Defaults to "local".
+    node_id: String,
 }
 
 impl BridgeManager {
@@ -71,7 +85,72 @@ impl BridgeManager {
             factory,
             runtimes: RwLock::new(HashMap::new()),
             in_flight: RwLock::new(HashSet::new()),
+            spaces_root: None,
+            node_id: "local".into(),
         }
+    }
+
+    /// Set the root directory for per-session spaces (builder style). When set,
+    /// `create_draft` eagerly materializes `<spaces_root>/<session_id>/` and the
+    /// agent runs with that as its cwd.
+    pub fn with_spaces_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.spaces_root = Some(root.into());
+        self
+    }
+
+    /// Set this host's node id (builder style). Embedded into new session ids.
+    pub fn with_node_id(mut self, node_id: impl Into<String>) -> Self {
+        self.node_id = node_id.into();
+        self
+    }
+
+    /// The on-disk path of a session's space, if a spaces root is configured.
+    pub fn space_path(&self, session_id: &str) -> Option<PathBuf> {
+        self.spaces_root.as_ref().map(|r| r.join(session_id))
+    }
+
+    /// Materialize a session's space directory (idempotent). Returns the path,
+    /// or `None` if no spaces root is configured (tests). A bare space is just
+    /// an empty dir; it becomes a jj worktree only when a repo is attached.
+    pub fn ensure_space(&self, session_id: &str) -> Result<Option<PathBuf>> {
+        let Some(path) = self.space_path(session_id) else {
+            return Ok(None);
+        };
+        std::fs::create_dir_all(&path)
+            .with_context(|| format!("creating session space {}", path.display()))?;
+        Ok(Some(path))
+    }
+
+    /// Remove a session's space directory (best-effort GC on archive/delete).
+    pub fn remove_space(&self, session_id: &str) {
+        if let Some(path) = self.space_path(session_id) {
+            if path.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!(error = %e, path = %path.display(), "failed to remove session space");
+                }
+            }
+        }
+    }
+
+    /// Mint a fresh durable Olympus session id: `<utc-compact>-<node>-<hash>`,
+    /// e.g. `20260630T154812Z-local-a1b2c3d4`. Stable from birth (no draft→real
+    /// rename) — only the space and agent session are lazy.
+    fn new_session_id(&self) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Compact UTC stamp without pulling chrono: derive YYYYMMDDThhmmssZ.
+        let stamp = compact_utc_stamp(now);
+        // Node ids can contain characters unfriendly to filesystems; keep it
+        // simple by replacing anything non-alphanumeric with '-'.
+        let node: String = self
+            .node_id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let hash = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        format!("{stamp}-{node}-{hash}")
     }
 
     /// Mark a session as having a turn in-flight (called when a prompt is sent).
@@ -99,9 +178,14 @@ impl BridgeManager {
     /// it is backfilled via a `SessionUpdated{hermes_id}` event on first send.
     pub fn create_draft(&self, spec: &RuntimeSpec) -> Result<NewSession> {
         let now = chrono_epoch();
-        // A client-stable id derived from creation time; the real Hermes id is
-        // backfilled lazily so the UI never blocks on the handshake.
-        let session_id = format!("oly-draft-{}", chrono_millis());
+        // A durable id, stable from birth: `<utc>-<node>-<hash>`. There is no
+        // draft→real rename — only the space and agent session are lazy.
+        let session_id = self.new_session_id();
+
+        // Eagerly materialize the session space (the agent's working directory).
+        // A bare space is just an empty dir; cheap, and it means an agent is
+        // never spawned without a scoped cwd. GC'd on archive/delete.
+        let space = self.ensure_space(&session_id)?;
 
         let event = Event::SessionCreated {
             session_id: session_id.clone(),
@@ -124,6 +208,7 @@ impl BridgeManager {
             session_id,
             hermes_id: String::new(),
             started_at: now,
+            space: space.map(|p| p.to_string_lossy().into_owned()),
         })
     }
 
@@ -188,6 +273,9 @@ impl BridgeManager {
             .await
             .unwrap_or_else(|| format!("fork-{}", chrono_millis()));
         let session_id = format!("oly-{}", &hermes_id[..hermes_id.len().min(8)]);
+
+        // A fork is a real managed session — give it its own space too.
+        let _ = self.ensure_space(&session_id);
 
         let now = chrono_epoch();
         self.log.append(&Event::SessionCreated {
@@ -310,4 +398,99 @@ fn chrono_millis() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+/// Format epoch seconds as a compact UTC stamp `YYYYMMDDThhmmssZ` (no chrono).
+/// Uses the civil-from-days algorithm (Howard Hinnant) for the date part.
+fn compact_utc_stamp(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let secs_of_day = epoch_secs % 86_400;
+    let (hh, mm, ss) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
+    // days since 1970-01-01 → civil date (Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{year:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z")
+}
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    fn test_log() -> (tempfile::NamedTempFile, Arc<Log>) {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let log = Arc::new(Log::open(f.path()).unwrap());
+        (f, log)
+    }
+
+    #[test]
+    fn compact_utc_stamp_matches_known_epoch() {
+        // 2021-01-01T00:00:00Z = 1609459200
+        assert_eq!(compact_utc_stamp(1_609_459_200), "20210101T000000Z");
+        // 1970-01-01T00:00:00Z = 0
+        assert_eq!(compact_utc_stamp(0), "19700101T000000Z");
+        // 2026-06-30T15:48:12Z = 1782834492
+        assert_eq!(compact_utc_stamp(1_782_834_492), "20260630T154812Z");
+    }
+
+    #[test]
+    fn new_session_id_has_expected_shape() {
+        let (_f, log) = test_log();
+        let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
+            .with_node_id("local");
+        let id = mgr.new_session_id();
+        // <stamp>-<node>-<hash> → contains the node segment and an 8-char hash.
+        assert!(id.contains("-local-"), "id = {id}");
+        let hash = id.rsplit('-').next().unwrap();
+        assert_eq!(hash.len(), 8, "hash part should be 8 chars: {id}");
+        assert!(id.starts_with("20") || id.starts_with("19"), "id = {id}");
+    }
+
+    #[test]
+    fn ensure_and_remove_space_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("olympus-space-test-{}", chrono_millis()));
+        let (_f, log) = test_log();
+        let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
+            .with_spaces_root(&tmp);
+        let path = mgr.ensure_space("sess-1").unwrap().unwrap();
+        assert!(path.exists() && path.is_dir());
+        assert!(path.ends_with("sess-1"));
+        mgr.remove_space("sess-1");
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn no_spaces_root_means_no_space() {
+        let (_f, log) = test_log();
+        let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory());
+        assert!(mgr.space_path("sess-1").is_none());
+        assert!(mgr.ensure_space("sess-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn create_draft_with_spaces_root_materializes_and_returns_space() {
+        let tmp = std::env::temp_dir().join(format!("olympus-draft-test-{}", chrono_millis()));
+        let (_f, log) = test_log();
+        let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
+            .with_spaces_root(&tmp)
+            .with_node_id("local");
+        let ns = mgr.create_draft(&RuntimeSpec::default()).unwrap();
+        assert!(ns.session_id.contains("-local-"));
+        let space = ns.space.expect("space path should be set");
+        assert!(std::path::Path::new(&space).is_dir());
+        assert!(space.ends_with(&ns.session_id));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
