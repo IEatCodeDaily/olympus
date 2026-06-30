@@ -6,7 +6,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -49,10 +52,14 @@ pub struct TailCursor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionMeta {
     pub session_id: String,
+    pub source: String,
     pub title: Option<String>,
     pub model: Option<String>,
+    pub started_at: f64,
     pub archived: bool,
     pub message_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 /// Sync worker state: tail cursors and the Hermes-row→Olympus-message mapping
@@ -104,6 +111,10 @@ impl SyncState {
         self.next_message_id_by_session
             .insert(session_id.to_string(), next);
     }
+
+    pub fn knows_session(&self, session_id: &str) -> bool {
+        self.session_signatures.contains_key(session_id)
+    }
 }
 
 impl Default for SyncState {
@@ -132,6 +143,7 @@ pub fn seed_state_from_db(conn: &Connection, sync_state: &mut SyncState) -> Resu
             max_id: rows.iter().map(|row| row.id).max().unwrap_or(0),
             row_count: rows.len() as u64,
         };
+        sync_state.last_seen_id = sync_state.last_seen_id.max(signature.max_id);
         sync_state
             .session_signatures
             .insert(session_id.clone(), signature);
@@ -216,6 +228,9 @@ pub fn poll_message_tail(
 pub fn tail_rows_to_events(sync_state: &mut SyncState, rows: Vec<LiveMessageRow>) -> Vec<Event> {
     let mut out = Vec::new();
     for row in rows {
+        if !sync_state.knows_session(&row.session_id) {
+            continue;
+        }
         let db_to_olympus = sync_state
             .message_ids_by_session_db_id
             .entry(row.session_id.clone())
@@ -255,7 +270,7 @@ pub fn tail_rows_to_events(sync_state: &mut SyncState, rows: Vec<LiveMessageRow>
 pub fn load_session_meta(conn: &Connection, session_id: &str) -> Result<Option<SessionMeta>> {
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, title, model, archived, message_count
+        SELECT id, source, title, model, started_at, archived, message_count, input_tokens, output_tokens
         FROM sessions
         WHERE id = ?1
         "#,
@@ -267,10 +282,14 @@ pub fn load_session_meta(conn: &Connection, session_id: &str) -> Result<Option<S
 
     Ok(Some(SessionMeta {
         session_id: row.get("id")?,
+        source: row.get("source")?,
         title: row.get("title")?,
         model: row.get("model")?,
+        started_at: row.get("started_at")?,
         archived: row.get::<_, i64>("archived")? != 0,
         message_count: row.get::<_, Option<i64>>("message_count")?.unwrap_or(0) as u64,
+        input_tokens: row.get::<_, Option<i64>>("input_tokens")?.unwrap_or(0) as u64,
+        output_tokens: row.get::<_, Option<i64>>("output_tokens")?.unwrap_or(0) as u64,
     }))
 }
 
@@ -341,6 +360,7 @@ pub fn reconcile_session(
     let Some(meta) = load_session_meta(conn, session_id)? else {
         return Ok(vec![]);
     };
+    let session_exists = session_view.get(session_id).is_some();
 
     let current = load_active_messages(conn, session_id)?;
     let signature = SessionSignature {
@@ -382,6 +402,19 @@ pub fn reconcile_session(
         desired_window.iter().map(|row| row.id).collect();
 
     let mut events = Vec::new();
+    if !session_exists {
+        events.push(Event::SessionCreated {
+            session_id: meta.session_id.clone(),
+            hermes_id: meta.session_id.clone(),
+            source: meta.source.clone(),
+            model: meta.model.clone(),
+            title: meta.title.clone(),
+            started_at: meta.started_at,
+            message_count: meta.message_count,
+            input_tokens: meta.input_tokens,
+            output_tokens: meta.output_tokens,
+        });
+    }
     let mut stale_db_ids: Vec<u64> = current_map
         .keys()
         .copied()
@@ -450,7 +483,7 @@ pub fn reconcile_session(
     let has_refresh = events
         .iter()
         .any(|event| matches!(event, Event::SessionUpdated { .. }));
-    if (meta_changed || window_changed) && !has_refresh {
+    if session_exists && (meta_changed || window_changed) && !has_refresh {
         events.push(Event::SessionUpdated {
             session_id: session_id.to_string(),
             title: meta.title,
@@ -474,12 +507,14 @@ pub fn run_live_sync(
     views: Arc<RwLock<ViewManager>>,
     search: Arc<RwLock<SearchIndex>>,
     deltas: broadcast::Sender<ServerFrame>,
+    sync_connected: Arc<AtomicBool>,
 ) -> Result<()> {
     let conn = Connection::open_with_flags(state_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("opening read-only Hermes state.db")?;
 
     let mut sync_state = SyncState::new();
     seed_state_from_db(&conn, &mut sync_state)?;
+    sync_connected.store(true, Ordering::SeqCst);
 
     let poll_interval = Duration::from_secs(2);
     let reconcile_interval = Duration::from_secs(30);
@@ -650,6 +685,8 @@ mod tests {
                 title TEXT,
                 started_at REAL NOT NULL,
                 message_count INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
                 archived INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE messages (
@@ -675,7 +712,7 @@ mod tests {
 
     fn seed_session(conn: &Connection, id: &str, title: &str, model: &str, message_count: u64) {
         conn.execute(
-            "INSERT INTO sessions (id, source, model, title, started_at, message_count, archived) VALUES (?1, 'cli', ?2, ?3, 1.0, ?4, 0)",
+            "INSERT INTO sessions (id, source, model, title, started_at, message_count, input_tokens, output_tokens, archived) VALUES (?1, 'cli', ?2, ?3, 1.0, ?4, 11, 22, 0)",
             params![id, model, title, message_count as i64],
         )
         .unwrap();
@@ -718,6 +755,130 @@ mod tests {
         assert_eq!(rows[0].content.as_deref(), Some("one"));
         assert_eq!(rows[1].content.as_deref(), Some("four"));
         assert!(rows.iter().all(|row| row.active && !row.compacted));
+    }
+
+    #[test]
+    fn seed_state_from_db_advances_tail_cursor_to_snapshot_max_message_id() {
+        let db = create_state_db();
+        let conn = Connection::open(db.path()).unwrap();
+        seed_session(&conn, "sess-1", "title", "glm-5.2", 2);
+        seed_message(&conn, "sess-1", "user", "old one", 1, 0);
+        seed_message(&conn, "sess-1", "assistant", "old two", 1, 0);
+        drop(conn);
+
+        let conn = read_only_conn(&db);
+        let mut sync = SyncState::new();
+        seed_state_from_db(&conn, &mut sync).unwrap();
+
+        assert_eq!(sync.last_seen_id, 2);
+
+        drop(conn);
+        let conn = Connection::open(db.path()).unwrap();
+        seed_message(&conn, "sess-1", "user", "new", 1, 0);
+        drop(conn);
+
+        let conn = read_only_conn(&db);
+        let (rows, cursor) = poll_message_tail(&conn, sync.last_seen_id, 100).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].content.as_deref(), Some("new"));
+        assert_eq!(cursor.last_seen_id, 3);
+    }
+
+    #[test]
+    fn reconcile_unknown_live_session_creates_session_before_messages() {
+        let db = create_state_db();
+        let conn = Connection::open(db.path()).unwrap();
+        seed_session(&conn, "sess-new", "new title", "glm-5.2", 1);
+        seed_message(&conn, "sess-new", "user", "hello from live db", 1, 0);
+        drop(conn);
+
+        let views = ViewManager::new();
+        let mut sync = SyncState::new();
+        let conn = read_only_conn(&db);
+        let events = reconcile_session(
+            &conn,
+            &mut sync,
+            &views.sessions,
+            &views.messages,
+            "sess-new",
+        )
+        .unwrap();
+
+        assert!(
+            matches!(events.first(), Some(Event::SessionCreated { session_id, hermes_id, source, model, title, message_count, input_tokens, output_tokens, .. })
+            if session_id == "sess-new"
+                && hermes_id == "sess-new"
+                && source == "cli"
+                && model.as_deref() == Some("glm-5.2")
+                && title.as_deref() == Some("new title")
+                && *message_count == 1
+                && *input_tokens == 11
+                && *output_tokens == 22)
+        );
+        assert!(
+            matches!(events.get(1), Some(Event::MessageAppended { session_id, content, message_id, .. })
+            if session_id == "sess-new" && content.as_deref() == Some("hello from live db") && *message_id == 0)
+        );
+    }
+
+    #[test]
+    fn live_state_db_new_session_reconciles_into_views_log_and_search() {
+        let db = create_state_db();
+        let conn = read_only_conn(&db);
+        let mut sync = SyncState::new();
+        seed_state_from_db(&conn, &mut sync).unwrap();
+        drop(conn);
+
+        let log_file = NamedTempFile::new().unwrap();
+        let log = Log::open(log_file.path()).unwrap();
+        let views = Arc::new(RwLock::new(ViewManager::new()));
+        let search_dir = tempfile::tempdir().unwrap();
+        let search = Arc::new(RwLock::new(SearchIndex::open(search_dir.path()).unwrap()));
+        let (deltas, _rx) = broadcast::channel(16);
+
+        let conn = Connection::open(db.path()).unwrap();
+        seed_session(&conn, "sess-live", "live title", "glm-5.2", 1);
+        seed_message(&conn, "sess-live", "user", "live hello", 1, 0);
+        drop(conn);
+
+        let conn = read_only_conn(&db);
+        let (rows, cursor) = poll_message_tail(&conn, sync.last_seen_id, 100).unwrap();
+        sync.last_seen_id = cursor.last_seen_id;
+        assert_eq!(rows.len(), 1);
+        assert!(
+            tail_rows_to_events(&mut sync, rows).is_empty(),
+            "messages for an unknown session wait for reconciliation so the log stays ordered"
+        );
+
+        for session_id in list_session_ids(&conn).unwrap() {
+            let events = {
+                let snapshot = views.blocking_read();
+                reconcile_session(
+                    &conn,
+                    &mut sync,
+                    &snapshot.sessions,
+                    &snapshot.messages,
+                    &session_id,
+                )
+                .unwrap()
+            };
+            apply_events(&log, &views, &search, &deltas, &events).unwrap();
+        }
+
+        let snapshot = views.blocking_read();
+        assert!(snapshot.sessions.get("sess-live").is_some());
+        let recent = snapshot.messages.recent("sess-live", 10);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].content.as_deref(), Some("live hello"));
+        drop(snapshot);
+
+        let events = log.read_all().unwrap();
+        assert!(
+            matches!(events.first().map(|(_, event)| event), Some(Event::SessionCreated { session_id, .. }) if session_id == "sess-live")
+        );
+        assert!(
+            matches!(events.get(1).map(|(_, event)| event), Some(Event::MessageAppended { session_id, content, .. }) if session_id == "sess-live" && content.as_deref() == Some("live hello"))
+        );
     }
 
     #[test]

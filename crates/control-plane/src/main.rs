@@ -9,7 +9,10 @@
 //! later; for now the snapshot is taken at startup.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use anyhow::{Context, Result};
 use olympus_control_plane::{
@@ -101,6 +104,7 @@ async fn main() -> Result<()> {
             ),
         ),
     );
+    let sync_connected = Arc::new(AtomicBool::new(false));
     let state = AppState {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
@@ -112,6 +116,7 @@ async fn main() -> Result<()> {
         snapshot_messages: snap_messages,
         log: log_arc.clone(),
         bridge,
+        sync_connected: sync_connected.clone(),
     };
 
     let sync_log = Arc::clone(&log_arc);
@@ -119,6 +124,7 @@ async fn main() -> Result<()> {
     let sync_search = Arc::clone(&state.search);
     let sync_deltas = state.deltas.clone();
     let sync_state_db = state_db.clone();
+    let sync_connected_flag = sync_connected.clone();
     std::thread::Builder::new()
         .name("olympus-live-sync".into())
         .spawn(move || {
@@ -130,8 +136,11 @@ async fn main() -> Result<()> {
                     sync_views,
                     sync_search,
                     sync_deltas,
+                    sync_connected_flag.clone(),
                 )
             }));
+            // The worker is no longer connected once the loop exits for any reason.
+            sync_connected_flag.store(false, Ordering::SeqCst);
             match result {
                 Ok(Ok(())) => tracing::warn!("live sync worker loop returned (unexpected)"),
                 Ok(Err(err)) => tracing::error!(error = %err, "live sync worker errored"),

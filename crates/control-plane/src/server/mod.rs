@@ -11,7 +11,10 @@ pub mod ws;
 #[cfg(test)]
 pub mod test_support;
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use axum::{
     extract::{Path, Query, State},
@@ -70,6 +73,8 @@ pub struct AppState {
     pub log: Arc<Log>,
     /// Bridge manager: owns agent runtimes for managed (olympus-source) sessions.
     pub bridge: Arc<BridgeManager>,
+    /// Whether the live `state.db` sync worker has successfully connected.
+    pub sync_connected: Arc<AtomicBool>,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -178,7 +183,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "status": "ok",
         "importState": state.import_state.as_str(),
         "snapshot": { "sessions": state.snapshot_sessions, "messages": state.snapshot_messages },
-        "syncConnected": false,
+        "syncConnected": state.sync_connected.load(Ordering::SeqCst),
         "hermesProfile": state.hermes_profile.as_str(),
     }))
 }
@@ -777,6 +782,7 @@ mod tests {
                 Arc::new(Log::open(&dir.path().join("bridge-log.redb")).unwrap()),
                 test_support::mock_factory(),
             )),
+            sync_connected: Arc::new(AtomicBool::new(true)),
         };
         (state, dir)
     }
@@ -861,6 +867,7 @@ mod tests {
                 Arc::new(Log::open(&dir.path().join("bridge-log.redb")).unwrap()),
                 test_support::mock_factory(),
             )),
+            sync_connected: Arc::new(AtomicBool::new(true)),
         };
         let app = build_router(state);
 
@@ -965,6 +972,7 @@ mod tests {
         assert_eq!(v["status"], "ok");
         assert_eq!(v["importState"], "done");
         assert_eq!(v["hermesProfile"], "default");
+        assert_eq!(v["syncConnected"], true);
     }
 
     #[tokio::test]
