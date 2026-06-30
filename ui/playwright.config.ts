@@ -23,10 +23,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    // Force mock mode so e2e is deterministic regardless of a local .env.local
-    // that may point the dev server at a real backend. Use a distinct port so it
-    // never reuses a real-backend dev server the operator is running on 5173.
-    command: "VITE_USE_MOCKS=true node_modules/.bin/vite --port 5188 --host 127.0.0.1",
+    // Force mock mode AND the MSW origin so e2e is deterministic regardless of a
+    // local .env.local (which may set VITE_API_BASE to a real backend). MSW
+    // handlers intercept http://127.0.0.1:8787, so the app must fetch that origin.
+    // Distinct port (5188) so it never reuses the operator's dev server on 5173.
+    command:
+      "VITE_USE_MOCKS=true VITE_API_BASE=http://127.0.0.1:8787 VITE_API_TOKEN=dev-mock-token node_modules/.bin/vite --port 5188 --host 127.0.0.1",
     url: "http://127.0.0.1:5188",
     reuseExistingServer: false,
     timeout: 30_000,
