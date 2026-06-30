@@ -1110,6 +1110,23 @@ html, body, #root {
 }
 .composer-send:hover:not(:disabled) { background: var(--accent-hover); }
 .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
+/* Stop button: replaces send while a turn is in-flight. Red, square glyph. */
+.composer-stop {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--red);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity 0.15s, filter 0.15s;
+}
+.composer-stop:hover:not(:disabled) { filter: brightness(1.12); }
+.composer-stop:disabled { opacity: 0.5; cursor: not-allowed; }
 .composer-error {
   font-size: 11px;
   color: var(--red);

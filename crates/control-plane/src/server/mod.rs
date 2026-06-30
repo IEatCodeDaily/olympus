@@ -90,6 +90,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/sessions/{id}/messages",
             get(get_messages).post(post_message),
         )
+        .route("/api/sessions/{id}/cancel", post(cancel_session))
         .route("/api/search", get(search))
         .route("/api/models", get(models))
         .route("/api/agents", get(list_agents_handler))
@@ -733,9 +734,19 @@ async fn post_message(
     // any (potentially slow) runtime spawn — so the UI shows the user bubble and
     // the POST returns fast. `hermes_id` may be empty here for a fresh draft; the
     // user message carries the current (possibly empty) hermes id and is fine.
+    // Use max(existing message_id)+1, NOT the count — message ids must be
+    // monotonic and collision-free even if the hot window evicted older rows or
+    // ids aren't contiguous (a count would reuse an id and clobber a message).
     let next_id = {
         let views = state.views.read().await;
-        views.messages.recent(&id, usize::MAX).len() as u64
+        views
+            .messages
+            .recent(&id, usize::MAX)
+            .iter()
+            .map(|m| m.message_id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0)
     };
     match state
         .bridge
@@ -946,7 +957,24 @@ async fn post_message(
     (StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response()
 }
 
-// ---- card handlers (C1) ----
+/// POST /api/sessions/:id/cancel — stop the in-flight turn for a managed
+/// session. Sends AgentCommand::Cancel to the runtime (ACP session/cancel) and
+/// clears the in-flight flag. No-op (still 200) if there's no active runtime.
+async fn cancel_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if let Some(runtime) = state.bridge.get_runtime(&id).await {
+        if let Err(e) = runtime.send(AgentCommand::Cancel).await {
+            tracing::warn!(error = %e, session = %id, "cancel send failed");
+        }
+    }
+    state.bridge.clear_in_flight(&id).await;
+    // Tell subscribers the turn is no longer running so the UI drops the
+    // thinking indicator immediately.
+    let _ = state.deltas.send(ServerFrame::SessionUpdated {
+        session_id: id.clone(),
+        changes: json!({ "liveness": "idle" }),
+    });
+    (StatusCode::OK, Json(json!({ "cancelled": true }))).into_response()
+}
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

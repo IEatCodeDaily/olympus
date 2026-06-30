@@ -6,7 +6,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useChat } from "../hooks/useChat";
 import { useSessions } from "../hooks/useSessions";
 import { formatTime, SOURCE_META, formatTokens } from "../lib/format";
-import { forkSession, sendMessage, updateSession, fetchAgents } from "../api";
+import { forkSession, sendMessage, updateSession, fetchAgents, cancelSession } from "../api";
 import type { Message, Session, ToolCall, AgentInfo } from "../types";
 
 interface Props {
@@ -139,6 +139,7 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
         model={session?.model ?? null}
         hermesId={session?.hermesId ?? ""}
         sourceLabel={sourceMeta?.label ?? session?.source ?? ""}
+        inFlight={session?.liveness === "active"}
         onAssigned={() => sessionMeta.refetch()}
         onForked={(forked) => {
           sessionMeta.refetch();
@@ -183,6 +184,7 @@ function Composer({
   model,
   hermesId,
   sourceLabel,
+  inFlight,
   onAssigned,
   onForked,
 }: {
@@ -192,11 +194,13 @@ function Composer({
   model: string | null;
   hermesId: string;
   sourceLabel: string;
+  inFlight: boolean;
   onAssigned: () => void;
   onForked: (session: Session) => void;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [forking, setForking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -249,6 +253,20 @@ function Composer({
       submit();
     }
   };
+
+  const stop = useCallback(async () => {
+    if (stopping) return;
+    setStopping(true);
+    setErr(null);
+    try {
+      await cancelSession(sessionId);
+      onAssigned(); // refresh liveness so the indicator clears
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setStopping(false);
+    }
+  }, [stopping, sessionId, onAssigned]);
 
   const fork = useCallback(async () => {
     if (forking) return;
@@ -338,15 +356,32 @@ function Composer({
           onChange={(e) => { setText(e.target.value); autosize(); }}
           onKeyDown={onKeyDown}
         />
-        <button className="composer-send" onClick={submit} disabled={!text.trim() || sending}>
-          {sending ? (
-            <span className="composer-spinner" />
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" />
-            </svg>
-          )}
-        </button>
+        {inFlight ? (
+          <button
+            className="composer-stop"
+            onClick={stop}
+            disabled={stopping}
+            title="Stop the agent's current turn"
+          >
+            {stopping ? (
+              <span className="composer-spinner" />
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            )}
+          </button>
+        ) : (
+          <button className="composer-send" onClick={submit} disabled={!text.trim() || sending}>
+            {sending ? (
+              <span className="composer-spinner" />
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

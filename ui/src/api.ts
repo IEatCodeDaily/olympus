@@ -212,6 +212,14 @@ export async function sendMessage(
   if (!res.ok) throw new Error(`send failed (${res.status})`);
 }
 
+export async function cancelSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/sessions/${sessionId}/cancel`, {
+    method: "POST",
+    headers: jsonHeaders(),
+  });
+  if (!res.ok) throw new Error(`cancel failed (${res.status})`);
+}
+
 export async function createCard(body: CreateCardBody): Promise<Card> {
   return postJson<Card, CreateCardBody>("/api/cards", body, "create card failed");
 }

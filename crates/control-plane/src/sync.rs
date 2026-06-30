@@ -125,7 +125,15 @@ impl Default for SyncState {
 
 /// List every live session id in `state.db`.
 pub fn list_session_ids(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT id FROM sessions ORDER BY started_at ASC")?;
+    // Exclude `source='olympus'` sessions: those are created and owned by the
+    // Olympus bridge (it writes the event log directly). Hermes ALSO records the
+    // same conversation in state.db under the ACP session id, so importing it
+    // here would create a phantom duplicate session (keyed by hermes-id) and
+    // double-count every message. The bridge is the single writer for olympus
+    // sessions; live-sync only mirrors the OTHER channels (cli/telegram/etc.).
+    let mut stmt = conn.prepare(
+        "SELECT id FROM sessions WHERE source IS NULL OR source != 'olympus' ORDER BY started_at ASC",
+    )?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
