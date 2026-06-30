@@ -287,20 +287,24 @@ Ranked by leverage. Each future run picks the top unblocked item, fixes it at
 the system level, verifies, and logs it in §12.
 
 1. **Hardcoded color literals** break the "tokens only" rule and the theme
-   contract. Remaining offenders in `index.css`:
-   - scrollbar thumb hover `#3a4452`
-   - ~~`.new-chat-btn` text `#0a0e14`, bg `#22d3ee`, hover `#67e8f9`~~ **DONE
-     (2026-06-30)** — now `var(--on-accent)` / `var(--accent)` /
-     `var(--accent-hover)`; re-themes correctly in all three themes.
-   - ~~`.composer-send` hover `#a5e0ff`~~ **DONE (2026-06-30)** — now
-     `var(--accent-hover)`.
-   - dozens of `rgba(125,211,252,…)` / `rgba(134,239,172,…)` / `rgba(252,211,77,…)`
-     accent/green/amber alpha literals (badges, washes, role tints) that should be
-     `--accent-dim`-style tokens or theme-defined alpha tokens.
+   contract. **CSS portion CLOSED (2026-07-01)** — `index.css` now has **zero**
+   hardcoded hex/`rgba()` outside the `[data-theme]` token blocks. History:
+   - ~~scrollbar thumb hover `#3a4452`~~ tokenized (`--scrollbar-thumb-hover`).
+   - ~~`.new-chat-btn` text/bg/hover literals~~ **DONE (2026-06-30)** —
+     `var(--on-accent)` / `var(--accent)` / `var(--accent-hover)`.
+   - ~~`.composer-send` hover `#a5e0ff`~~ **DONE (2026-06-30)** — `var(--accent-hover)`.
    - ~~`.reasoning-content` purple `rgba(240,171,252,…)`~~ **DONE (2026-06-30)** —
-     the only violation of the no-purple *anchor*. Now neutral `var(--bg-elev2)`
-     surface + `var(--border-bright)` left rule; reads as a recessive editorial
-     aside and re-themes in all three themes.
+     neutral `var(--bg-elev2)` + `var(--border-bright)`.
+   - ~~`.diff-line.add/.del/.hunk` washes `rgba(134,239,172,.10)` /
+     `rgba(248,113,113,.10)` / `rgba(125,211,252,.06)`~~ **DONE (2026-07-01)** —
+     now `var(--green-soft)` / `var(--red-soft)` / `var(--accent-soft)`. The `del`
+     literal was also off-palette (`#f87171`, not the theme `--red` `#fca5a5`);
+     the token fix corrects the hue too.
+   - The accent/green/amber alpha values these referenced are now all defined as
+     semantic tokens (`--accent-soft`, `--green-soft`, `--red-soft`, etc.) in
+     every `[data-theme]` block — see §2 "Non-theme primitives" / the token layer.
+     Remaining work for this debt is purely in **TSX components** (any inline
+     `style={{…}}` color literals), not `index.css`.
 2. ~~**No keyboard focus ring** (a11y, §9).~~ **DONE (2026-06-30).** Added a
    `--ring` token (derives from `--accent`) + a shared
    `:where(…):focus-visible` rule across all interactive elements.
@@ -324,6 +328,7 @@ the system level, verifies, and logs it in §12.
 
 | Date | Change | Why | Files |
 |---|---|---|---|
+| 2026-07-01 | **Tokenized the last hardcoded color literals in `index.css` — CSS portion of debt #1 now fully closed.** The three `.diff-line` washes (the syntax-diff renderer in tool-call cards) were the only remaining off-token colors in the stylesheet: `.add` `rgba(134,239,172,.10)`, `.del` `rgba(248,113,113,.10)`, `.hunk` `rgba(125,211,252,.06)`. Repointed them to the existing semantic wash tokens `var(--green-soft)` / `var(--red-soft)` / `var(--accent-soft)`, which are defined in all three `[data-theme]` blocks. Verified with a regex sweep: **zero** hardcoded hex/`rgba()` now exist outside the theme token blocks. Updated debt #1. Gate green (typecheck + build exit 0). | These three literals broke both the "tokens only" rule and the theme contract — diff backgrounds stayed midnight-tinted in daylight/amber-crt instead of re-theming. Worse, `.del` used `rgba(248,113,113,…)` = `#f87171`, which isn't even the theme's `--red` (`#fca5a5`) — so it was off-token *and* off-palette; the token swap corrects the hue too. Closing the entire CSS surface of debt #1 (not just chipping one offender) is the high-leverage move: it makes "no literal lives in index.css" an enforceable invariant going forward, and the only remaining debt-#1 work is inline `style={{}}` in TSX components. Three one-line token references, theme-correct, reverses by inversion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Honored `prefers-reduced-motion` (closed a11y debt #5).** Added a global `@media (prefers-reduced-motion: reduce)` block in `index.css` (placed beside the shared focus-ring rule, keeping the a11y system rules together) that collapses all transitions to instant and settles every looping keyframe — `shimmer`, `spin`, `pulse`, `thinking-bounce`, `olympus-pulse` — on its final visible, original-position frame via `animation-iteration-count: 1`. Five infinite animations previously ran unconditionally regardless of OS preference. Updated §7 motion rules, §9 a11y, and debt #5. Gate green (typecheck + build exit 0). | This was the top clean a11y debt — vestibular-disorder users get continuous motion (skeleton shimmer, spinners, the live pulse) with no escape hatch, a WCAG 2.3.3 failure the docs already promised to fix. The reset is safe by design: the system mandates "color is never the only signal", so every animated live state (RUNNING/streaming/loading) also carries a text label — removing motion loses movement, not meaning. One `@media` block, theme-agnostic, reverses by deletion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Fixed circular self-referential tokens in the default (midnight) theme — a same-day regression.** Four midnight tokens had been left as invalid self-references: `--accent-dim: var(--accent-soft)`, `--accent-soft: var(--accent-soft)`, `--accent-hover-fill: var(--accent-hover-fill)`, and `--amber-soft: var(--amber-soft)` (introduced in `0ab805f`, the structured-tool-calls PR). A `var()` that references itself is invalid and resolves to the *guaranteed-invalid* value (effectively unset/transparent), so in the **default theme only** every surface backed by these tokens rendered with no fill: the brand-mark, board-card / node-card / workflow selected states, the node-session-dot glow, the placeholder/ready/warning badges, the user role badge, the composer-fork hover, and the density toggle. Daylight and amber-crt were unaffected (they carry literal rgba). Repointed all four to explicit rgba matching their documented values and the structure of the other two themes (`--accent-dim`/`--accent-soft` = `rgba(125,211,252,.12)`, `--accent-hover-fill` = `.10`, `--amber-soft` = `.13`). Gate green (typecheck + build exit 0). | This was the single highest-leverage fix available: a broken default-theme token contract silently degrading ~8 surfaces for every user (midnight is the default), invisible in code review because the value *looks* token-shaped. Four one-line literals restore the whole token layer with zero layout change, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Removed the purple reasoning wash (closed the only *anchor* violation in debt #1).** `.reasoning-content` was the lone control breaking the core "no purple gradients" design anchor — a hardcoded `rgba(240,171,252,…)` violet background + left border that read as foreign in every theme (and stayed purple even in amber-crt, where nothing else is). Repointed it to neutral system tokens: `var(--bg-elev2)` surface + `var(--border-bright)` left rule. Reasoning now reads as what it is — a recessive, italic editorial aside — and re-themes correctly across midnight/daylight/amber-crt. Updated §10 Don't and debt #1. Gate green (typecheck + build exit 0). | The purple was the single most visible breach of the stated personality ("NOT generic AI slop, no purple gradients") and the only off-anchor color left in the UI. Two neutral token references kill it system-wide, reversibly, with zero layout change — higher design leverage than chipping at the remaining same-hue accent/green/amber alpha literals, which are on-anchor and merely need tokenizing. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |

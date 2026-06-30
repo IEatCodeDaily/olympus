@@ -1032,13 +1032,13 @@ html, body, #root {
 }
 .diff-text { padding: 0 8px; overflow-x: auto; }
 .diff-line.ctx { color: var(--text-dim); }
-.diff-line.add { background: rgba(134,239,172,0.10); }
+.diff-line.add { background: var(--green-soft); }
 .diff-line.add .diff-gutter { color: var(--green); }
 .diff-line.add .diff-text { color: var(--green); }
-.diff-line.del { background: rgba(248,113,113,0.10); }
+.diff-line.del { background: var(--red-soft); }
 .diff-line.del .diff-gutter { color: var(--red); }
 .diff-line.del .diff-text { color: var(--red); }
-.diff-line.hunk { color: var(--accent); background: rgba(125,211,252,0.06); }
+.diff-line.hunk { color: var(--accent); background: var(--accent-soft); }
 .diff-line.meta { color: var(--text-faint); }
 
 .composer {
