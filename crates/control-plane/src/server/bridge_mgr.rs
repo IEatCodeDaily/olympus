@@ -274,6 +274,7 @@ impl BridgeManager {
         hermes_id: &str,
         message_id: u64,
         text: &str,
+        tool_calls: &Option<String>,
         finish_reason: Option<&str>,
     ) -> Result<Event> {
         let now = chrono_epoch();
@@ -284,7 +285,7 @@ impl BridgeManager {
             role: "assistant".into(),
             content: Some(text.to_string()),
             tool_name: None,
-            tool_calls: None,
+            tool_calls: tool_calls.clone(),
             reasoning: None,
             timestamp: now,
             token_count: None,

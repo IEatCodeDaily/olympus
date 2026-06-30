@@ -430,14 +430,16 @@ function truncate(s: string, n: number): string {
 
 function ToolCallCard({ tc }: { tc: ToolCall }) {
   const [expanded, setExpanded] = useState(false);
-  const isRunning = tc.result === null;
+  // result === null while in-flight; undefined means we just don't have one.
+  const isRunning = tc.result === null || tc.result === undefined;
 
-  let parsedArgs: unknown = tc.args;
-  try {
-    parsedArgs = JSON.parse(tc.args);
-  } catch {
-    // keep raw
-  }
+  // Args arrive already-parsed (object) from the backend; stringify for display.
+  const argsStr = formatValue(tc.args);
+  // Detect a patch/edit/diff-shaped result so we render a proper diff view
+  // instead of a raw wall of text. A result is "diff-shaped" if it contains
+  // unified-diff hunks (lines starting with +/-/@@) or looks like a patch.
+  const result = tc.result ?? null;
+  const isDiff = result != null && looksLikeDiff(result);
 
   return (
     <div className="tool-call-card">
@@ -445,7 +447,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         <span className={`tool-status ${isRunning ? "running" : "done"}`}>
           {isRunning ? "◌" : "✓"}
         </span>
-        <span className="tool-name">{tc.name}</span>
+        <span className="tool-name">{tc.label || tc.name}</span>
         {isRunning && <span className="tool-running-label">running</span>}
         <svg className="tool-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
           style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s" }}>
@@ -456,16 +458,63 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         <div className="tool-call-detail">
           <div className="tool-section">
             <div className="tool-section-label">args</div>
-            <pre className="tool-json">{JSON.stringify(parsedArgs, null, 2)}</pre>
+            <pre className="tool-json">{argsStr}</pre>
           </div>
-          {tc.result && (
+          {result != null && (
             <div className="tool-section">
-              <div className="tool-section-label">result</div>
-              <pre className="tool-result">{tc.result}</pre>
+              <div className="tool-section-label">{isDiff ? "diff" : "result"}</div>
+              {isDiff ? <DiffView diff={result} /> : <pre className="tool-result">{result}</pre>}
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Format an already-parsed value (object/string/etc.) for display. */
+function formatValue(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
+}
+
+/** Heuristic: does this tool result look like a unified diff / patch? */
+function looksLikeDiff(s: string): boolean {
+  // Needs diff/change markers on a meaningful fraction of lines.
+  const lines = s.split("\n");
+  if (lines.length < 3) return false;
+  let markers = 0;
+  for (const ln of lines) {
+    if (ln.startsWith("+") || ln.startsWith("-") || ln.startsWith("@@") || ln.startsWith("diff ")) {
+      markers++;
+    }
+  }
+  return markers >= 2;
+}
+
+/** Render a unified-diff string as red/green line-by-line. */
+function DiffView({ diff }: { diff: string }) {
+  const lines = diff.split("\n");
+  return (
+    <div className="tool-diff">
+      {lines.map((ln, i) => {
+        let cls = "diff-line ctx";
+        if (ln.startsWith("@@")) cls = "diff-line hunk";
+        else if (ln.startsWith("+++") || ln.startsWith("---")) cls = "diff-line meta";
+        else if (ln.startsWith("+")) cls = "diff-line add";
+        else if (ln.startsWith("-")) cls = "diff-line del";
+        return (
+          <div key={i} className={cls}>
+            <span className="diff-gutter">{ln ? ln[0] : " "}</span>
+            <span className="diff-text">{ln.replace(/^[+\- ]/, "")}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

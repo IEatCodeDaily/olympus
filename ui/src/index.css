@@ -16,12 +16,31 @@
   --text-dim: #8595a8;
   --text-faint: #5a6878;
   --accent: #7dd3fc;
-  --accent-dim: rgba(125, 211, 252, 0.12);
+  --accent-dim: var(--accent-soft);
   --accent-hover: #a5e0ff;
   --on-accent: #0a0e14;
   --green: #86efac;
   --amber: #fcd34d;
   --red: #fca5a5;
+  /* Alpha-derived tokens (theme-correct; never hardcode rgba in components) */
+  --accent-subtle:   rgba(125, 211, 252, 0.035); /* message user gutter wash */
+  --accent-soft:     var(--accent-soft);  /* badge / live-indicator fill */
+  --accent-border:   rgba(125, 211, 252, 0.28);  /* decorative borders */
+  --accent-border-strong: rgba(125, 211, 252, 0.38); /* emphasized borders */
+  --accent-hover-fill:    var(--accent-hover-fill); /* hover backgrounds */
+  --accent-glow:     rgba(125, 211, 252, 0.65);  /* pulse / live-dot shadow */
+  --green-soft:      rgba(134, 239, 172, 0.13);  /* managed / ai badge fill */
+  --green-border:    rgba(134, 239, 172, 0.32);  /* green decorative borders */
+  --green-glow:      rgba(134, 239, 172, 0.40);  /* status-dot connected */
+  --amber-subtle:    rgba(252, 211, 77, 0.028);  /* tool-message wash */
+  --amber-soft:      var(--amber-soft);   /* fork / tool badge fill */
+  --amber-border:    rgba(252, 211, 77, 0.30);   /* amber decorative borders */
+  --amber-highlight: rgba(252, 211, 77, 0.20);   /* search hit highlight */
+  --red-soft:        rgba(252, 165, 165, 0.10);  /* error badge fill */
+  --red-border:      rgba(252, 165, 165, 0.35);  /* error decorative borders */
+  --hover-subtle:    rgba(255, 255, 255, 0.015); /* row hover wash */
+  --scrollbar-thumb-hover: #3a4452;
+  --spinner-track:   rgba(9, 11, 14, 0.30);
 }
 
 :root[data-theme="daylight"] {
@@ -41,6 +60,25 @@
   --green: #16a34a;
   --amber: #b45309;
   --red: #dc2626;
+  /* Alpha-derived tokens (theme-correct; never hardcode rgba in components) */
+  --accent-subtle:   rgba(2, 132, 199, 0.06);
+  --accent-soft:     rgba(2, 132, 199, 0.10);
+  --accent-border:   rgba(2, 132, 199, 0.25);
+  --accent-border-strong: rgba(2, 132, 199, 0.35);
+  --accent-hover-fill:    rgba(2, 132, 199, 0.12);
+  --accent-glow:     rgba(2, 132, 199, 0.50);
+  --green-soft:      rgba(22, 163, 74, 0.10);
+  --green-border:    rgba(22, 163, 74, 0.28);
+  --green-glow:      rgba(22, 163, 74, 0.35);
+  --amber-subtle:    rgba(180, 83, 9, 0.06);
+  --amber-soft:      rgba(180, 83, 9, 0.10);
+  --amber-border:    rgba(180, 83, 9, 0.25);
+  --amber-highlight: rgba(180, 83, 9, 0.16);
+  --red-soft:        rgba(220, 38, 38, 0.08);
+  --red-border:      rgba(220, 38, 38, 0.30);
+  --hover-subtle:    rgba(0, 0, 0, 0.03);
+  --scrollbar-thumb-hover: #9ca3af;
+  --spinner-track:   rgba(26, 34, 48, 0.20);
 }
 
 :root[data-theme="amber-crt"] {
@@ -60,6 +98,25 @@
   --green: #b6e36b;
   --amber: #ffcf5c;
   --red: #ff8a6b;
+  /* Alpha-derived tokens (theme-correct; never hardcode rgba in components) */
+  --accent-subtle:   rgba(255, 179, 71, 0.05);
+  --accent-soft:     rgba(255, 179, 71, 0.13);
+  --accent-border:   rgba(255, 179, 71, 0.28);
+  --accent-border-strong: rgba(255, 179, 71, 0.40);
+  --accent-hover-fill:    rgba(255, 179, 71, 0.18);
+  --accent-glow:     rgba(255, 179, 71, 0.55);
+  --green-soft:      rgba(182, 227, 107, 0.12);
+  --green-border:    rgba(182, 227, 107, 0.30);
+  --green-glow:      rgba(182, 227, 107, 0.38);
+  --amber-subtle:    rgba(255, 207, 92, 0.06);
+  --amber-soft:      rgba(255, 207, 92, 0.12);
+  --amber-border:    rgba(255, 207, 92, 0.28);
+  --amber-highlight: rgba(255, 207, 92, 0.20);
+  --red-soft:        rgba(255, 138, 107, 0.10);
+  --red-border:      rgba(255, 138, 107, 0.32);
+  --hover-subtle:    rgba(255, 215, 154, 0.03);
+  --scrollbar-thumb-hover: #6b5530;
+  --spinner-track:   rgba(26, 19, 8, 0.35);
 }
 
 :root {
@@ -111,7 +168,7 @@ html, body, #root {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #3a4452; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
 /* ── Keyboard focus ring (a11y, §9) ──────────────────────
    A single shared :focus-visible outline for every interactive control.
@@ -161,7 +218,7 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   background: var(--accent-dim);
-  border: 1px solid rgba(125, 211, 252, 0.2);
+  border: 1px solid var(--accent-border);
   border-radius: var(--radius);
   color: var(--accent);
 }
@@ -213,7 +270,7 @@ html, body, #root {
   border-radius: 50%;
   display: inline-block;
 }
-.status-dot.connected { background: var(--green); box-shadow: 0 0 6px rgba(134, 239, 172, 0.4); }
+.status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
 .status-dot.disconnected { background: var(--red); }
 
 /* ── Main ────────────────────────────────────────────── */
@@ -428,7 +485,7 @@ html, body, #root {
 .row-managed {
   font-size: 9px;
   font-family: var(--mono);
-  background: rgba(134, 239, 172, 0.15);
+  background: var(--green-soft);
   color: var(--green);
   padding: 1px 4px;
   border-radius: 3px;
@@ -438,7 +495,7 @@ html, body, #root {
 .row-fork {
   font-size: 9px;
   font-family: var(--mono);
-  background: rgba(252, 211, 77, 0.12);
+  background: var(--amber-soft);
   color: var(--amber);
   padding: 1px 4px;
   border-radius: 3px;
@@ -575,12 +632,12 @@ html, body, #root {
   border-left: 2px solid transparent;
   transition: background 0.08s;
 }
-.msg:hover { background: rgba(255,255,255,0.015); }
+.msg:hover { background: var(--hover-subtle); }
 
 /* role-tinted left edge + faint background wash */
-.msg-user      { border-left-color: var(--accent); background: rgba(125,211,252,0.035); }
+.msg-user      { border-left-color: var(--accent); background: var(--accent-subtle); }
 .msg-assistant { border-left-color: var(--green); }
-.msg-tool      { border-left-color: var(--amber); background: rgba(252,211,77,0.025); }
+.msg-tool      { border-left-color: var(--amber); background: var(--amber-subtle); }
 
 .msg-gutter {
   width: 52px;
@@ -602,9 +659,9 @@ html, body, #root {
   white-space: nowrap;
   height: fit-content;
 }
-.role-badge.role-user   { color: var(--accent); background: rgba(125,211,252,0.12); border-color: rgba(125,211,252,0.3); }
-.role-badge.role-ai     { color: var(--green);  background: rgba(134,239,172,0.12); border-color: rgba(134,239,172,0.3); }
-.role-badge.role-tool   { color: var(--amber);  background: rgba(252,211,77,0.12);  border-color: rgba(252,211,77,0.3); }
+.role-badge.role-user   { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border); }
+.role-badge.role-ai     { color: var(--green);  background: var(--green-soft); border-color: var(--green-border); }
+.role-badge.role-tool   { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber-border); }
 .role-badge.role-system { color: var(--text-faint); background: var(--bg-elev2); }
 .role-badge.role-meta   { color: var(--text-faint); background: var(--bg-elev2); }
 
@@ -701,8 +758,8 @@ html, body, #root {
 /* Transcript loading skeleton */
 .transcript-skeleton { padding: 12px 0; }
 .skel-msg { display: flex; gap: 12px; padding: 12px 24px; border-left: 2px solid var(--border); }
-.skel-user { border-left-color: rgba(125,211,252,0.3); }
-.skel-ai { border-left-color: rgba(134,239,172,0.3); }
+.skel-user { border-left-color: var(--accent-border); }
+.skel-ai { border-left-color: var(--green-border); }
 .skel-gutter { width: 52px; flex-shrink: 0; }
 .skel-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .skel-line {
@@ -823,7 +880,7 @@ html, body, #root {
   left: 50%;
   transform: translateX(-50%);
   background: var(--accent-dim);
-  border: 1px solid rgba(125, 211, 252, 0.3);
+  border: 1px solid var(--accent-border);
   color: var(--accent);
   padding: 6px 16px;
   border-radius: 20px;
@@ -833,7 +890,7 @@ html, body, #root {
   transition: all 0.15s;
   z-index: 10;
 }
-.jump-latest:hover { background: rgba(125, 211, 252, 0.2); }
+.jump-latest:hover { background: var(--accent-border); }
 
 /* ── Managed/observed badges in chat header ───────────── */
 .chat-managed-badge {
@@ -843,8 +900,8 @@ html, body, #root {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--green);
-  background: rgba(134,239,172,0.12);
-  border: 1px solid rgba(134,239,172,0.35);
+  background: var(--green-soft);
+  border: 1px solid var(--green-border);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -871,8 +928,8 @@ html, body, #root {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--accent);
-  background: rgba(125, 211, 252, 0.12);
-  border: 1px solid rgba(125, 211, 252, 0.4);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border-strong);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -881,7 +938,7 @@ html, body, #root {
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.7);
+  box-shadow: 0 0 0 0 var(--accent-glow);
   animation: olympus-pulse 1.6s ease-out infinite;
 }
 /* Active pulse dot in the session list. */
@@ -893,16 +950,51 @@ html, body, #root {
   background: var(--accent);
   margin-right: 6px;
   flex-shrink: 0;
-  box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.7);
+  box-shadow: 0 0 0 0 var(--accent-glow);
   animation: olympus-pulse 1.6s ease-out infinite;
 }
 @keyframes olympus-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.6); }
-  70% { box-shadow: 0 0 0 5px rgba(125, 211, 252, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0); }
+  0% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70% { box-shadow: 0 0 0 5px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 /* ── Composer ─────────────────────────────────────────── */
+/* ── Tool-call diff view ───────────────────────────────── */
+.tool-diff {
+  margin: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.diff-line {
+  display: flex;
+  white-space: pre;
+  line-height: 1.5;
+}
+.diff-gutter {
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  background: var(--bg-elev2);
+  user-select: none;
+  border-right: 1px solid var(--border);
+}
+.diff-text { padding: 0 8px; overflow-x: auto; }
+.diff-line.ctx { color: var(--text-dim); }
+.diff-line.add { background: rgba(134,239,172,0.10); }
+.diff-line.add .diff-gutter { color: var(--green); }
+.diff-line.add .diff-text { color: var(--green); }
+.diff-line.del { background: rgba(248,113,113,0.10); }
+.diff-line.del .diff-gutter { color: var(--red); }
+.diff-line.del .diff-text { color: var(--red); }
+.diff-line.hunk { color: var(--accent); background: rgba(125,211,252,0.06); }
+.diff-line.meta { color: var(--text-faint); }
+
 .composer {
   border-top: 1px solid var(--border);
   background: var(--bg-elev);
@@ -999,7 +1091,7 @@ html, body, #root {
 .composer-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(9,11,14,0.3);
+  border: 2px solid var(--spinner-track);
   border-top-color: var(--bg);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
@@ -1027,14 +1119,14 @@ html, body, #root {
   font-weight: 500;
   color: var(--accent);
   background: var(--accent-dim);
-  border: 1px solid rgba(125,211,252,0.3);
+  border: 1px solid var(--accent-border);
   border-radius: var(--radius-sm);
   padding: 6px 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
 .composer-fork-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.composer-fork-btn:hover:not(:disabled) { background: rgba(125,211,252,0.2); }
+.composer-fork-btn:hover:not(:disabled) { background: var(--accent-hover-fill); }
 
 /* ── Search View ─────────────────────────────────────── */
 
@@ -1141,7 +1233,7 @@ html, body, #root {
 }
 
 .hit-highlight {
-  background: rgba(252, 211, 77, 0.2);
+  background: var(--amber-highlight);
   color: var(--amber);
   padding: 0 2px;
   border-radius: 2px;
@@ -1185,10 +1277,10 @@ html, body, #root {
 .badge { font-family: var(--mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 4px; background: var(--bg-elev2); color: var(--text-dim); border: 1px solid var(--border); }
 .badge-todo { color: var(--text-dim); }
 .badge-ready { color: var(--accent); border-color: var(--border-bright); background: var(--accent-dim); }
-.badge-running { color: var(--green); border-color: rgba(134,239,172,.35); background: rgba(134,239,172,.10); }
+.badge-running { color: var(--green); border-color: var(--green-border); background: var(--green-soft); }
 .badge-warning { color: var(--amber); border-color: var(--border-bright); background: var(--accent-dim); }
-.badge-blocked { color: var(--red); border-color: rgba(252,165,165,.35); background: rgba(252,165,165,.10); }
-.badge-failed { color: var(--red); border-color: rgba(252,165,165,.35); background: rgba(252,165,165,.10); }
+.badge-blocked { color: var(--red); border-color: var(--red-border); background: var(--red-soft); }
+.badge-failed { color: var(--red); border-color: var(--red-border); background: var(--red-soft); }
 .badge-done { color: var(--text-faint); }
 
 /* Board */
@@ -1334,9 +1426,9 @@ html, body, #root {
 .workflow-step-node-label { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
 .workflow-step-node-status { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
 .workflow-step-connector { flex: 0 0 22px; height: 1px; background: var(--border-bright); margin: 0 6px; }
-.workflow-step-done { border-color: rgba(134,239,172,.35); background: rgba(134,239,172,.10); }
-.workflow-step-running { border-color: rgba(125,211,252,.35); background: var(--accent-dim); }
-.workflow-step-failed { border-color: rgba(252,165,165,.35); background: rgba(252,165,165,.10); }
+.workflow-step-done { border-color: var(--green-border); background: var(--green-soft); }
+.workflow-step-running { border-color: var(--accent-border-strong); background: var(--accent-dim); }
+.workflow-step-failed { border-color: var(--red-border); background: var(--red-soft); }
 .workflow-step-pending { opacity: .84; }
 .workflow-history { display: flex; flex-direction: column; gap: 10px; }
 .workflow-history-list { display: flex; flex-direction: column; gap: 10px; }

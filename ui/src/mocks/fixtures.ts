@@ -133,7 +133,7 @@ const ASSISTANT_SNIPPETS = [
   "Bytebase is accessible via ~/.hermes/scripts/bb.py. The 401 issue you saw earlier was because the token had expired — I've refreshed it.",
 ];
 
-const TOOL_CALLS: Array<{ name: string; args: string; result: string }> = [
+const TOOL_CALLS: Array<{ name: string; args: unknown; result: string; label?: string }> = [
   {
     name: "terminal",
     args: JSON.stringify({ command: "kubectl get pods -n monitoring" }),
@@ -161,8 +161,19 @@ const TOOL_CALLS: Array<{ name: string; args: string; result: string }> = [
   },
   {
     name: "patch",
-    args: JSON.stringify({ mode: "replace", path: "src/types.ts", old_string: "...", new_string: "..." }),
-    result: "Applied patch to src/types.ts (+12 -3 lines)",
+    args: { mode: "replace", path: "src/types.ts", old_string: "...", new_string: "..." },
+    result: [
+      "--- src/types.ts",
+      "+++ src/types.ts",
+      "@@ -47,4 +47,7 @@",
+      " export interface ToolCall {",
+      "+  id?: string | null;",
+      "   name: string;",
+      "-  args: string;               // JSON string as stored",
+      "+  args: unknown;              // parsed object (backend normalizes)",
+      "+  label?: string | null;",
+      " }",
+    ].join("\n"),
   },
   {
     name: "execute_code",
@@ -239,10 +250,10 @@ function makeMessages(count: number, baseTime: number): Message[] {
       if (i % 3 === 0) {
         msg.reasoning = REASONING_BLOCKS[i % REASONING_BLOCKS.length];
       }
-      // Occasionally add tool calls
-      if (i % 2 === 0) {
-        const tc = TOOL_CALLS[i % TOOL_CALLS.length];
-        msg.toolCalls = [{ name: tc.name, args: JSON.stringify(tc.args), result: tc.result }];
+      // Occasionally add tool calls (on assistant turns, where they belong).
+      if (i % 4 === 1) {
+        const tc = TOOL_CALLS[(i >> 2) % TOOL_CALLS.length];
+        msg.toolCalls = [{ name: tc.name, args: tc.args, result: tc.result, label: tc.label }];
         msg.toolName = tc.name;
       }
     } else if (role === "tool") {

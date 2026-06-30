@@ -807,6 +807,9 @@ async fn post_message(
         let mut stream = runtime.events();
         let mut assistant_text = String::new();
         let mut assistant_msg_id = assistant_seed_id;
+        // Accumulate structured tool calls seen this turn so they're persisted
+        // on the assistant message (and surface in the transcript's tool UI).
+        let mut tool_calls_acc: Vec<serde_json::Value> = Vec::new();
 
         while let Some(event) = stream.next().await {
             match event {
@@ -824,6 +827,11 @@ async fn post_message(
                         message_id: assistant_msg_id,
                         finish_reason: finish_reason.clone(),
                     });
+                    let tool_calls_json = if tool_calls_acc.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::Value::Array(tool_calls_acc.clone()).to_string())
+                    };
                     // Persist the final assistant message AND apply it to the
                     // views so a subsequent GET /messages reflects it.
                     if let Ok(event) = bridge.append_assistant_message(
@@ -831,6 +839,7 @@ async fn post_message(
                         &hermes_id_clone,
                         assistant_msg_id,
                         &assistant_text,
+                        &tool_calls_json,
                         finish_reason.as_deref(),
                     ) {
                         let mut v = views.write().await;
@@ -847,9 +856,18 @@ async fn post_message(
                     });
                     break;
                 }
-                AgentEvent::ToolCall { .. } | AgentEvent::Reasoning(_) => {
-                    // Forward tool calls / reasoning in a future iteration.
-                    // For now, accumulate silently.
+                AgentEvent::ToolCall { name, args, result } => {
+                    // Accumulate so the final assistant message carries its tool
+                    // calls (rendered in the transcript's tool UI).
+                    tool_calls_acc.push(serde_json::json!({
+                        "name": name,
+                        "args": serde_json::from_str::<serde_json::Value>(&args)
+                            .unwrap_or(serde_json::Value::String(args.clone())),
+                        "result": result,
+                    }));
+                }
+                AgentEvent::Reasoning(_) => {
+                    // Accumulate silently for now; reasoning rendering is separate.
                 }
             }
             assistant_msg_id += 1;

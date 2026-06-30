@@ -112,16 +112,94 @@ pub struct MessageDto {
     pub finish_reason: Option<String>,
 }
 
+/// One tool invocation as the UI consumes it. Borrows the Vercel AI SDK tool-
+/// "part" shape (de-facto standard) so the UI can render args/result uniformly
+/// and detect edit/patch-shaped results for a diff view.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallDto {
+    /// Tool invocation id (from the model; may be absent for some providers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Tool/function name, e.g. "terminal", "patch", "web_search".
+    pub name: String,
+    /// Parsed arguments object (already JSON), kept opaque for the UI to render.
+    pub args: serde_json::Value,
+    /// Display label when the provider gives one (title), else the name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Parse the OpenAI-style `tool_calls` JSON string stored on an assistant
+/// message into the UI array. Accepts both the function-call envelope
+/// (`[{"id":..,"function":{"name":..,"arguments":..}}]`) and a bare array of
+/// `{name, args/arguments}` objects. Returns None for empty/unparseable input.
+pub fn parse_tool_calls(raw: &str) -> Option<serde_json::Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let items = match &v {
+        serde_json::Value::Array(a) => a,
+        // A single object — wrap it.
+        serde_json::Value::Object(_) => {
+            return Some(serde_json::Value::Array(vec![normalize_tool_call(&v)]));
+        }
+        _ => return None,
+    };
+    let out: Vec<serde_json::Value> = items.iter().map(normalize_tool_call).collect();
+    if out.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Array(out))
+    }
+}
+
+/// Normalize one raw tool-call item to the UI shape `{id,name,args,label}`.
+fn normalize_tool_call(item: &serde_json::Value) -> serde_json::Value {
+    // function-call envelope: {"function":{"name":..,"arguments":..}}
+    let func = item.get("function");
+    let name = func
+        .and_then(|f| f.get("name"))
+        .or_else(|| item.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("(unknown tool)")
+        .to_string();
+    // arguments may be a JSON string (OpenAI) or an object (Hermes/Anthropic).
+    let args_raw = func
+        .and_then(|f| f.get("arguments"))
+        .or_else(|| item.get("args"))
+        .or_else(|| item.get("arguments"));
+    let args = match args_raw {
+        Some(serde_json::Value::String(s)) => {
+            serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.clone()))
+        }
+        Some(v) => v.clone(),
+        None => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    serde_json::json!({
+        "id": item.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()),
+        "name": name,
+        "args": args,
+        "label": item.get("title").and_then(|t| t.as_str()).map(|s| s.to_string()),
+    })
+}
+
 impl MessageDto {
     pub fn from_row(session_id: &str, row: &MessageRow) -> Self {
+        // Parse the stored tool_calls JSON string into a structured array; fall
+        // back to the raw string as a single-element array if it isn't valid
+        // JSON so the UI never sees malformed/empty data silently.
+        let tool_calls = row.tool_calls.as_deref().and_then(parse_tool_calls);
         Self {
             message_id: row.message_id,
             session_id: session_id.to_string(),
             role: row.role.clone(),
             content: row.content.clone(),
             tool_name: row.tool_name.clone(),
-            tool_calls: None,
-            reasoning: None,
+            tool_calls,
+            reasoning: row.reasoning.clone(),
             timestamp: row.timestamp,
             token_count: row.token_count,
             finish_reason: None,
@@ -219,6 +297,36 @@ mod tests {
             compute_liveness(now - (ACTIVE_WINDOW_SECS + 30.0), now, false),
             "idle"
         );
+    }
+
+    #[test]
+    fn parse_tool_calls_openai_function_envelope() {
+        // The OpenAI shape stored in state.db.
+        let raw = r#"[{"id":"call_1","function":{"name":"terminal","arguments":"{\"command\":\"ls\"}"}}]"#;
+        let v = parse_tool_calls(raw).unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "terminal");
+        // arguments JSON-string is parsed into an object.
+        assert_eq!(arr[0]["args"]["command"], "ls");
+    }
+
+    #[test]
+    fn parse_tool_calls_bare_array() {
+        // Hermes/Anthropic-style: {name, args} objects, args already an object.
+        let raw = r#"[{"name":"patch","args":{"path":"x.rs"}},{"name":"ls"}]"#;
+        let v = parse_tool_calls(raw).unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["args"]["path"], "x.rs");
+        assert_eq!(arr[1]["name"], "ls");
+    }
+
+    #[test]
+    fn parse_tool_calls_empty_and_garbage_is_none() {
+        assert_eq!(parse_tool_calls(""), None);
+        assert_eq!(parse_tool_calls("   "), None);
+        assert_eq!(parse_tool_calls("not json"), None);
     }
 
     fn sample_row() -> SessionRow {

@@ -25,6 +25,12 @@ pub struct MessageRow {
     pub tool_name: Option<String>,
     pub timestamp: f64,
     pub token_count: Option<u64>,
+    /// OpenAI-style tool calls JSON (on assistant messages), e.g.
+    /// `[{"id":...,"function":{"name":..,"arguments":..}}]`. Raw string here;
+    /// parsed to JSON at the DTO boundary.
+    pub tool_calls: Option<String>,
+    /// Assistant reasoning text (where models expose it).
+    pub reasoning: Option<String>,
 }
 
 /// Per-session message cache (bounded sliding window, ADR §11).
@@ -69,6 +75,8 @@ impl MessageView {
                 role,
                 content,
                 tool_name,
+                tool_calls,
+                reasoning,
                 timestamp,
                 token_count,
                 ..
@@ -84,6 +92,8 @@ impl MessageView {
                     tool_name: tool_name.clone(),
                     timestamp: *timestamp,
                     token_count: *token_count,
+                    tool_calls: tool_calls.clone(),
+                    reasoning: reasoning.clone(),
                 });
                 // Evict oldest beyond the window.
                 while window.len() > self.window_size {

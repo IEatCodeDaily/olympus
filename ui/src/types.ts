@@ -45,9 +45,16 @@ export interface Message {
 }
 
 export interface ToolCall {
+  /** Invocation id (provider-issued; may be absent). */
+  id?: string | null;
+  /** Tool/function name, e.g. "terminal", "patch", "web_search". */
   name: string;
-  args: string;               // JSON string as stored
-  result: string | null;      // null while running
+  /** Parsed arguments (already an object; backend normalizes OpenAI's string form). */
+  args: unknown;
+  /** Display label when the provider gives one, else omitted. */
+  label?: string | null;
+  /** Tool result, when known. null/absent while the call is in-flight. */
+  result?: string | null;
 }
 
 export interface SearchHit {
