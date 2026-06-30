@@ -3,6 +3,7 @@ import type {
   Message,
   ToolCall,
   ModelInfo,
+  AgentInfo,
   SearchHit,
   UsageRange,
   UsageResponse,
@@ -316,14 +317,18 @@ export const SESSIONS: Session[] = Array.from({ length: 32 }, (_, i) => {
 // ── Models ─────────────────────────────────────────────
 
 export const MODELS_LIST: ModelInfo[] = [
-  { provider: "zai", model: "glm-5v-turbo", displayName: "GLM-5V Turbo" },
-  { provider: "anthropic", model: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4" },
-  { provider: "openai", model: "gpt-5.2", displayName: "GPT-5.2" },
-  { provider: "google", model: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro" },
-  { provider: "deepseek", model: "deepseek-r1-0528", displayName: "DeepSeek R1" },
-  { provider: "meta", model: "llama-4-maverick", displayName: "Llama 4 Maverick" },
-  { provider: "zai", model: "glm-4.6", displayName: "GLM 4.6" },
-  { provider: "mistral", model: "mistral-large", displayName: "Mistral Large" },
+  { id: "claude-opus-4-8", provider: "anthropic" },
+  { id: "claude-sonnet-4-6", provider: "anthropic" },
+  { id: "gpt-5.4", provider: "openai-codex" },
+  { id: "gpt-5.5", provider: "openai-codex" },
+  { id: "glm-5.2", provider: "zai" },
+];
+
+export const AGENTS_LIST: AgentInfo[] = [
+  { id: "default", provider: "anthropic", model: "claude-opus-4-8", isDefault: true },
+  { id: "coding-agent", provider: "openai-codex", model: "gpt-5.4", isDefault: false },
+  { id: "gpt55", provider: "openai-codex", model: "gpt-5.5", isDefault: false },
+  { id: "tester", provider: "anthropic", model: "claude-sonnet-4-6", isDefault: false },
 ];
 
 export const USAGE_BY_RANGE: Record<UsageRange, UsageResponse> = {

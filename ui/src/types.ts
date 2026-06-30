@@ -67,9 +67,24 @@ export interface SearchHit {
 }
 
 export interface ModelInfo {
-  provider: string;
-  model: string;
-  displayName: string;
+  /** Model id, e.g. "claude-opus-4-8", "gpt-5.4". */
+  id: string;
+  /** Provider the model was seen under, e.g. "anthropic", "openai-codex". */
+  provider: string | null;
+}
+
+/** A drivable Hermes agent (profile) with its configured provider + model. */
+export interface AgentInfo {
+  /** Profile id passed to `hermes -p <id> acp` ("default" = root profile). */
+  id: string;
+  provider: string | null;
+  model: string | null;
+  /** True for the implicit root profile the server runs as by default. */
+  isDefault: boolean;
+}
+
+export interface AgentsResponse {
+  agents: AgentInfo[];
 }
 
 export type ServerFrame =

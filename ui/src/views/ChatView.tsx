@@ -6,8 +6,8 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useChat } from "../hooks/useChat";
 import { useSessions } from "../hooks/useSessions";
 import { formatTime, SOURCE_META, formatTokens } from "../lib/format";
-import { forkSession, sendMessage, updateSession } from "../api";
-import type { Message, Session, ToolCall } from "../types";
+import { forkSession, sendMessage, updateSession, fetchAgents } from "../api";
+import type { Message, Session, ToolCall, AgentInfo } from "../types";
 
 interface Props {
   sessionId: string;
@@ -16,11 +16,23 @@ interface Props {
 }
 
 export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
-  const { messages, loading, error, streamingText, loadOlder, hasOlder } = useChat(sessionId);
+  const { messages, loading, error, streamingText, streamingIds, loadOlder, hasOlder } = useChat(sessionId);
   const sessionMeta = useSessions({});
   const session = sessionMeta.sessions.find((s) => s.id === sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoFollow, setAutoFollow] = useState(true);
+
+  // Show the "thinking…" indicator when a turn is in-flight but no assistant
+  // text is streaming yet: the session is active (liveness), nothing is
+  // currently streaming, and the most recent message is the user's. This bridges
+  // the silent gap between pressing send and the first token (can be 10-120s on
+  // a cold spawn or a rate-limited provider).
+  const lastMsg = messages[messages.length - 1];
+  const showThinking =
+    session?.liveness === "active" &&
+    streamingIds.size === 0 &&
+    !!lastMsg &&
+    lastMsg.role === "user";
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -93,6 +105,23 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
         {messages.map((msg) => (
           <MessageBubble key={msg.messageId} message={msg} streamingText={streamingText[msg.messageId]} />
         ))}
+        {/* Waiting indicator: the agent is working but hasn't started streaming
+            text yet. Shows after a send (session active) when the last message
+            is the user's and nothing is currently streaming. This is the
+            difference between "feels frozen" and "I can see it's thinking". */}
+        {showThinking && (
+          <div className="msg msg-assistant">
+            <div className="msg-gutter"><span className="role-badge role-ai">AI</span></div>
+            <div className="msg-body">
+              <div className="thinking-indicator" aria-label="Agent is working">
+                <span className="thinking-dot" />
+                <span className="thinking-dot" />
+                <span className="thinking-dot" />
+                <span className="thinking-label">thinking…</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Jump to latest */}
@@ -120,16 +149,31 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
   );
 }
 
-// Known agent profiles operators can assign (Hermes profiles). Kept small and
-// explicit for the MVP; a future /api/agents endpoint can populate this live.
-const AGENT_OPTIONS = [
-  { value: "", label: "Default agent" },
-  { value: "coding-agent", label: "coding-agent" },
-  { value: "glm52", label: "glm52" },
-  { value: "gpt55", label: "gpt55" },
-  { value: "tester", label: "tester" },
-  { value: "design-lead", label: "design-lead" },
-];
+// Live agent list from the backend (/api/agents → real Hermes profiles with
+// their configured provider + model). Falls back to a minimal default-only list
+// if the fetch fails so the picker never renders empty.
+function useAgents(): AgentInfo[] {
+  const [agents, setAgents] = useState<AgentInfo[]>([
+    { id: "", provider: null, model: null, isDefault: true },
+  ]);
+  useEffect(() => {
+    let alive = true;
+    fetchAgents()
+      .then((r) => {
+        if (!alive) return;
+        // Map the root "default" agent to value "" (the no-agent draft default).
+        const list = r.agents.map((a) =>
+          a.isDefault ? { ...a, id: "" } : a
+        );
+        setAgents(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return agents;
+}
 
 // ── Composer ───────────────────────────────────────────
 function Composer({
@@ -156,6 +200,7 @@ function Composer({
   const [forking, setForking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const agents = useAgents();
 
   // The runtime is live once a Hermes id has been captured (after first send).
   // Before that the agent/model are still re-bindable.
@@ -246,11 +291,26 @@ function Composer({
             value={agent ?? ""}
             disabled={bound}
             title={bound ? "Agent is locked once the session is live" : "Pick the agent that drives this session"}
-            onChange={(e) => assign({ agent: e.target.value })}
+            onChange={(e) => {
+              // When picking an agent, also adopt its default model so the
+              // Model field reflects what will actually run (operator can override).
+              const picked = agents.find((a) => a.id === e.target.value);
+              assign({ agent: e.target.value, model: picked?.model ?? undefined });
+            }}
           >
-            {AGENT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
+            {agents.map((a) => {
+              const label = a.id === "" ? "Default agent" : a.id;
+              const suffix =
+                a.provider || a.model
+                  ? ` — ${[a.provider, a.model].filter(Boolean).join(" / ")}`
+                  : "";
+              return (
+                <option key={a.id || "__default"} value={a.id}>
+                  {label}
+                  {suffix}
+                </option>
+              );
+            })}
           </select>
         </label>
         <label className="composer-assign">
@@ -259,13 +319,10 @@ function Composer({
             className="composer-assign-input"
             type="text"
             placeholder="default"
-            defaultValue={model ?? ""}
+            value={model ?? ""}
             disabled={bound}
             title={bound ? "Model is locked once the session is live" : "Optional model override (e.g. glm-5.2)"}
-            onBlur={(e) => {
-              const v = e.target.value.trim();
-              if (v && v !== (model ?? "")) assign({ model: v });
-            }}
+            onChange={(e) => assign({ model: e.target.value })}
           />
         </label>
         {bound && <span className="composer-assign-locked">runtime live · binding locked</span>}

@@ -3,6 +3,7 @@ import {
   SESSIONS,
   MESSAGES_BY_SESSION,
   MODELS_LIST,
+  AGENTS_LIST,
   USAGE_BY_RANGE,
   WORKFLOWS,
   WORKFLOW_RUNS,
@@ -14,6 +15,7 @@ import type {
   MessagesResponse,
   SearchResponse,
   ModelsResponse,
+  AgentsResponse,
   HealthResponse,
   WorkflowsResponse,
   ServerFrame,
@@ -218,6 +220,11 @@ export const handlers = [
   // GET /api/models
   http.get("http://127.0.0.1:8787/api/models", () => {
     return HttpResponse.json<ModelsResponse>({ models: MODELS_LIST });
+  }),
+
+  // GET /api/agents
+  http.get("http://127.0.0.1:8787/api/agents", () => {
+    return HttpResponse.json<AgentsResponse>({ agents: AGENTS_LIST });
   }),
 
   // GET /api/usage

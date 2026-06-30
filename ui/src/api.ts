@@ -18,6 +18,7 @@ import type {
   MessagesResponse,
   SearchResponse,
   ModelsResponse,
+  AgentsResponse,
   HealthResponse,
 } from "./types";
 
@@ -108,6 +109,12 @@ export async function fetchModels(): Promise<ModelsResponse> {
   const res = await fetch(`${BASE}/api/models`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`models ${res.status}`);
   return res.json() as Promise<ModelsResponse>;
+}
+
+export async function fetchAgents(): Promise<AgentsResponse> {
+  const res = await fetch(`${BASE}/api/agents`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`agents ${res.status}`);
+  return res.json() as Promise<AgentsResponse>;
 }
 
 export async function healthCheck(): Promise<HealthResponse> {

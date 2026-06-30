@@ -4,6 +4,7 @@
 //! router, shared state, the auth middleware, and the read-only REST handlers
 //! that back the UI's session list, transcript view, and search.
 
+pub mod agents;
 pub mod bridge_mgr;
 pub mod dto;
 pub mod ws;
@@ -91,6 +92,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/search", get(search))
         .route("/api/models", get(models))
+        .route("/api/agents", get(list_agents_handler))
         .route("/api/cards", get(list_cards).post(create_card))
         .route("/api/cards/{id}", get(get_card))
         .route("/api/cards/{id}/assign", post(assign_card))
@@ -350,9 +352,14 @@ async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> 
 }
 
 async fn models(State(_state): State<AppState>) -> impl IntoResponse {
-    // MVP: model discovery from Hermes config is post-MVP; return an empty list
-    // so the UI's model picker degrades gracefully.
-    Json(json!({ "models": [] }))
+    // Models discovered from the configured Hermes agents (profiles), deduped.
+    Json(json!({ "models": agents::list_models() }))
+}
+
+/// GET /api/agents — list the drivable Hermes agents (profiles) with their
+/// configured provider + model, so the UI can offer a real agent/model picker.
+async fn list_agents_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    Json(json!({ "agents": agents::list_agents() }))
 }
 
 #[derive(Debug, Deserialize)]
