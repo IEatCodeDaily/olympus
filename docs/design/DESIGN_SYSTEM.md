@@ -268,7 +268,7 @@ per-component overrides, so one token swap reflows the whole cockpit.
 **Don't**
 - Hardcode a hex or `rgba()` in a component or in `index.css` outside a theme block. *(Several literals exist today — see §11 debts.)*
 - Introduce Inter, Roboto, system-default sans for content, or any Material component.
-- Add purple/violet or gradient accents. *(The reasoning block currently uses a `rgba(240,171,252)` purple — a drift to fix.)*
+- Add purple/violet or gradient accents. *(Anchor honored — the former `rgba(240,171,252)` purple reasoning wash was removed 2026-06-30.)*
 - Use drop shadows for decoration, or `box-shadow` where a surface/border token reads cleaner.
 - Put primary information in `--text-faint`.
 - Add a one-off spacing/size value when a scale step fits.
@@ -291,7 +291,10 @@ the system level, verifies, and logs it in §12.
    - dozens of `rgba(125,211,252,…)` / `rgba(134,239,172,…)` / `rgba(252,211,77,…)`
      accent/green/amber alpha literals (badges, washes, role tints) that should be
      `--accent-dim`-style tokens or theme-defined alpha tokens.
-   - `.reasoning-content` purple `rgba(240,171,252,…)` — also violates the no-purple anchor.
+   - ~~`.reasoning-content` purple `rgba(240,171,252,…)`~~ **DONE (2026-06-30)** —
+     the only violation of the no-purple *anchor*. Now neutral `var(--bg-elev2)`
+     surface + `var(--border-bright)` left rule; reads as a recessive editorial
+     aside and re-themes in all three themes.
 2. ~~**No keyboard focus ring** (a11y, §9).~~ **DONE (2026-06-30).** Added a
    `--ring` token (derives from `--accent`) + a shared
    `:where(…):focus-visible` rule across all interactive elements.
@@ -312,6 +315,7 @@ the system level, verifies, and logs it in §12.
 
 | Date | Change | Why | Files |
 |---|---|---|---|
+| 2026-06-30 | **Removed the purple reasoning wash (closed the only *anchor* violation in debt #1).** `.reasoning-content` was the lone control breaking the core "no purple gradients" design anchor — a hardcoded `rgba(240,171,252,…)` violet background + left border that read as foreign in every theme (and stayed purple even in amber-crt, where nothing else is). Repointed it to neutral system tokens: `var(--bg-elev2)` surface + `var(--border-bright)` left rule. Reasoning now reads as what it is — a recessive, italic editorial aside — and re-themes correctly across midnight/daylight/amber-crt. Updated §10 Don't and debt #1. Gate green (typecheck + build exit 0). | The purple was the single most visible breach of the stated personality ("NOT generic AI slop, no purple gradients") and the only off-anchor color left in the UI. Two neutral token references kill it system-wide, reversibly, with zero layout change — higher design leverage than chipping at the remaining same-hue accent/green/amber alpha literals, which are on-anchor and merely need tokenizing. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Theme-correct primary CTAs (debt #1, top offenders).** Added two semantic tokens — `--on-accent` (text/icon color on an accent fill) and `--accent-hover` (hover fill for accent-filled CTAs) — to all three `[data-theme]` blocks, then repointed `.new-chat-btn` (was hardcoded `#22d3ee` bg / `#0a0e14` text / `#67e8f9` hover) and `.composer-send:hover` (was `#a5e0ff`) at them. Updated §2 token table + debt #1. Verified in browser: New Chat renders sky-blue+dark in midnight and deep-sky-blue+white in daylight (previously stuck bright-cyan with weak contrast in light/amber themes). | The two primary CTAs were the only fully off-token, non-re-theming controls left — they stayed midnight-cyan in every theme, breaking the theme contract and failing contrast in daylight/amber-crt. Two tokens close the largest visible part of debt #1 system-wide, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-30 | **Keyboard focus ring (closed top a11y debt #2).** Added `--ring` token (`var(--accent)`, re-themes for free) + a single shared `:where(button, a, select, textarea, summary, [role="button"], [tabindex]):focus-visible` rule painting a `2px var(--ring)` outline (offset 2px). `:focus-visible` fires for keyboard/programmatic focus only, so pointer users are undisturbed and no per-component focus styling is needed. Wrapped inputs keep their `:focus-within` border. Updated §2 token table, §6 state table + focus note, §9, and the debt list (also reconciled #3/#4: `--space-*` scale + density toggle already shipped). | Every interactive control was keyboard-focusable but showed no focus indicator — the #1 accessibility gap, failing WCAG 2.4.7. One token + one rule fixes it system-wide, theme-correctly and reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
 | 2026-06-29 | **Created the design system.** Documented all 3 themes + full semantic token table, type scale, spacing rhythm, radius/elevation stance, component inventory with required states, motion table, density target, a11y posture, do/don't, and a ranked debt backlog grounded in the live `index.css` + `shell.tsx`. | First run: establish the canonical system every view worker builds against, and make the existing token-rule violations visible as a fixable backlog. | `docs/design/DESIGN_SYSTEM.md` (new), `docs/design/VISION.md` (new) |
