@@ -165,6 +165,9 @@ function SessionRowContent({ session }: { session: Session }) {
       <div className="row-source" style={{ background: meta.color }} title={meta.label} />
       <div className="row-body">
         <div className="row-line1">
+          {session.liveness === "active" && (
+            <span className="row-live-dot" title="Active — a turn is in-flight or recent activity" />
+          )}
           <span className="row-title">{title}</span>
           {session.managed && <span className="row-managed" title="Olympus-managed">M</span>}
           {session.forkedFrom && <span className="row-fork" title={`Forked from ${session.forkedFrom}`}>fork</span>}

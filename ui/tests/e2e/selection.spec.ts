@@ -159,7 +159,13 @@ test.describe("Session selection and chat-view switching", () => {
     await expect(forkButton).toBeEnabled();
     await forkButton.click();
 
-    await expect(page.locator(".chat-managed-badge")).toHaveText("live");
+    // A forked session is managed (steerable): the composer input is present,
+    // and it shows a managed status badge — "running" (active) when freshly
+    // forked within the recency window, or "idle" otherwise.
+    await expect(page.locator(".composer-input")).toBeVisible();
+    await expect(
+      page.locator(".chat-live-badge, .chat-managed-badge")
+    ).toBeVisible();
     const forkedId = await chatId(page);
     expect(forkedId).not.toBe(sourceId);
     await expect(page.locator(".chat-view")).toHaveAttribute("data-session-id", forkedId);

@@ -860,6 +860,47 @@ html, body, #root {
   padding: 1px 6px;
   border-radius: 4px;
 }
+/* Active ("running") badge — managed session with a turn in-flight / recent activity. */
+.chat-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-family: var(--mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: rgba(125, 211, 252, 0.12);
+  border: 1px solid rgba(125, 211, 252, 0.4);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.chat-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.7);
+  animation: olympus-pulse 1.6s ease-out infinite;
+}
+/* Active pulse dot in the session list. */
+.row-live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 6px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.7);
+  animation: olympus-pulse 1.6s ease-out infinite;
+}
+@keyframes olympus-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.6); }
+  70% { box-shadow: 0 0 0 5px rgba(125, 211, 252, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0); }
+}
 
 /* ── Composer ─────────────────────────────────────────── */
 .composer {

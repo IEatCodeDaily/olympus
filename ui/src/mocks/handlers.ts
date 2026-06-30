@@ -99,6 +99,7 @@ export const handlers = [
       managed: true,
       agent: body.agent ?? null,
       node: body.node ?? null,
+      liveness: "active" as const,
     };
     SESSIONS.unshift(draft);
     MESSAGES_BY_SESSION[id] = [];
@@ -183,6 +184,7 @@ export const handlers = [
       archived: false,
       startedAt: now,
       lastActivity: now,
+      liveness: "active" as const,
     };
     MESSAGES_BY_SESSION[id] = (MESSAGES_BY_SESSION[source.id] ?? []).map((message) => ({
       ...message,

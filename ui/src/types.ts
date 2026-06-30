@@ -25,6 +25,7 @@ export interface Session {
   managed: boolean;           // true = Olympus-driven (steerable); false = observed/read-only
   agent: string | null;       // Hermes profile bound to this session (assignable)
   node: string | null;        // node the runtime runs on ("local" for now)
+  liveness?: "active" | "idle"; // derived: a turn is in-flight OR recent activity (honest, not a process probe)
 }
 
 export type SessionSource =

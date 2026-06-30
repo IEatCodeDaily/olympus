@@ -9,7 +9,7 @@
 //! mock factory returns a fake runtime so the server can be exercised without
 //! the real binary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -58,6 +58,9 @@ pub struct BridgeManager {
     factory: RuntimeFactory,
     /// Active runtimes keyed by Olympus session id.
     runtimes: RwLock<HashMap<String, Arc<dyn AgentRuntime>>>,
+    /// Sessions with a turn currently in-flight (prompt sent, awaiting Done).
+    /// Authoritative liveness signal for Olympus-managed sessions.
+    in_flight: RwLock<HashSet<String>>,
 }
 
 impl BridgeManager {
@@ -67,7 +70,23 @@ impl BridgeManager {
             log,
             factory,
             runtimes: RwLock::new(HashMap::new()),
+            in_flight: RwLock::new(HashSet::new()),
         }
+    }
+
+    /// Mark a session as having a turn in-flight (called when a prompt is sent).
+    pub async fn mark_in_flight(&self, session_id: &str) {
+        self.in_flight.write().await.insert(session_id.to_string());
+    }
+
+    /// Clear the in-flight flag (called when the turn's Done/Error arrives).
+    pub async fn clear_in_flight(&self, session_id: &str) {
+        self.in_flight.write().await.remove(session_id);
+    }
+
+    /// Snapshot of all session ids with a turn currently in-flight.
+    pub async fn in_flight_set(&self) -> HashSet<String> {
+        self.in_flight.read().await.clone()
     }
 
     /// Create a new managed session **optimistically** — no agent runtime is

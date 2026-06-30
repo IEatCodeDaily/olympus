@@ -69,7 +69,13 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
           )}
           {session?.model && <span className="chat-model-pill">{session.model}</span>}
           {managed ? (
-            <span className="chat-managed-badge" title="Olympus-managed — you can steer this session">live</span>
+            session?.liveness === "active" ? (
+              <span className="chat-live-badge" title="Active — a turn is in-flight or recent activity">
+                <span className="chat-live-dot" />running
+              </span>
+            ) : (
+              <span className="chat-managed-badge" title="Olympus-managed — idle, ready for your next message">idle</span>
+            )
           ) : (
             <span className="chat-observed-badge" title="Observed session — read-only. Fork to continue it from Olympus.">observed</span>
           )}

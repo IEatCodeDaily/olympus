@@ -215,6 +215,16 @@ async fn list_sessions(
         })
         .map(SessionDto::from_row)
         .collect();
+    drop(views);
+
+    // Stamp derived liveness: in-flight (bridge-authoritative) OR recent activity.
+    let in_flight = state.bridge.in_flight_set().await;
+    let now = now_epoch();
+    for r in rows.iter_mut() {
+        r.liveness =
+            crate::server::dto::compute_liveness(r.last_activity, now, in_flight.contains(&r.id))
+                .to_string();
+    }
 
     // Apply the requested sort (all descending). Default = lastActivity.
     // The view returns started_at-desc order; we re-sort here so the UI's
@@ -251,9 +261,28 @@ async fn list_sessions(
 async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let views = state.views.read().await;
     match views.sessions.get(&id) {
-        Some(row) => Json(SessionDto::from_row(row)).into_response(),
+        Some(row) => {
+            let mut dto = SessionDto::from_row(row);
+            drop(views);
+            let in_flight = state.bridge.in_flight_set().await;
+            dto.liveness = crate::server::dto::compute_liveness(
+                dto.last_activity,
+                now_epoch(),
+                in_flight.contains(&dto.id),
+            )
+            .to_string();
+            Json(dto).into_response()
+        }
         None => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
+}
+
+/// Current epoch seconds as f64 (for liveness recency math).
+fn now_epoch() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 async fn get_messages(
@@ -418,8 +447,15 @@ async fn create_session(
                         managed: true,
                         agent: body.agent.clone(),
                         node: body.node.clone(),
+                        liveness: "active".to_string(),
                     })
             };
+
+            // A freshly-created draft is active (within the recency window).
+            let mut dto = dto;
+            dto.liveness =
+                crate::server::dto::compute_liveness(dto.last_activity, now_epoch(), false)
+                    .to_string();
 
             let _ = state.deltas.send(ServerFrame::SessionAdded {
                 session: dto.clone(),
@@ -626,6 +662,7 @@ async fn fork_session(
                 managed: true,
                 agent: None,
                 node: None,
+                liveness: "active".to_string(),
             },
         }
     };
@@ -755,6 +792,9 @@ async fn post_message(
             .into_response();
     }
 
+    // Mark the turn in-flight (authoritative liveness signal) until Done/Error.
+    state.bridge.mark_in_flight(&id).await;
+
     // Spawn a task to drain the runtime event stream and broadcast WS frames.
     let session_id = id.clone();
     let deltas = state.deltas.clone();
@@ -814,6 +854,9 @@ async fn post_message(
             }
             assistant_msg_id += 1;
         }
+        // Turn finished (Done, Error, or stream closed): clear the in-flight flag
+        // so liveness drops back to idle.
+        bridge.clear_in_flight(&session_id).await;
     });
 
     (StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response()

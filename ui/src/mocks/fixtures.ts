@@ -293,6 +293,8 @@ export const SESSIONS: Session[] = Array.from({ length: 32 }, (_, i) => {
     managed: source === "acp" || (i % 8 === 0 && i < 16),
     agent: source === "acp" ? "coding-agent" : null,
     node: source === "acp" ? "local" : null,
+    // First few sessions are "active" so the mock UI shows the live dot.
+    liveness: i < 3 ? ("active" as const) : ("idle" as const),
   };
 
   // Store messages keyed by session

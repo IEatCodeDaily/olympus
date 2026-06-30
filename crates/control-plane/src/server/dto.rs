@@ -37,6 +37,28 @@ pub struct SessionDto {
     pub agent: Option<String>,
     /// Node the session's runtime runs on ("local" for now).
     pub node: Option<String>,
+    /// Derived liveness: "active" (a turn is in-flight, or activity within the
+    /// recency window) or "idle". Honest by construction — for observed sessions
+    /// this reflects *recent activity*, NOT a confirmed live process (a crashed
+    /// agent that never wrote `ended_at` looks idle, not dead). Set by the
+    /// handler, which has `now` + the bridge in-flight set; `from_row` defaults
+    /// it to "idle".
+    pub liveness: String,
+}
+
+/// Recency window (seconds) within which a session with no in-flight turn is
+/// still considered "active" because something wrote to it recently.
+pub const ACTIVE_WINDOW_SECS: f64 = 90.0;
+
+/// Derive liveness from the authoritative in-flight flag (a turn is actively
+/// streaming) and activity recency. `in_flight` short-circuits to active; this
+/// is the accurate signal for Olympus-managed sessions the bridge drives.
+pub fn compute_liveness(last_activity: f64, now: f64, in_flight: bool) -> &'static str {
+    if in_flight || (now - last_activity) <= ACTIVE_WINDOW_SECS {
+        "active"
+    } else {
+        "idle"
+    }
 }
 
 impl SessionDto {
@@ -68,6 +90,7 @@ impl SessionDto {
             managed: row.source == "acp" || row.source == "olympus",
             agent: row.agent.clone(),
             node: row.node.clone(),
+            liveness: "idle".to_string(),
         }
     }
 }
@@ -174,6 +197,29 @@ impl CardDto {
 mod tests {
     use super::*;
     use crate::views::SessionRow;
+
+    #[test]
+    fn liveness_in_flight_is_active_even_when_stale() {
+        // A turn streaming right now is active regardless of last-activity age.
+        assert_eq!(compute_liveness(0.0, 1_000_000.0, true), "active");
+    }
+
+    #[test]
+    fn liveness_recent_activity_is_active() {
+        let now = 1_000_000.0;
+        assert_eq!(compute_liveness(now - 10.0, now, false), "active");
+    }
+
+    #[test]
+    fn liveness_stale_no_inflight_is_idle() {
+        let now = 1_000_000.0;
+        // Older than the recency window and nothing in-flight → idle (honest:
+        // could be walked-away or crashed; we don't claim "dead").
+        assert_eq!(
+            compute_liveness(now - (ACTIVE_WINDOW_SECS + 30.0), now, false),
+            "idle"
+        );
+    }
 
     fn sample_row() -> SessionRow {
         SessionRow {
