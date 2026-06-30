@@ -722,56 +722,10 @@ async fn post_message(
             .into_response();
     }
 
-    // Lazily ensure a runtime exists: spawn (or resume) the agent on the first
-    // send. This is where the ACP handshake cost lands — NOT on session create.
-    // A draft (empty hermes_id) creates a fresh Hermes session; a session with a
-    // known hermes_id (e.g. after a server restart) resumes it.
-    let spec = crate::server::bridge_mgr::RuntimeSpec { agent, node };
-    let resume = if hermes_id.is_empty() {
-        None
-    } else {
-        Some(hermes_id.as_str())
-    };
-    let (runtime, captured_hermes_id) = match state.bridge.ensure_runtime(&id, &spec, resume).await
-    {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::error!(error = %e, session = %id, "ensure_runtime failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "bridge_error",
-                    "message": format!("Failed to start agent runtime: {e}"),
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    // Backfill the real Hermes id onto the session row the first time we capture
-    // it (draft → live), so restarts can resume and the UI shows the binding.
-    let hermes_id = if hermes_id.is_empty() && !captured_hermes_id.is_empty() {
-        let _ = state.bridge.backfill_hermes_id(&id, &captured_hermes_id);
-        {
-            let mut views = state.views.write().await;
-            views.apply(&crate::event::Event::SessionUpdated {
-                session_id: id.clone(),
-                title: None,
-                model: None,
-                archived: None,
-                message_count: None,
-                agent: None,
-                node: None,
-                hermes_id: Some(captured_hermes_id.clone()),
-            });
-        }
-        captured_hermes_id
-    } else {
-        hermes_id
-    };
-
-    // Record the user message in the log AND apply it to the views so reads
-    // reflect it immediately (the streaming reply is applied the same way).
+    // Record the user message in the log + views + broadcast IMMEDIATELY, before
+    // any (potentially slow) runtime spawn — so the UI shows the user bubble and
+    // the POST returns fast. `hermes_id` may be empty here for a fresh draft; the
+    // user message carries the current (possibly empty) hermes id and is fine.
     let next_id = {
         let views = state.views.read().await;
         views.messages.recent(&id, usize::MAX).len() as u64
@@ -785,7 +739,6 @@ async fn post_message(
                 let mut views = state.views.write().await;
                 views.apply(&event);
             }
-            // Broadcast so the user bubble appears immediately (no refetch).
             let dto = crate::server::dto::MessageDto {
                 message_id: next_id,
                 session_id: id.clone(),
@@ -806,31 +759,86 @@ async fn post_message(
         Err(e) => tracing::warn!(error = %e, "failed to append user message"),
     }
 
-    // Send the prompt.
-    let cmd = AgentCommand::Prompt {
-        text: body.text,
-        model: body.model,
-    };
-    if let Err(e) = runtime.send(cmd).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "send_failed", "message": format!("{e}") })),
-        )
-            .into_response();
-    }
-
-    // Mark the turn in-flight (authoritative liveness signal) until Done/Error.
+    // Mark in-flight up front so liveness shows "active" the instant the POST
+    // returns (the runtime spawn + turn happen in the background task below).
     state.bridge.mark_in_flight(&id).await;
 
-    // Spawn a task to drain the runtime event stream and broadcast WS frames.
+    // Everything expensive — lazily spawning/resuming the agent runtime, sending
+    // the prompt, and draining the event stream — happens OFF the request path
+    // so POST returns ~instantly (the ACP handshake can take seconds). The UI
+    // shows the user message + "active" immediately and the reply streams over WS.
     let session_id = id.clone();
     let deltas = state.deltas.clone();
     let bridge = state.bridge.clone();
     let views = state.views.clone();
-    let hermes_id_clone = hermes_id.clone();
+    let spec = crate::server::bridge_mgr::RuntimeSpec { agent, node };
+    let resume_hermes = if hermes_id.is_empty() {
+        None
+    } else {
+        Some(hermes_id.clone())
+    };
+    let prompt_text = body.text.clone();
+    let prompt_model = body.model.clone();
     let assistant_seed_id = next_id + 1;
     tokio::spawn(async move {
         use futures::stream::StreamExt;
+
+        // Lazily ensure a runtime (spawn for a fresh draft, resume by hermes_id
+        // after a restart). This is the slow part — now off the request path.
+        let (runtime, captured_hermes_id) = match bridge
+            .ensure_runtime(&session_id, &spec, resume_hermes.as_deref())
+            .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
+                let _ = deltas.send(ServerFrame::MessageDone {
+                    session_id: session_id.clone(),
+                    message_id: assistant_seed_id,
+                    finish_reason: Some(format!("error: failed to start agent: {e}")),
+                });
+                bridge.clear_in_flight(&session_id).await;
+                return;
+            }
+        };
+
+        // Backfill the captured Hermes id onto the session row (draft → live).
+        let hermes_id_clone = if resume_hermes.is_none() && !captured_hermes_id.is_empty() {
+            let _ = bridge.backfill_hermes_id(&session_id, &captured_hermes_id);
+            let mut v = views.write().await;
+            v.apply(&crate::event::Event::SessionUpdated {
+                session_id: session_id.clone(),
+                title: None,
+                model: None,
+                archived: None,
+                message_count: None,
+                agent: None,
+                node: None,
+                hermes_id: Some(captured_hermes_id.clone()),
+            });
+            captured_hermes_id
+        } else {
+            resume_hermes.unwrap_or(captured_hermes_id)
+        };
+
+        // Send the prompt.
+        if let Err(e) = runtime
+            .send(AgentCommand::Prompt {
+                text: prompt_text,
+                model: prompt_model,
+            })
+            .await
+        {
+            tracing::error!(error = %e, session = %session_id, "prompt send failed");
+            let _ = deltas.send(ServerFrame::MessageDone {
+                session_id: session_id.clone(),
+                message_id: assistant_seed_id,
+                finish_reason: Some(format!("error: {e}")),
+            });
+            bridge.clear_in_flight(&session_id).await;
+            return;
+        }
+
         let mut stream = runtime.events();
         let mut assistant_text = String::new();
         let mut assistant_msg_id = assistant_seed_id;
