@@ -181,8 +181,16 @@ Two typeface families:
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `--radius` | 6px | Default radius: cards, panels, inputs, buttons, search boxes |
-| `--radius-sm` | 4px | Small radius: badges, pills, toggles, small buttons |
+| `--radius-xs` | 3px | Tiny: mono tags (managed/fork), inline-code, search-hit highlight, skeleton rails, theme swatch |
+| `--radius-sm` | 4px | Small: badges, pills-in-cards, usage/slot bars, scrollbar thumb, small buttons |
+| `--radius` | 6px | Default: cards, panels, inputs, buttons, search boxes, composer selects |
+| `--radius-full` | 999px | Fully-round: source pills, filter chips, workflow/node chips, jump-latest, source badges |
+
+A `50%` literal is used for equal-sided **circles** (status dots, live dots, brand-mark-adjacent dots) — that's a geometric primitive, not an arbitrary radius, so it stays inline.
+
+**Rule:** never hardcode a raw radius (`3px`, `20px`, …) in a rule — pick the
+nearest scale token. Pill-shaped elements use `--radius-full`, not a large px
+value; it renders identically at any height and reads as intentional.
 
 **Elevation model:** No drop shadows. Depth is communicated through:
 1. Background layering (`bg` → `bg-elev` → `bg-elev2`)
@@ -445,6 +453,32 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Tokenize the radius scale (2 tokens → 4; kill raw radii)
+
+- **Problem:** §5 claimed a 2-token radius scale (`--radius`, `--radius-sm`),
+  but the CSS hardcoded six raw radius values — `2px`, `3px`, `4px`, `6px`,
+  `20px`, `999px` — across ~30 rules, none tokenized. Corners were unenforceable
+  and drifting (two nearly-identical pill radii `20px`/`999px`; two stray `2px`).
+- **Fix:** promoted the scale to **4 tokens** in `index.css`:
+  `--radius-xs: 3px` (mono tags, inline-code, hit-highlight, skeleton rails,
+  swatch), `--radius-sm: 4px` (badges, bars, small controls), `--radius: 6px`
+  (cards/inputs/panels — unchanged default), `--radius-full: 999px` (all
+  pill/round-chip shapes). Replaced every raw radius with the nearest token
+  via 6 `replace_all` passes (~30 sites). `50%` circle literals (status/live
+  dots) left inline as an intentional geometric primitive.
+- **Behavior:** the only pixel deltas are two sub-perceptual `2px→3px` bumps on
+  a skeleton rail and search-hit highlight; `20px→999px` renders identically on
+  all ≤40px-tall pills (radius already caps at half-height). No color, no
+  layout, no view logic touched.
+- Documented the full 4-token scale in §5 with per-token usage + a "never
+  hardcode a raw radius; pills use `--radius-full`" rule to prevent recurrence.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0; browser
+  screenshot in **both midnight and daylight** (Sessions + Board) — pills fully
+  round, cards/inputs subtle-cornered, zero regressions. Fully reversible.
+- **Noted for view owner (not touched):** `ChatView.tsx:512` passes an inline
+  `borderRadius: "6px"` to a syntax-highlighter prop — should become
+  `var(--radius)` when that view is next edited.
 
 ### 2026-07-01 — Fix amber-semantic fills mis-tinted with cyan accent (D5 + badge-warning)
 

@@ -122,8 +122,14 @@
 :root {
   --mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
   --sans: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
-  --radius: 6px;
-  --radius-sm: 4px;
+  /* Radius scale (§5). Theme-agnostic (corner geometry doesn't change per
+     theme). Four tiers + a 50% circle primitive for equal-sided dots.
+     --radius-full uses 999px so pill ends are fully round at any height;
+     it renders identically to the former 20px on all ≤40px-tall elements. */
+  --radius-xs: 3px;          /* tiny: mono tags, inline-code, hit highlight, skeleton rails, swatch */
+  --radius-sm: 4px;          /* small: badges, bars, small controls */
+  --radius: 6px;             /* default: cards, inputs, panels, buttons */
+  --radius-full: 999px;      /* pills + round chips/bars (source pills, filter chips, slot bars) */
   /* Keyboard focus ring. Derives from --accent, so it re-themes for free
      (accent is redefined in every [data-theme] block). a11y debt §9. */
   --ring: var(--accent);
@@ -194,7 +200,7 @@ html, body, #root {
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: var(--radius-sm); }
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
 /* ── Keyboard focus ring (a11y, §9) ──────────────────────
@@ -434,7 +440,7 @@ html, body, #root {
   border: 1px solid var(--border-bright);
   background: transparent;
   color: var(--text-dim);
-  border-radius: 20px;
+  border-radius: var(--radius-full);
   font-family: var(--sans);
   font-size: var(--font-base);
   font-weight: 500;
@@ -472,7 +478,7 @@ html, body, #root {
 .skel-rail {
   width: 3px;
   height: 40px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--bg-elev2);
   flex-shrink: 0;
 }
@@ -533,7 +539,7 @@ html, body, #root {
   background: var(--green-soft);
   color: var(--green);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   flex-shrink: 0;
 }
 
@@ -543,7 +549,7 @@ html, body, #root {
   background: var(--amber-soft);
   color: var(--amber);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   flex-shrink: 0;
 }
 
@@ -632,7 +638,7 @@ html, body, #root {
   font-family: var(--mono);
   padding: 2px 8px;
   border: 1px solid;
-  border-radius: 20px;
+  border-radius: var(--radius-full);
   flex-shrink: 0;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -644,7 +650,7 @@ html, body, #root {
   background: var(--bg-elev2);
   color: var(--text-dim);
   padding: 2px 8px;
-  border-radius: 20px;
+  border-radius: var(--radius-full);
   flex-shrink: 0;
 }
 
@@ -727,7 +733,7 @@ html, body, #root {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 2px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   white-space: nowrap;
   height: fit-content;
@@ -770,7 +776,7 @@ html, body, #root {
 .inline-code {
   background: var(--bg-elev2);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   font-family: var(--mono);
   font-size: var(--font-md);
   color: var(--accent);
@@ -837,7 +843,7 @@ html, body, #root {
 .skel-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .skel-line {
   height: 11px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--bg-elev) 25%, var(--bg-elev2) 50%, var(--bg-elev) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.3s var(--ease-in-out) infinite;
@@ -956,7 +962,7 @@ html, body, #root {
   border: 1px solid var(--accent-border);
   color: var(--accent);
   padding: 6px 16px;
-  border-radius: 20px;
+  border-radius: var(--radius-full);
   font-size: var(--font-md);
   font-weight: 500;
   cursor: pointer;
@@ -976,7 +982,7 @@ html, body, #root {
   background: var(--green-soft);
   border: 1px solid var(--green-border);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .chat-observed-badge {
   font-size: var(--font-xs);
@@ -988,7 +994,7 @@ html, body, #root {
   background: var(--bg-elev2);
   border: 1px solid var(--border-bright);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 /* Active ("running") badge — managed session with a turn in-flight / recent activity. */
 .chat-live-badge {
@@ -1004,7 +1010,7 @@ html, body, #root {
   background: var(--accent-soft);
   border: 1px solid var(--accent-border-strong);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .chat-live-dot {
   width: 6px;
@@ -1037,7 +1043,7 @@ html, body, #root {
 .tool-diff {
   margin: 4px 0;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   overflow: hidden;
   background: var(--bg);
   font-family: var(--mono);
@@ -1097,7 +1103,7 @@ html, body, #root {
 .composer-assign-input {
   background: var(--bg);
   border: 1px solid var(--border-bright);
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--text);
   font-size: var(--font-md);
   font-family: var(--mono);
@@ -1326,7 +1332,7 @@ html, body, #root {
   background: var(--amber-highlight);
   color: var(--amber);
   padding: 0 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .hit-time {
@@ -1358,13 +1364,13 @@ html, body, #root {
 .empty-state-message { font-size: var(--font-md-lg); color: var(--text-faint); max-width: 420px; line-height: 1.5; }
 .empty-state-cta { margin-top: 8px; }
 
-.placeholder-badge { font-family: var(--mono); font-size: var(--font-sm); color: var(--amber); background: var(--amber-soft); border: 1px solid var(--amber-border); border-radius: 4px; padding: 2px 8px; }
+.placeholder-badge { font-family: var(--mono); font-size: var(--font-sm); color: var(--amber); background: var(--amber-soft); border: 1px solid var(--amber-border); border-radius: var(--radius-sm); padding: 2px 8px; }
 
 .stat-pill { display: inline-flex; align-items: baseline; gap: 5px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: calc(var(--space-panel) - 7px) calc(var(--space-panel-lg) - 6px); }
 .stat-pill-value { font-size: var(--font-xl); font-weight: 600; color: var(--text); font-family: var(--mono); }
 .stat-pill-label { font-size: var(--font-sm-up); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
 
-.badge { font-family: var(--mono); font-size: var(--font-sm); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 4px; background: var(--bg-elev2); color: var(--text-dim); border: 1px solid var(--border); }
+.badge { font-family: var(--mono); font-size: var(--font-sm); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--radius-sm); background: var(--bg-elev2); color: var(--text-dim); border: 1px solid var(--border); }
 .badge-todo { color: var(--text-dim); }
 .badge-ready { color: var(--accent); border-color: var(--border-bright); background: var(--accent-dim); }
 .badge-running { color: var(--green); border-color: var(--green-border); background: var(--green-soft); }
@@ -1419,7 +1425,7 @@ html, body, #root {
 .board-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .board-skeleton-list { display: flex; flex-direction: column; gap: 8px; }
 .board-skeleton-card { border: 1px solid var(--border); background: var(--bg); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.board-skeleton-line { height: 10px; border-radius: 999px; background: var(--bg-elev2); }
+.board-skeleton-line { height: 10px; border-radius: var(--radius-full); background: var(--bg-elev2); }
 .board-skeleton-line-short { width: 40%; }
 .board-skeleton-line-faint { width: 70%; }
 
@@ -1432,7 +1438,7 @@ html, body, #root {
 /* Nodes */
 .nodes-toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .nodes-filter-group { display: flex; gap: 8px; flex-wrap: wrap; }
-.nodes-filter { border: 1px solid var(--border); background: var(--bg-elev); color: var(--text-dim); border-radius: 999px; padding: 6px 11px; font-size: var(--font-base-up); font-weight: 600; cursor: pointer; transition: border-color var(--dur-3), color var(--dur-3), background var(--dur-3); }
+.nodes-filter { border: 1px solid var(--border); background: var(--bg-elev); color: var(--text-dim); border-radius: var(--radius-full); padding: 6px 11px; font-size: var(--font-base-up); font-weight: 600; cursor: pointer; transition: border-color var(--dur-3), color var(--dur-3), background var(--dur-3); }
 .nodes-filter:hover { border-color: var(--border-bright); color: var(--text); }
 .nodes-filter.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 .nodes-toolbar-note { color: var(--text-faint); font-size: var(--font-base-up); }
@@ -1446,7 +1452,7 @@ html, body, #root {
 .node-name { font-family: var(--mono); font-size: var(--font-lg); font-weight: 600; color: var(--text); }
 .node-card-body { display: flex; flex-direction: column; gap: 6px; }
 .node-stat { display: flex; justify-content: space-between; font-size: var(--font-md); color: var(--text-dim); }
-.node-slot-bar { height: 7px; border-radius: 999px; overflow: hidden; background: var(--bg-elev2); border: 1px solid var(--border); }
+.node-slot-bar { height: 7px; border-radius: var(--radius-full); overflow: hidden; background: var(--bg-elev2); border: 1px solid var(--border); }
 .node-slot-bar-fill { height: 100%; background: var(--accent); }
 .node-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
 .node-footer-label { color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; font-size: var(--font-sm-up); }
@@ -1463,7 +1469,7 @@ html, body, #root {
 .node-session-list-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--font-md); color: var(--text-dim); }
 .node-session-items { display: flex; flex-direction: column; gap: 8px; }
 .node-session-item { display: flex; align-items: center; gap: 9px; padding: 10px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); }
-.node-session-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-dim); }
+.node-session-dot { width: 7px; height: 7px; border-radius: var(--radius-full); background: var(--accent); box-shadow: 0 0 0 4px var(--accent-dim); }
 .node-skel { border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--bg-elev2), var(--bg-hover), var(--bg-elev2)); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; }
 .node-skel-title { width: 42%; height: 16px; }
 .node-skel-badge { width: 28%; height: 18px; }
@@ -1475,7 +1481,7 @@ html, body, #root {
 .usage-list { display: flex; flex-direction: column; gap: 10px; }
 .usage-row { display: grid; grid-template-columns: 160px 1fr 80px; align-items: center; gap: 12px; }
 .usage-model { font-family: var(--mono); font-size: var(--font-md-lg); color: var(--text); }
-.usage-bar { height: 8px; background: var(--bg-elev2); border-radius: 4px; overflow: hidden; }
+.usage-bar { height: 8px; background: var(--bg-elev2); border-radius: var(--radius-sm); overflow: hidden; }
 .usage-bar-fill { height: 100%; background: var(--accent); }
 .usage-val { font-family: var(--mono); font-size: var(--font-base-up); color: var(--text-faint); text-align: right; }
 
@@ -1500,7 +1506,7 @@ html, body, #root {
 .workflow-list-description { font-size: var(--font-md); line-height: 1.5; color: var(--text-dim); margin-bottom: 10px; }
 .workflow-list-meta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); font-size: var(--font-sm-up); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
 .workflow-filters { display: flex; flex-wrap: wrap; gap: 6px; }
-.workflow-filter { border: 1px solid var(--border); background: transparent; color: var(--text-dim); border-radius: 999px; padding: 5px 10px; font-size: var(--font-base); font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; cursor: pointer; }
+.workflow-filter { border: 1px solid var(--border); background: transparent; color: var(--text-dim); border-radius: var(--radius-full); padding: 5px 10px; font-size: var(--font-base); font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; cursor: pointer; }
 .workflow-filter:hover { border-color: var(--border-bright); color: var(--text); }
 .workflow-filter.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
 .workflow-latest-run { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 16px; }
@@ -1524,8 +1530,8 @@ html, body, #root {
 .workflow-history-list { display: flex; flex-direction: column; gap: 10px; }
 .workflow-run-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
 .workflow-run-steps { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.workflow-step-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 10px; font-size: var(--font-base); color: var(--text-dim); background: var(--bg-elev); }
-.workflow-step-chip-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+.workflow-step-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: var(--radius-full); padding: 5px 10px; font-size: var(--font-base); color: var(--text-dim); background: var(--bg-elev); }
+.workflow-step-chip-dot { width: 6px; height: 6px; border-radius: var(--radius-full); background: currentColor; }
 .workflow-skeleton-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
 .workflow-skeleton-card-lg { margin: 14px 16px; }
 .workflow-skeleton-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
@@ -1566,7 +1572,7 @@ html, body, #root {
 .theme-swatch.active { border-color: var(--accent); }
 .theme-swatch:hover { background: var(--bg-hover); }
 .theme-swatch-preview { display: flex; gap: 3px; }
-.theme-swatch .sw { width: 14px; height: 28px; border-radius: 3px; }
+.theme-swatch .sw { width: 14px; height: 28px; border-radius: var(--radius-xs); }
 .theme-swatch .sw-bg { background: var(--bg); border: 1px solid var(--border-bright); }
 .theme-swatch .sw-accent { background: var(--accent); }
 .theme-swatch .sw-text { background: var(--text); }

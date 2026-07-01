@@ -161,4 +161,4 @@ Known issues tracked for future runs:
 
 ---
 
-*Last updated: 2026-07-01 (D5 closed — amber-semantic fills fixed)*
+*Last updated: 2026-07-02 (radius scale tokenized — 2→4 tokens, all raw radii killed)*
