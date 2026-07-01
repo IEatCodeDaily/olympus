@@ -75,8 +75,11 @@ impl SearchIndex {
 
         // If the index was just created, its schema already matches. If it
         // was opened from disk, trust the on-disk schema (we own it).
+        // Use a SINGLE merge thread: the index is 100s of MB and only grows on
+        // sync activity, so default per-core merge threads (4 on this box) were
+        // burning 17% CPU at idle doing nothing useful.
         let writer = index
-            .writer(50_000_000) // 50 MB heap — fine for MVP
+            .writer_with_num_threads(1, 50_000_000) // 1 thread, 50 MB heap
             .context("opening index writer")?;
 
         let reader = index

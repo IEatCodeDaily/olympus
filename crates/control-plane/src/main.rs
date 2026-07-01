@@ -59,7 +59,7 @@ fn hermes_state_db() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".hermes").join("state.db"))
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_target(false)

@@ -529,8 +529,14 @@ pub fn run_live_sync(
     seed_state_from_db(&conn, &mut sync_state)?;
     sync_connected.store(true, Ordering::SeqCst);
 
-    let poll_interval = Duration::from_secs(2);
-    let reconcile_interval = Duration::from_secs(30);
+    // Adaptive polling: when the tail is empty (idle — no new Hermes activity),
+    // back off to a slow interval so the worker burns ~no CPU; when new rows
+    // arrive, poll fast to keep latency low. This was the #1 CPU consumer at
+    // idle (59% of lifetime CPU) because it polled every 2s and reconciled
+    // every 30s unconditionally over ~1700 sessions.
+    let fast_interval = Duration::from_secs(2);
+    let idle_interval = Duration::from_secs(30);
+    let reconcile_interval = Duration::from_secs(60);
     let mut last_reconcile = Instant::now();
 
     loop {
@@ -538,11 +544,15 @@ pub fn run_live_sync(
         sync_state.last_seen_id = cursor.last_seen_id;
 
         let events = tail_rows_to_events(&mut sync_state, rows);
-        if !events.is_empty() {
+        let had_events = !events.is_empty();
+        if had_events {
             apply_events(&log, &views, &search, &deltas, &events)?;
         }
 
-        if last_reconcile.elapsed() >= reconcile_interval {
+        // Only run the (expensive) full reconcile sweep when new messages
+        // actually arrived since the last reconcile — otherwise nothing
+        // changed, so re-checking 1700 sessions is pure waste.
+        if had_events && last_reconcile.elapsed() >= reconcile_interval {
             let session_ids = list_session_ids(&conn)?;
             for session_id in session_ids {
                 let events = {
@@ -562,7 +572,12 @@ pub fn run_live_sync(
             last_reconcile = Instant::now();
         }
 
-        std::thread::sleep(poll_interval);
+        // Back off when idle; stay fast right after activity.
+        std::thread::sleep(if had_events {
+            fast_interval
+        } else {
+            idle_interval
+        });
     }
 }
 

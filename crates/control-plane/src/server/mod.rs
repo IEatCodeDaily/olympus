@@ -106,6 +106,7 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/metrics", get(metrics))
         .merge(protected)
         .layer(cors_layer())
         .with_state(state)
@@ -189,6 +190,44 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "snapshot": { "sessions": state.snapshot_sessions, "messages": state.snapshot_messages },
         "syncConnected": state.sync_connected.load(Ordering::SeqCst),
         "hermesProfile": state.hermes_profile.as_str(),
+    }))
+}
+
+/// GET /api/metrics — lightweight process + store stats for observability.
+/// Unauthenticated (like /api/health) so it can be scraped without a token.
+/// Reads /proc/self on Linux for RSS/threads/CPU; falls back gracefully off-Linux.
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let mut rss_kb: Option<u64> = None;
+    let mut threads: Option<u64> = None;
+    let mut cpu_ticks: Option<u64> = None;
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                rss_kb = rest.split_whitespace().next().and_then(|n| n.parse().ok());
+            } else if let Some(rest) = line.strip_prefix("Threads:") {
+                threads = rest.split_whitespace().next().and_then(|n| n.parse().ok());
+            }
+        }
+    }
+    // utime + stime (fields 14,15 after comm) — cumulative CPU ticks (USER_HZ).
+    if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
+        if let Some(idx) = stat.rfind(')') {
+            let rest: Vec<&str> = stat[idx + 2..].split_whitespace().collect();
+            // rest[11]=utime, rest[12]=stime (0-indexed after the comm field).
+            let utime: u64 = rest.get(11).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let stime: u64 = rest.get(12).and_then(|s| s.parse().ok()).unwrap_or(0);
+            cpu_ticks = Some(utime + stime);
+        }
+    }
+    let ws_subs = state.deltas.receiver_count();
+    Json(json!({
+        "rssKb": rss_kb,
+        "threads": threads,
+        "cpuTicks": cpu_ticks,
+        "wsSubscribers": ws_subs,
+        "snapshot": { "sessions": state.snapshot_sessions, "messages": state.snapshot_messages },
+        "syncConnected": state.sync_connected.load(Ordering::SeqCst),
+        "inFlight": state.bridge.in_flight_set().await.len(),
     }))
 }
 
