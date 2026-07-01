@@ -25,13 +25,29 @@ use olympus_control_plane::{
 };
 use tokio::sync::{broadcast, RwLock};
 
-/// Where Olympus keeps its own state (event log, search index, token).
+/// Where Olympus keeps its own INTERNAL state (event log, search index, token).
+/// This is the dotted `~/.olympus/` root from ADR 0005 §4, which ALSO holds the
+/// org-scoped resource tree (`<org>/sessions/`, `<org>/repos/`, etc.). Internal
+/// state files live directly under it; resources live under `<org>/`.
 fn olympus_home() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("OLYMPUS_HOME") {
         return Ok(PathBuf::from(dir));
     }
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".olympus"))
+}
+
+/// The default org slug for the single-operator case (ADR 0005 §3 — org replaces
+/// context). Multi-org management is post-MVP; the MVP runs one org. Override
+/// with `OLYMPUS_DEFAULT_ORG`.
+fn default_org() -> String {
+    std::env::var("OLYMPUS_DEFAULT_ORG").unwrap_or_else(|_| "default".to_string())
+}
+
+/// The on-disk root for an org's resources: `~/.olympus/<org_slug>/` per ADR
+/// 0005 §4. Holds `sessions/`, `repos/`, `vaults/`, `projects/`, etc.
+fn org_workspace_root(org: &str) -> Result<PathBuf> {
+    Ok(olympus_home()?.join(org))
 }
 
 /// Locate the Hermes state.db (override with `HERMES_STATE_DB`).
@@ -118,8 +134,11 @@ async fn main() -> Result<()> {
                 },
             ),
         )
-        .with_spaces_root(home.join("spaces"))
-        .with_node_id(std::env::var("OLYMPUS_NODE_ID").unwrap_or_else(|_| "local".to_string())),
+        // Session spaces live at ~/.olympus/<org>/sessions/<session_id>/ (ADR 0005
+        // §4). Seed the org root + sessions dir; spaces are created eagerly per
+        // session in create_draft. Node is NOT in the session id (ADR 0005 §6) —
+        // it's inferred from the chosen agent and stored as a session field.
+        .with_spaces_root(org_workspace_root(&default_org())?.join("sessions")),
     );
     let sync_connected = Arc::new(AtomicBool::new(false));
     let state = AppState {

@@ -1625,13 +1625,18 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["source"], "olympus");
         assert_eq!(v["managed"], true);
-        // Optimistic: a durable id is allocated immediately (`<utc>-<node>-<hash>`);
-        // hermesId is empty until the first send spawns the runtime.
+        // Optimistic: a durable id is allocated immediately (`<utc>-<hash>` per
+        // ADR 0005 §6 — node is NOT in the id); hermesId is empty until the
+        // first send spawns the runtime.
         let id = v["id"].as_str().unwrap();
-        assert!(id.contains("-local-"), "id should embed node segment: {id}");
         assert!(
             id.starts_with("20") || id.starts_with("19"),
             "id should start with a UTC datetime stamp: {id}"
+        );
+        assert_eq!(
+            id.matches('-').count(),
+            1,
+            "id should be <utc>-<hash> with no node segment: {id}"
         );
         assert_eq!(v["hermesId"], "");
     }

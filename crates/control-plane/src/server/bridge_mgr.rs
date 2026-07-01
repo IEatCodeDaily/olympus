@@ -69,12 +69,10 @@ pub struct BridgeManager {
     /// Authoritative liveness signal for Olympus-managed sessions.
     in_flight: RwLock<HashSet<String>>,
     /// Root directory under which per-session spaces are materialized
-    /// (`<spaces_root>/<session_id>/`). `None` disables space creation — used by
-    /// tests so they never touch the filesystem. Set in production from config.
+    /// (`<spaces_root>/<session_id>/`), i.e. `~/.olympus/<org>/sessions/` per
+    /// ADR 0005 §4. `None` disables space creation — used by tests so they never
+    /// touch the filesystem. Set in production from the org-scoped workspace root.
     spaces_root: Option<PathBuf>,
-    /// This host's node id, embedded into new session ids so identity encodes
-    /// placement (`<datetime>-<node>-<hash>`). Defaults to "local".
-    node_id: String,
 }
 
 impl BridgeManager {
@@ -86,7 +84,6 @@ impl BridgeManager {
             runtimes: RwLock::new(HashMap::new()),
             in_flight: RwLock::new(HashSet::new()),
             spaces_root: None,
-            node_id: "local".into(),
         }
     }
 
@@ -95,12 +92,6 @@ impl BridgeManager {
     /// agent runs with that as its cwd.
     pub fn with_spaces_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.spaces_root = Some(root.into());
-        self
-    }
-
-    /// Set this host's node id (builder style). Embedded into new session ids.
-    pub fn with_node_id(mut self, node_id: impl Into<String>) -> Self {
-        self.node_id = node_id.into();
         self
     }
 
@@ -132,9 +123,11 @@ impl BridgeManager {
         }
     }
 
-    /// Mint a fresh durable Olympus session id: `<utc-compact>-<node>-<hash>`,
-    /// e.g. `20260630T154812Z-local-a1b2c3d4`. Stable from birth (no draft→real
-    /// rename) — only the space and agent session are lazy.
+    /// Mint a fresh durable Olympus session id: `<utc-compact>-<hash>`, e.g.
+    /// `20260630T154812Z-a1b2c3d4`. Stable from birth (no draft→real rename) —
+    /// only the space and agent session are lazy. Node is NOT baked into the id
+    /// (per ADR 0005 §6): the node is inferred from the chosen agent and stored
+    /// as a separate field, so the id stays portable across nodes.
     fn new_session_id(&self) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -142,15 +135,8 @@ impl BridgeManager {
             .unwrap_or(0);
         // Compact UTC stamp without pulling chrono: derive YYYYMMDDThhmmssZ.
         let stamp = compact_utc_stamp(now);
-        // Node ids can contain characters unfriendly to filesystems; keep it
-        // simple by replacing anything non-alphanumeric with '-'.
-        let node: String = self
-            .node_id
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
         let hash = &uuid::Uuid::new_v4().simple().to_string()[..8];
-        format!("{stamp}-{node}-{hash}")
+        format!("{stamp}-{hash}")
     }
 
     /// Mark a session as having a turn in-flight (called when a prompt is sent).
@@ -447,14 +433,18 @@ mod space_tests {
     #[test]
     fn new_session_id_has_expected_shape() {
         let (_f, log) = test_log();
-        let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
-            .with_node_id("local");
+        let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory());
         let id = mgr.new_session_id();
-        // <stamp>-<node>-<hash> → contains the node segment and an 8-char hash.
-        assert!(id.contains("-local-"), "id = {id}");
+        // <utc-stamp>-<hash8> — node is NOT in the id (ADR 0005 §6).
+        assert!(id.starts_with("20") || id.starts_with("19"), "id = {id}");
         let hash = id.rsplit('-').next().unwrap();
         assert_eq!(hash.len(), 8, "hash part should be 8 chars: {id}");
-        assert!(id.starts_with("20") || id.starts_with("19"), "id = {id}");
+        // Exactly two segments: the stamp and the hash (no node segment).
+        assert_eq!(
+            id.matches('-').count(),
+            1,
+            "id should be <stamp>-<hash>: {id}"
+        );
     }
 
     #[test]
@@ -484,10 +474,10 @@ mod space_tests {
         let tmp = std::env::temp_dir().join(format!("olympus-draft-test-{}", chrono_millis()));
         let (_f, log) = test_log();
         let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
-            .with_spaces_root(&tmp)
-            .with_node_id("local");
+            .with_spaces_root(&tmp);
         let ns = mgr.create_draft(&RuntimeSpec::default()).unwrap();
-        assert!(ns.session_id.contains("-local-"));
+        // id is <stamp>-<hash> (no node segment, ADR 0005 §6).
+        assert_eq!(ns.session_id.matches('-').count(), 1);
         let space = ns.space.expect("space path should be set");
         assert!(std::path::Path::new(&space).is_dir());
         assert!(space.ends_with(&ns.session_id));
