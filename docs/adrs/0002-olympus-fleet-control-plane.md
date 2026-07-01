@@ -1,7 +1,13 @@
 # ADR 0002: Olympus is a multi-node agent fleet control plane
 
-- Status: Accepted
-- Date: 2026-06-27 (Rust-native substrate revision: 2026-06-28, see ADR 0003)
+- Status: **PARTIALLY SUPERSEDED** — §3 (Identity/Context/Session model) and
+  §5 (Filesystem hierarchy) are **withdrawn and replaced by ADR 0005**
+  (org-scoped local-first resource model). The rest of this ADR (single-writer
+  event log, envoy layer boundary, iroh/UDS transport, scheduler, §2, §6, §10,
+  §15, §17) remains in force. **Where §3 or §5 disagrees with ADR 0005, ADR 0005
+  wins.**
+- Date: 2026-06-27 (Rust-native substrate revision: 2026-06-28, see ADR 0003;
+  org-scoped model: 2026-07-01, see ADR 0005)
 - Supersedes: the "thin host-effect runtime" framing of ADR 0001 (see §21).
 - Substrate: per **ADR 0003**, Layer 1 is a **Rust-native single-binary control
   plane** (redb event log + in-memory views + single-writer scheduler + iroh/UDS
@@ -276,7 +282,10 @@ substrate both planes ride, so adding iroh-docs/iroh-blobs later reuses it.
 
 ---
 
-## 3. Identity / Context / Session isolation
+## 3. Identity / Context / Session isolation — ⚠️ WITHDRAWN, see ADR 0005
+
+> **Superseded by ADR 0005 (2026-07-01).** "Context" is replaced by
+> **organization** (a process boundary). Do not implement from this section.
 
 Three layers of scope, with different isolation rules. This is the model that
 lets one operator run both personal and corporate work without contamination.
@@ -504,7 +513,12 @@ with a derived in-memory view (§2.4). "Owned by envoy" rows are host effects.
 
 ---
 
-## 5. Filesystem hierarchy and workspace management
+## 5. Filesystem hierarchy and workspace management — ⚠️ WITHDRAWN, see ADR 0005
+
+> **Superseded by ADR 0005 (2026-07-01).** The flat `~/olympus/sessions/`
+> layout below is replaced by an org-scoped `~/.olympus/<org>/sessions/`
+> layout under the dotted root. The container + jj-workspace-inside model is
+> retained and clarified in ADR 0005 §4. Do not implement from this section.
 
 Olympus (via the envoy) owns every agent's working directory. On a new session the
 envoy creates a scoped **session space** and runs the agent inside it, so the
