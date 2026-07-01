@@ -1,371 +1,459 @@
 # Olympus Design System
 
-> Canonical design system for the Olympus control-plane UI. This document is the
-> source of truth for tokens, type/space scales, components, motion, density, and
-> accessibility. View workers build against it; the **Design Lead** owns it.
->
-> **Anchor:** Linear-meets-terminal — a calm, dense, editorial operator cockpit
-> for a power user running an agent fleet. Dark default. IBM Plex Sans + Mono.
-> Electric-cyan accent. NOT generic AI slop (no Inter, no purple gradients, no
-> Material). Every color/space value is a CSS variable (theme-addressable).
->
-> **Hard rule:** never hardcode a hex/`rgba()` in a component. A new visual need
-> is a new token added to **every** `[data-theme]` block in `ui/src/index.css`,
-> referenced as `var(--token)`.
-
-Companion docs: `docs/design/VISION.md` (the north star feel + look path),
-`docs/plans/2026-06-29-olympus-ui-roadmap.md` (the screen/IA path).
+> **Canonical reference for every visual decision in Olympus.**
+> Owned by the `design-lead` agent. All tokens live in `ui/src/index.css`;
+> all shared primitives in `ui/src/components/shell.tsx`.
+> **Rule: never hardcode a hex — only `var(--token)`.**
 
 ---
 
-## 1. Themes
+## Table of Contents
 
-Three themes ship today, each redefining the **same semantic token set** under a
-`[data-theme]` block. `midnight` is the default (also bound to bare `:root`).
-The runtime switch lives in `ui/src/lib/theme.ts` (persists to
-`localStorage["olympus-theme"]`, sets `document.documentElement.dataset.theme`).
-
-| Theme | id | Personality |
-|---|---|---|
-| **Midnight** | `midnight` | Dark default. Near-black blue-grey, electric-cyan accent. The cockpit at night. |
-| **Daylight** | `daylight` | Light. Cool paper-white, deep-sky-blue accent. Same density, readable in sun. |
-| **Amber CRT** | `amber-crt` | Warm terminal. Deep brown-black, amber phosphor accent. Nostalgic, focused. |
-
-Adding a theme = add one `[data-theme="name"]` block defining all semantic
-tokens below, add the id to `THEMES` + `THEME_LABELS` in `lib/theme.ts`. No
-component changes.
+1. [Design Anchor](#1-design-anchor)
+2. [Color Tokens](#2-color-tokens)
+3. [Typography Scale](#3-typography-scale)
+4. [Spacing & Layout](#4-spacing--layout)
+5. [Radius & Elevation](#5-radius--elevation)
+6. [Motion System](#6-motion-system)
+7. [Density Modes](#7-density-modes)
+8. [Component Inventory](#8-component-inventory)
+9. [Accessibility](#9-accessibility)
+10. [Do / Don't Gallery](#10-do--dont-gallery)
+11. [Changelog](#11-changelog)
 
 ---
 
-## 2. Color tokens (semantic)
+## 1. Design Anchor
 
-Every color is one of these semantic names. Values per theme:
+**Linear-meets-terminal.** A calm, dense, editorial operator cockpit for a power
+user running an AI agent fleet.
 
-### Surfaces & structure
+- **Dark default** (`midnight` theme).
+- **Typefaces:** IBM Plex Sans (UI) + IBM Plex Mono (data/code/meta).
+- **Accent:** Electric cyan in midnight; blue-700 in daylight; warm amber in amber-crt.
+- **NOT:** generic AI slop — no Inter, no purple gradients, no Material Design.
+- **Every visual value is a CSS custom property** scoped to `[data-theme]`.
 
-| Token | Role | midnight | daylight | amber-crt |
-|---|---|---|---|---|
-| `--bg` | App background (deepest) | `#090b0e` | `#f7f8fa` | `#120d08` |
-| `--bg-elev` | Elevated surface (sidebar, headers, cards) | `#101318` | `#ffffff` | `#1a1308` |
-| `--bg-elev2` | Higher surface (active row, inset blocks) | `#161a21` | `#eef1f5` | `#221a0c` |
-| `--bg-hover` | Hover wash on interactive rows | `#1c2129` | `#e4e8ee` | `#2c2210` |
-| `--border` | Default hairline border / divider | `#1e252e` | `#dce1e8` | `#3a2c12` |
-| `--border-bright` | Emphasized border (inputs, controls) | `#2a3340` | `#c2cbd6` | `#4d3a18` |
+### Themes (3 shipped)
 
-### Text
+| Theme | `data-theme` value | Mood |
+|-------|-------------------|------|
+| **Midnight** | `midnight` | Deep dark, cool, default. Near-black `#090b0e` base. |
+| **Daylight** | `daylight` | Clean light. Off-white `#f7f8fa` base. Blue accent. |
+| **Amber CRT** | `amber-crt` | Warm phosphor terminal. Dark amber `#120d08` base. |
 
-| Token | Role | midnight | daylight | amber-crt |
-|---|---|---|---|---|
-| `--text` | Primary text | `#e2e8f0` | `#1a2230` | `#ffd79a` |
-| `--text-dim` | Secondary text / labels | `#8595a8` | `#51607a` | `#c79a5c` |
-| `--text-faint` | Tertiary / meta / placeholders | `#5a6878` | `#8090a4` | `#8a6a3c` |
-
-### Accent & status
-
-| Token | Role | midnight | daylight | amber-crt |
-|---|---|---|---|---|
-| `--accent` | Primary accent (focus, active, primary CTA) | `#7dd3fc` | `#0284c7` | `#ffb347` |
-| `--accent-dim` | Accent wash (tinted bg/borders) | `rgba(125,211,252,.12)` | `rgba(2,132,199,.10)` | `rgba(255,179,71,.14)` |
-| `--accent-hover` | Hover fill for accent-filled CTAs | `#a5e0ff` | `#0369a1` | `#ffc870` |
-| `--on-accent` | Text/icon color on an `--accent` fill | `#0a0e14` | `#ffffff` | `#1a1308` |
-| `--green` | Success / running / managed / "you-adjacent AI" | `#86efac` | `#16a34a` | `#b6e36b` |
-| `--amber` | Warning / tool / fork / in-flight | `#fcd34d` | `#b45309` | `#ffcf5c` |
-| `--red` | Error / blocked / destructive | `#fca5a5` | `#dc2626` | `#ff8a6b` |
-
-**Semantic color mapping (do not invent new meanings):**
-- `--accent` = the user's focus & primary action. Active nav, focus ring, primary button, user role.
-- `--green` = healthy / running / managed sessions / assistant role.
-- `--amber` = attention / tool activity / forked sessions / highlights.
-- `--red` = failure / blocked / disconnected / destructive.
-
-### Non-theme primitives (`:root`)
-
-| Token | Value | Role |
-|---|---|---|
-| `--mono` | `"IBM Plex Mono", "JetBrains Mono", "SF Mono", "Cascadia Code", monospace` | All metrics, IDs, code, labels |
-| `--sans` | `"IBM Plex Sans", -apple-system, system-ui, sans-serif` | All prose & UI text |
-| `--radius` | `6px` | Default corner radius (cards, inputs) |
-| `--radius-sm` | `4px` | Small radius (buttons, pills, badges) |
-| `--ring` | `var(--accent)` | Keyboard focus ring; re-themes via `--accent` |
-| `--sidebar-w` | `220px` | Fixed sidebar width |
+Extensible: add a new `[data-theme="..."]` block to `index.css` redefining every
+token below.
 
 ---
 
-## 3. Typography
+## 2. Color Tokens
 
-**Two families only.** IBM Plex Sans for everything human-readable; IBM Plex Mono
-for anything machine-shaped — timestamps, IDs, counts, model names, code, tool
-output, and the small-caps meta labels that give the cockpit its terminal feel.
+All tokens are defined per-theme in `ui/src/index.css`. Reference as
+`var(--token-name)`.
 
-Base: `14px / 1.0` on `html`, `-webkit-font-smoothing: antialiased`,
-`text-rendering: optimizeLegibility`.
+### Surface tokens (backgrounds)
 
-### Type scale (as used today)
+| Token | Midnight | Daylight | Amber CRT | Usage |
+|-------|----------|----------|-----------|-------|
+| `--bg` | `#090b0e` | `#f7f8fa` | `#120d08` | Page / list background |
+| `--bg-elev` | `#101318` | `#ffffff` | `#1a1308` | Elevated panels, cards, sidebar |
+| `--bg-elev2` | `#161a21` | `#eef1f5` | `#221a0c` | Secondary elevation (inputs, nested) |
+| `--bg-hover` | `#1c2129` | `#e4e8ee` | `#2c2210` | Row / item hover state |
 
-| Step | Size | Weight | Use |
-|---|---|---|---|
-| Page title | `18px` | 600 | `.page-title` — view H1 |
-| Section / brand | `15px` | 600 | brand name, content H1–H3 |
-| Chat title | `14px` | 500 | conversation header |
-| Body | `13.5px` | 400 | message content, composer input |
-| UI default | `13px` | 500 | nav items, row titles, buttons |
-| Control | `12.5px` | 400–600 | subtitles, settings rows, primary btn |
-| Meta | `12px` | 400 | sort, toggles, hit snippets |
-| Mono meta | `11px` | 400–500 | timestamps, status, counts |
-| Micro label | `10px` | 600–700 | role/source badges, uppercase mono labels |
-| Tiny | `9px` | 600–700 | managed/fork tags, section labels |
+### Border tokens
 
-**Line-height:** prose `1.5–1.6`; UI rows `1.2`; tight mono labels `1.0`.
-**Letter-spacing:** uppercase mono labels `+0.03–0.05em`; large titles `-0.01em`.
+| Token | Midnight | Daylight | Amber CRT | Usage |
+|-------|----------|----------|-----------|-------|
+| `--border` | `#1e252e` | `#dce1e8` | `#3a2c12` | Default borders (dividers, card edges) |
+| `--border-bright` | `#2a3340` | `#c2cbd6` | `#4d3a18` | Emphasized borders (input focus ring, active edges) |
 
-> Debt: these sizes are currently inline literals. Target — promote to a
-> `--font-*` scale (see §11).
+### Text tokens
 
----
+| Token | Midnight | Daylight | Amber CRT | Usage |
+|-------|----------|----------|-----------|-------|
+| `--text` | `#e2e8f0` | `#1a2230` | `#ffd79a` | Primary text (headings, body, titles) |
+| `--text-dim` | `#8595a8` | `#51607a` | `#c79a5c` | Secondary text (meta, descriptions) |
+| `--text-faint` | `#5a6878` | `#8090a4` | `#8a6a3c` | Tertiary text (timestamps, hints, labels) |
 
-## 4. Spacing
+### Semantic color tokens
 
-A loose 4px-based rhythm. Common step values in use: **2, 3, 4, 6, 8, 10, 12,
-14, 16, 18, 20, 24, 28, 48 px**. Containers: page scroll padding `20px 24px`;
-toolbar `12px 16px`; message rows `12px 24px`.
+| Token | Midnight | Daylight | Amber CRT | Role |
+|-------|----------|----------|-----------|------|
+| `--accent` | `#7dd3fc` | `#0284c7` | `#ffb347` | Primary action / selection / links |
+| `--accent-hover` | `#a5e0ff` | `#0369a1` | `#ffc870` | Accent hover state |
+| `--on-accent` | `#0a0e14` | `#ffffff` | `#1a1308` | Text on solid accent backgrounds |
+| `--green` | `#86efac` | `#16a34a` | `#b6e36b` | Success / running / managed / AI role |
+| `--amber` | `#fcd34d` | `#b45309` | `#ffcf5c` | Warning / tool role / fork badge |
+| `--red` | `#fca5a5` | `#dc2626` | `#ff8a6b` | Error / blocked / failed / stop button |
 
-> Debt: spacing is inline. Target — a `--space-1…8` scale token set (see §11)
-> so density modes can rescale globally.
+### Alpha-derived tokens (theme-correct semi-transparent)
 
----
+These prevent hardcoded `rgba()` values in components. Each is defined
+per-theme so opacity/blending adapts to the theme's base colors.
 
-## 5. Radius & elevation
-
-- **Radius:** `--radius` (6px) for cards/inputs/panels; `--radius-sm` (4px) for
-  buttons/badges/pills; pills/chips that should read as fully round use `20px`.
-- **Elevation:** Olympus is **flat** by design — depth comes from layered
-  surface tokens (`--bg` → `--bg-elev` → `--bg-elev2`) and hairline borders, not
-  drop shadows. The only glow is functional: the connected status dot
-  (`box-shadow` on `--green`) and input focus. No decorative shadows.
-
-> Debt: no `--shadow-*` / `--ring-*` tokens yet; focus & glow values are inline.
-
----
-
-## 6. Component inventory
-
-Shared primitives live in `ui/src/components/shell.tsx` (extend, never
-duplicate). Their styling lives in `ui/src/index.css`. Each must define the full
-state set below.
-
-### Primitives (`shell.tsx`)
-
-| Primitive | Props | States covered | Notes |
-|---|---|---|---|
-| `PageHeader` | `title, subtitle?, actions?` | default | Every view starts with this. |
-| `EmptyState` | `icon?, title, message?, cta?` | default (empty) | Centered icon+copy+CTA. |
-| `PlaceholderBadge` | `epic` | default | Marks mock-first views; mono amber chip. |
-| `StatPill` | `label, value` | default | Metric chip; mono value + caps label. |
-| `Badge` | `kind?, children` | `running`/`blocked`/`done` + default | Status pill. |
-
-### Interactive elements & their required states
-
-| Element | default | hover | active/selected | focus | disabled | loading | empty |
-|---|---|---|---|---|---|---|---|
-| **Nav item** (`.nav-item`) | dim text | bg-hover, text | accent text + bg-elev2 | `--ring` outline | — | — | — |
-| **Primary button** (`.btn-primary`) | accent bg | opacity .88 | — | `--ring` outline | opacity .4 | — | — |
-| **New-chat button** (`.new-chat-btn`) | cyan bg | brighter | — | `--ring` outline | opacity .5 | — | — |
-| **Back / ghost button** (`.back-btn`) | border-bright | accent border+text | — | `--ring` outline | — | — | — |
-| **Search box** (`.search-box`) | border-bright | — | — | accent border (`:focus-within`) | — | spinner | placeholder |
-| **Composer** (`.composer-input-row`) | border-bright | — | — | accent border | send btn .35 | spinner | placeholder |
-| **Send button** (`.composer-send`) | accent bg | brighter | — | `--ring` outline | opacity .35 | spinner | — |
-| **Source pill** (`.source-pill`) | dim outline | text-dim border | (filter on) | `--ring` outline | — | — | — |
-| **Session row** (`.session-row`) | hairline | bg-elev | bg-elev2 + inset accent bar + accent title | — *(non-tabbable div; selection via list)* | — | skeleton rows | list-empty |
-| **Sort select** (`.sort-select`) | border-bright | accent border | — | `--ring` outline | — | — | — |
-| **Theme swatch** (`.theme-swatch`) | border | — | accent border | `--ring` outline | — | — | — |
-| **Tool-call card** (`.tool-call-card`) | hairline | header bg-hover | expanded | `--ring` outline (header button) | — | spin status | — |
-
-> **Focus ring:** a single shared `:where(button, a, select, textarea, summary,
-> [role="button"], [tabindex]):focus-visible` rule in `index.css` paints a
-> `2px var(--ring)` outline (offset 2px) on every interactive control for
-> keyboard/programmatic focus only — `:focus-visible` never fires on mouse
-> click, so pointer users are undisturbed. `--ring` derives from `--accent`, so
-> it re-themes for free. Don't add per-component focus styling; rely on the
-> shared rule (wrapped inputs are the documented exception — they show focus on
-> their container border via `:focus-within`).
-
-### Loading & empty patterns
-
-- **Skeletons:** `.session-skeleton` (row shimmer) and `.transcript-skeleton`
-  (message shimmer) use the `shimmer` keyframe over `--bg-elev`→`--bg-elev2`.
-  Use a skeleton, never a spinner, for list/content loads.
-- **Inline spinners** (`spin` keyframe) only for in-place actions: search,
-  composer send, running tool status.
-- **Empty:** always `EmptyState` (icon + title + message + optional CTA), never a
-  bare "No data" string. Mock-first views pair it with `PlaceholderBadge`.
-
-### View skeleton (every screen)
-
-`PageHeader` → optional `Toolbar`/filters → `StatPill` row (if metrics) →
-content (list/grid/board) → `EmptyState` when empty / skeleton while loading.
+| Token | Purpose |
+|-------|---------|
+| `--accent-subtle` | Faint wash (user message gutter) |
+| `--accent-soft` | Badge fill / live indicator bg |
+| `--accent-border` | Decorative accent borders |
+| `--accent-border-strong` | Emphasized accent borders (live badge) |
+| `--accent-hover-fill` | Hover backgrounds with accent tint |
+| `--accent-glow` | Pulse dot shadow / glow effects |
+| `--green-soft` | Managed / AI badge fill |
+| `--green-border` | Green decorative borders |
+| `--green-glow` | Connected status-dot shadow |
+| `--amber-subtle` | Tool message wash |
+| `--amber-soft` | Fork / tool badge fill |
+| `--amber-border` | Amber decorative borders |
+| `--amber-highlight` | Search hit highlight background |
+| `--red-soft` | Error badge fill |
+| `--red-border` | Error decorative borders |
+| `--hover-subtle` | Row hover wash (very faint) |
+| `--scrollbar-thumb-hover` | Scrollbar thumb on hover |
+| `--spinner-track` | Spinner track (loading indicators) |
 
 ---
 
-## 7. Motion
+## 3. Typography Scale
 
-Calm and quick. Motion confirms an action; it never entertains.
+Two typeface families:
 
-| Transition | Duration | Easing | Where |
-|---|---|---|---|
-| Hover/state on controls | `0.08–0.15s` | `ease` | nav, rows, buttons, borders |
-| Focus border | `0.12–0.15s` | default | inputs, composer |
-| `shimmer` (skeleton) | `1.3s` | `ease-in-out` infinite | loading rows |
-| `spin` (spinner) | `0.7–1s` | `linear` infinite | actions, running tools |
-| `pulse` (live tag) | `1.5s` | infinite | streaming indicator |
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--sans` | `"IBM Plex Sans", -apple-system, system-ui, sans-serif` | All UI text (nav, labels, prose) |
+| `--mono` | `"IBM Plex Mono", "JetBrains Mono", "SF Mono", "Cascadia Code", monospace` | Code, meta, timestamps, badges, data |
 
-Rules: durations ≤ 150ms for direct manipulation; no easing flourishes
-(no bounce/elastic); reserve infinite animation for genuine live state
-(streaming, running, loading). **`prefers-reduced-motion` is honored** — a
-single `@media (prefers-reduced-motion: reduce)` block in `index.css` collapses
-all transitions/animations to instant and settles looping keyframes on their
-final visible frame. This is safe because no motion carries information that
-text doesn't (every live state has a label — see §9); the reduced view loses no
-meaning, only movement.
+### Font size scale (15 steps, named by role)
 
-### Motion tokens (§11 debt #3, motion half — CLOSED 2026-07-01)
+| Token | Size | Weight | Line-height | Role |
+|-------|------|--------|-------------|------|
+| `--font-xs` | 9px | inherited | inherited | Tiny tags: managed/fork, section labels |
+| `--font-sm` | 10px | inherited | inherited | Micro: role badges, source pills, placeholder badge |
+| `--font-sm-up` | 10.5px | inherited | inherited | Kicker labels, stat-pill labels, card age |
+| `--font-base` | 11px | inherited | inherited | Mono meta: timestamps, status, counts, column hints |
+| `--font-base-up` | 11.5px | inherited | inherited | Card secondary meta, filter chips, usage values |
+| `--font-md` | 12px | inherited | inherited | Controls: sort, toggles, snippets, settings hints, inputs |
+| `--font-md-lg` | 12.5px | inherited | inherited | Subtitles, settings rows, primary/ghost buttons |
+| `--font-lg` | 13px | 500 | inherited | UI default: nav items, row titles, headings, chat empty/error |
+| `--font-lg-up` | 13.5px | inherited | 1.6 | Body prose: message content, composer input |
+| `--font-xl` | 14px | inherited | inherited | Chat title, empty-state title, stat-pill value, search input |
+| `--font-xxl` | 15px | 600 | inherited | Brand name, section headers, content H1-H3, workflow panel title |
+| `--font-xxxl` | 17px | 600 | inherited | Sub-page title: node detail title |
+| `--font-page` | 18px | 600 | inherited | Page title H1, board detail title |
 
-Interaction-transition timings are now tokens in `:root` (referenced as
-`var(--token)`; never inline a duration in a component). Three duration steps map
-to the table above; two easing tokens name the curves:
-
-| Token | Value | Use |
-|---|---|---|
-| `--dur-1` | `0.08s` | Immediate — direct-manipulation hover (session/message/search rows). |
-| `--dur-2` | `0.12s` | Fast — nav items, focus borders, pills, lightweight controls. |
-| `--dur-3` | `0.15s` | Base — buttons, cards, composer, panels, settings controls. |
-| `--ease-standard` | `ease` | Default control transitions. |
-| `--ease-in-out` | `ease-in-out` | Looping skeleton / thinking animations. |
-
-Scope: these cover **interaction transitions** only. Looping keyframe durations
-(`shimmer` 1.3s, `pulse` 1.5s, `spin` 0.7–1s, `olympus-pulse` 1.6s,
-`thinking-bounce` 1.2s) stay per-animation — each is a characteristic rhythm, not
-an interaction step, so a shared scale would flatten distinct signals. Their
-*easing* is tokenized (`--ease-in-out`) where shared. All interaction durations
-stay ≤150ms per the rules above; the two former `0.1s` one-offs snapped to
-`--dur-2` (a sub-perceptual +20ms) to land on the scale.
+**Weight convention:**
+- `400` (normal): body prose, descriptions
+- `500`: nav items, row titles, filter chips, interactive labels
+- `600`: page titles, brand, card titles, headings
+- `700`: role badges, status badges, mono tags (managed/fork/live)
 
 ---
 
-## 8. Density
+## 4. Spacing & Layout
 
-Target density: **dense** — Linear-grade information per screen. Session rows are
-`68px`, nav items `8px 12px`, message rows `12px 24px`. Roadmap U2 calls for a
-runtime **density toggle** (comfortable / compact). It is **not yet
-implemented**; when built it must rescale via the `--space-*` scale (§11), not
-per-component overrides, so one token swap reflows the whole cockpit.
+### Layout constants
+
+| Token | Default | Compact | Usage |
+|-------|---------|---------|-------|
+| `--sidebar-w` | 220px | 220px | Sidebar width (fixed) |
+| `--space-view-y` | 20px | 16px | Vertical padding inside view scroll area |
+| `--space-view-x` | 24px | 20px | Horizontal padding inside view scroll area |
+| `--space-toolbar-y` | 12px | 10px | Toolbar vertical padding |
+| `--space-toolbar-x` | 16px | 14px | Toolbar horizontal padding |
+| `--space-nav-y` | 8px | 6px | Nav item vertical padding |
+| `--space-nav-x` | 12px | 10px | Nav item horizontal padding |
+| `--space-panel` | 12px | 10px | Inner panel/card padding (small) |
+| `--space-panel-lg` | 16px | 14px | Inner panel/card padding (large) |
+| `--page-gap` | 18px | 14px | Gap between page header and content |
+| `--session-row-h` | 68px | 60px | Session row height |
+
+### Spacing philosophy
+- Use the token variables above — never raw pixel values for padding/margin/gaps.
+- The gap between sibling elements should match the most specific applicable token.
+- `--space-panel` / `--space-panel-lg` are the "atomic unit" for card/panel interiors.
+- Density mode (`[data-density="compact"]`) reduces all spacing by ~20%.
+
+---
+
+## 5. Radius & Elevation
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--radius` | 6px | Default radius: cards, panels, inputs, buttons, search boxes |
+| `--radius-sm` | 4px | Small radius: badges, pills, toggles, small buttons |
+
+**Elevation model:** No drop shadows. Depth is communicated through:
+1. Background layering (`bg` → `bg-elev` → `bg-elev2`)
+2. Border presence and brightness (`border` vs `border-bright`)
+3. Subtle hover-state background changes
+
+This keeps the cockpit flat, scannable, and terminal-like.
+
+---
+
+## 6. Motion System
+
+### Duration tokens
+
+| Token | Value | Use case |
+|-------|-------|----------|
+| `--dur-1` | 80ms | Immediate: row hover, message hover (direct manipulation) |
+| `--dur-2` | 120ms | Fast: nav focus, border color shifts, pills, lightweight controls |
+| `--dur-3` | 150ms | Base: buttons, cards, composer, panels, settings |
+
+### Easing tokens
+
+| Token | Value | Use case |
+|-------|-------|----------|
+| `--ease-standard` | `ease` | Default control transitions |
+| `--ease-in-out` | `ease-in-out` | Looping animations (skeleton shimmer, thinking bounce) |
+
+### Rules
+- **Max interaction transition: 150ms.** Nothing feels sluggish.
+- **Looping keyframe animations** define their own duration (characteristic rhythm):
+  - `shimmer`: 1.3s (skeleton loading)
+  - `thinking-bounce`: 1.2s (agent thinking dots)
+  - `pulse`: 1.5s (streaming tag blink)
+  - `spin`: 0.7s–1s (spinner, tool-running indicator)
+  - `olympus-pulse`: 1.6s (live dot pulse)
+- **Reduced motion:** `@media (prefers-reduced-motion: reduce)` collapses all
+  transitions to instant and all looping animations to their final frame.
+
+---
+
+## 7. Density Modes
+
+Two modes via `[data-density]` on `<html>`:
+
+| Mode | `data-density` | Feel |
+|------|---------------|------|
+| **Comfortable** (default) | omitted or `"comfortable"` | Standard spacing, roomy rows |
+| **Compact** | `"compact"` | ~20% tighter spacing, shorter rows |
+
+Compact mode overrides all `--space-*` and `--session-row-h` tokens. No other
+tokens change — font sizes, radii, colors stay identical.
+
+---
+
+## 8. Component Inventory
+
+All shared primitives are in `ui/src/components/shell.tsx`. View-specific
+components live in each `views/*.tsx` file but must use design-system tokens
+and follow these patterns.
+
+### 8.1 PageHeader
+
+```
+Props: { title: string, subtitle?: string, actions?: ReactNode }
+States: default (title + optional subtitle + actions row)
+CSS classes: .page-header, .page-title, .page-subtitle, .page-header-actions
+```
+
+**Pattern:** Every view opens with `<PageHeader>`. Title uses `--font-page` (18px, 600).
+Actions slot accepts buttons, stat pills, badges.
+
+### 8.2 EmptyState
+
+```
+Props: { icon?: ReactNode, title: string, message?: string, cta?: ReactNode }
+States: default (centered, vertical stack), with icon, with CTA
+CSS classes: .empty-state, .empty-state-icon, .empty-state-title,
+             .empty-state-message, .empty-state-cta
+```
+
+**Pattern:** Used when a list/board has zero items. Icon at 50% opacity.
+Title in `--text-dim`, message in `--text-faint`. CTA button in `.empty-state-cta`.
+
+### 8.3 PlaceholderBadge
+
+```
+Props: { epic: string }
+States: default (shows "placeholder · {epic}")
+CSS class: .placeholder-badge
+```
+
+**Pattern:** Signals a view whose backend epic hasn't landed yet. Amber mono text.
+
+### 8.4 StatPill
+
+```
+Props: { label: string, value: ReactNode }
+States: default
+CSS classes: .stat-pill, .stat-pill-value, .stat-pill-label
+```
+
+**Pattern:** Metric chip. Elevated background, border, mono value in `--font-xl`,
+uppercase label in `--font-sm-up`.
+
+### 8.5 Badge
+
+```
+Props: { kind?: string, children: ReactNode }
+Kind variants: todo, ready, running, warning, blocked, failed, done (or unstyled)
+States: default, todo, ready, running, warning, blocked, failed, done
+CSS classes: .badge, .badge-{kind}
+```
+
+**Pattern:** Status pill. Mono, uppercase, small. Each `kind` maps to semantic
+color tokens (green=running, red=blocked/failed, etc.).
+
+### 8.6 Button variants
+
+Not a shell primitive yet (inline in views), but follow this contract:
+
+| Class | Variant | Bg | Text | Border | Radius |
+|-------|---------|-----|------|--------|--------|
+| `.btn-primary` | Primary action | `--accent` | `--on-accent` | none | `--radius-sm` |
+| `.new-chat-btn` | Emphasized primary | `--accent` | `--on-accent` | none | `--radius-sm` |
+| `.board-ghost-btn` | Secondary | `--bg-elev` | `--text-dim` | `--border` | `--radius-sm` |
+| `.composer-send` | Icon send | `--accent` | `--bg` | none | `--radius-sm` |
+| `.composer-stop` | Stop (destructive) | `--red` | `--bg` | none | `--radius-sm` |
+| `.composer-fork-btn` | Fork (outline) | transparent | `--accent` | `--accent-border` | `--radius-sm` |
+| `.back-btn` | Ghost back | transparent | `--text-dim` | `--border-bright` | `--radius-sm` |
+| `.settings-action-btn` | Settings action | `--bg` | `--text-dim` | `--border-bright` | `--radius-sm` |
+| `.source-pill` | Filter pill | transparent | `--text-dim` | `--border-bright` | 20px (pill) |
+| `.nodes-filter` | Filter chip | `--bg-elev` | `--text-dim` | `--border` | 999px (pill) |
+| `.workflow-filter` | Workflow filter | transparent | `--text-dim` | `--border` | 999px (pill) |
+
+**Button states (all variants):** default → `:hover` (brighten/tint) → `:active`
+→ `:disabled` (opacity 0.4–0.5, cursor not-allowed).
+
+### 8.7 Input / Field patterns
+
+| Class | Type | Focus treatment |
+|-------|------|----------------|
+| `.search-box` | Search input with icon | `border-color: --accent` on `:focus-within` |
+| `.search-input-wrap` | Full-width search | Same as above |
+| `.composer-input-row` | Composer textarea container | `border-color: --accent` on `:focus-within` |
+| `.board-field input` | Board form field | `outline: none; border-color: --accent` on `:focus` |
+| `.sort-select` | Native select dropdown | `border-color: --accent` on `:hover` |
+| `.composer-assign-select` | Model picker select | `border-color: --accent` on `:focus` |
+
+### 8.8 Card / Panel patterns
+
+| Class | Context | Hover |
+|-------|---------|-------|
+| `.board-card` | Kanban card | `translateY(-1px)`, border brightens |
+| `.node-card` | Fleet node card | `translateY(-1px)`, border brightens |
+| `.workflow-list-item` | Workflow list item | Background elevates, border brightens |
+| `.tool-call-card` | Tool call expandable | Background elevates on header hover |
+| `.node-detail-metric` | Metric box inside detail | No hover (read-only) |
+| `.stat-pill` | Metric chip | No hover (read-only) |
+
+### 8.9 Loading states
+
+| Class | Context | Animation |
+|-------|---------|-----------|
+| `.skel-row` / `.skel-line-*` | Session list skeleton | `shimmer` gradient sweep |
+| `.skel-msg` / `.skel-line` | Chat transcript skeleton | `shimmer` gradient sweep |
+| `.board-skeleton-card` / `.board-skeleton-line-*` | Board skeleton | Solid placeholder blocks |
+| `.node-skel-*` | Node grid skeleton | Gradient sweep |
+| `.workflow-skeleton-card` / `.workflow-skeleton-step` | Workflow skeleton | Solid placeholder blocks |
+| `.thinking-indicator` / `.thinking-dot` | Agent thinking | `thinking-bounce` (staggered dots) |
+| `.composer-spinner` | Composer sending | `spin` (0.7s) |
+| `.search-spinner` | Search in flight | `spin` (0.8s) |
+
+### 8.10 Message / Chat components
+
+| Class | Role | Visual signature |
+|-------|------|-----------------|
+| `.msg-user` | User message | Cyan left border + subtle cyan bg wash |
+| `.msg-assistant` | AI reply | Green left border |
+| `.msg-tool` | Tool call/result | Amber left border + amber bg wash |
+| `.role-badge.role-user` | User label | Cyan filled pill |
+| `.role-badge.role-ai` | AI label | Green filled pill |
+| `.role-badge.role-tool` | Tool label | Amber filled pill |
+| `.reasoning-content` | Model reasoning | Neutral bg, hairline left rule, italic |
 
 ---
 
 ## 9. Accessibility
 
-- **Contrast:** primary text on `--bg` meets WCAG AA in all three themes;
-  `--text-dim` is for secondary content only, `--text-faint` for non-essential
-  meta — do not put primary information in faint.
-- **Focus:** every interactive control shows a keyboard focus ring — a shared
-  `:focus-visible` rule paints a `2px var(--ring)` outline (offset 2px). It
-  fires for keyboard/programmatic focus only, never on mouse click, and
-  `--ring` derives from `--accent` so it re-themes automatically. (Closed the
-  former top a11y debt — see §6 focus note + §12.)
-- **Targets:** interactive rows/buttons keep a ≥28–32px hit height.
-- **Color is never the only signal:** status uses badge text + color (e.g.
-  `RUNNING`/`BLOCKED` labels), role uses a labeled badge + gutter tint, not hue
-  alone.
-- **Motion:** honors `prefers-reduced-motion` — a global `@media` reset in
-  `index.css` neutralizes all animation/transition for users who request it
-  (WCAG 2.3.3). Safe because every live state also carries a text label.
+### 9.1 Focus rings
+
+Single global `:focus-visible` rule (index.css L208–211):
+
+```css
+:where(button, a, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);   /* --ring = var(--accent), auto-themes */
+  outline-offset: 2px;
+}
+```
+
+- Fires on keyboard/programmatic focus only — never on mouse click.
+- Uses `:where()` for zero specificity — can't be overridden accidentally.
+- Wrapped inputs (`.search-box`, `.composer`) route focus via `:focus-within`.
+
+### 9.2 Reduced motion
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+```
+
+All motion collapses instantly. Information is never carried by animation alone
+— every animated state has a text label.
+
+### 9.3 Color contrast
+
+- Midnight theme: light-on-dark text passes WCAG AA for `--text`/`--bg-elev`.
+- Daylight theme: dark-on-light text passes WCAG AA for `--text`/`--bg`.
+- Amber CRT: warm-on-dark passes WCAG AA for `--text`/`--bg`.
+- **Debt:** Formal contrast audit with axe/wave not yet run. `--text-faint` on `--bg`
+  may fail AAA in some themes — flagged for v0.5 pass.
+
+### 9.4 Semantic HTML
+
+- Views use `<main>`, `<nav>`, `<aside>`, `<button>` (not div onclick).
+- Icons are decorative SVGs (no aria-label needed unless standalone).
+- Live regions for WS-driven updates should use `aria-live` (partial implementation).
 
 ---
 
-## 10. Do / Don't
+## 10. Do / Don't Gallery
 
-**Do**
-- Reference `var(--token)` for every color; add a token to all themes for any new need.
-- Use `--mono` for anything machine-shaped (IDs, times, counts, code) — it's the terminal half of the personality.
-- Layer surface tokens for depth; keep the UI flat.
-- Lead every view with `PageHeader`; use `EmptyState` + skeletons for the empty/loading edges.
-- Map status strictly to the semantic colors (§2): accent=focus, green=healthy, amber=attention, red=failure.
-- Keep motion ≤150ms and purposeful.
+### ✅ Do
 
-**Don't**
-- Hardcode a hex or `rgba()` in a component or in `index.css` outside a theme block. *(Several literals exist today — see §11 debts.)*
-- Introduce Inter, Roboto, system-default sans for content, or any Material component.
-- Add purple/violet or gradient accents. *(Anchor honored — the former `rgba(240,171,252)` purple reasoning wash was removed 2026-06-30.)*
-- Use drop shadows for decoration, or `box-shadow` where a surface/border token reads cleaner.
-- Put primary information in `--text-faint`.
-- Add a one-off spacing/size value when a scale step fits.
+- **DO** use `var(--token)` for every color, spacing, font-size, radius, duration.
+- **DO** add a new token to ALL THREE theme blocks when you need a new color/alpha.
+- **DO** use `--font-{name}` tokens — never inline pixel values for font-size.
+- **DO** use `--space-{name}` tokens for padding/margins in layout contexts.
+- **DO** use `--dur-{n}` + `--ease-{name}` for transitions.
+- **DO** use shell primitives (`PageHeader`, `EmptyState`, `StatPill`, `Badge`) instead of reinventing.
+- **DO** keep hover transitions ≤150ms.
+- **DO** provide text labels alongside color-coded states.
+- **DO** test in midnight AND daylight after any visual change.
+- **DO** use IBM Plex Mono for data, timestamps, badges, code.
+- **DO** use `:focus-visible` for keyboard focus (don't add custom outline rules).
 
----
+### ❌ Don't
 
-## 11. Known debts (path for future runs)
-
-Ranked by leverage. Each future run picks the top unblocked item, fixes it at
-the system level, verifies, and logs it in §12.
-
-1. **Hardcoded color literals** break the "tokens only" rule and the theme
-   contract. **CSS portion CLOSED (2026-07-01)** — `index.css` now has **zero**
-   hardcoded hex/`rgba()` outside the `[data-theme]` token blocks. History:
-   - ~~scrollbar thumb hover `#3a4452`~~ tokenized (`--scrollbar-thumb-hover`).
-   - ~~`.new-chat-btn` text/bg/hover literals~~ **DONE (2026-06-30)** —
-     `var(--on-accent)` / `var(--accent)` / `var(--accent-hover)`.
-   - ~~`.composer-send` hover `#a5e0ff`~~ **DONE (2026-06-30)** — `var(--accent-hover)`.
-   - ~~`.reasoning-content` purple `rgba(240,171,252,…)`~~ **DONE (2026-06-30)** —
-     neutral `var(--bg-elev2)` + `var(--border-bright)`.
-   - ~~`.diff-line.add/.del/.hunk` washes `rgba(134,239,172,.10)` /
-     `rgba(248,113,113,.10)` / `rgba(125,211,252,.06)`~~ **DONE (2026-07-01)** —
-     now `var(--green-soft)` / `var(--red-soft)` / `var(--accent-soft)`. The `del`
-     literal was also off-palette (`#f87171`, not the theme `--red` `#fca5a5`);
-     the token fix corrects the hue too.
-   - The accent/green/amber alpha values these referenced are now all defined as
-     semantic tokens (`--accent-soft`, `--green-soft`, `--red-soft`, etc.) in
-     every `[data-theme]` block — see §2 "Non-theme primitives" / the token layer.
-     Remaining work for this debt is purely in **TSX components** (any inline
-     `style={{…}}` color literals), not `index.css`.
-2. ~~**No keyboard focus ring** (a11y, §9).~~ **DONE (2026-06-30).** Added a
-   `--ring` token (derives from `--accent`) + a shared
-   `:where(…):focus-visible` rule across all interactive elements.
-3. **No type scale tokens** (§3). **Motion half CLOSED (2026-07-01)** —
-   `--dur-1/2/3` + `--ease-standard`/`--ease-in-out` now live in `:root`; every
-   interaction transition in `index.css` references them (see §7 motion tokens).
-   Remaining: the **type scale** — promote the inline `font-size`/`weight`
-   literals (§3) to a `--font-*` set so rhythm is consistent and rescalable.
-   *(Spacing scale `--space-*` and the `[data-density]` block already shipped —
-   see §4/§8.)*
-4. ~~**Density toggle** (§8).~~ **Shipped** — `[data-density="compact"]` block +
-   Settings toggle rescale via `--space-*`. (Comfortable/compact only; further
-   modes can extend the same pattern.)
-5. ~~**`prefers-reduced-motion`** not honored (§7).~~ **DONE (2026-06-30).**
-   Global `@media (prefers-reduced-motion: reduce)` reset in `index.css`
-   neutralizes all transitions + looping keyframes (shimmer/spin/pulse/
-   thinking-bounce/olympus-pulse). Safe — every live state carries a text label.
-6. **No `Toolbar` / `SkeletonRows` shared primitives** in `shell.tsx` though the
-   roadmap names them; loading/filter UI is re-implemented per view.
-7. **`ui/src/components.tsx` is dead code on a phantom token vocabulary.** It
-   exports `SourceBadge` / `ModelPill` (imported nowhere) styled via inline
-   `style={{}}` referencing tokens that **do not exist** in any theme block:
-   `--font-mono`, `--border-subtle`, `--text-tertiary`, `--bg-2`, `--dur-fast`,
-   `--ease-out`. If any view worker wires these in as-is they will render unstyled
-   (invalid `var()` → fallback/unset). Either delete the file or rewrite it
-   against the real token names (`--mono`, `--border`, `--text-faint`, `--bg-elev2`,
-   `--dur-2`, `--ease-standard`) and fold into `shell.tsx`. Flagged for a view
-   owner — the live pills (`.chat-source-badge`, `.chat-model-pill`) are correct.
+- **DON'T** hardcode hex colors (`#fff`, `rgba(…)`) in components.
+- **DON'T** use Inter, Roboto, or system-ui as the primary face (IBM Plex only).
+- **DON'T** use purple gradients, glassmorphism, or neon glow effects.
+- **DON'T** use drop shadows for elevation (use layering + borders).
+- **DON'T** exceed 150ms for interaction transitions.
+- **DON'T** use Material Design components or patterns.
+- **DON'T** animate information-carrying properties without a static fallback.
+- **DON'T** skip the compact density test after changing spacing.
+- **DON'T** add `!important` to token usages (fix specificity properly).
+- **DON'T** import a CSS framework (Tailwind, Bootstrap, etc.).
 
 ---
 
-## 12. Changelog
+## 11. Changelog
 
-| Date | Change | Why | Files |
-|---|---|---|---|
-| 2026-07-01 | **Fixed 5 broken `var(--font-mono)` typos in `index.css` — restored the mono font on 5 controls.** The mono token is `--mono` (defined in `:root`); `--font-mono` does not exist in any theme block, so five rules silently fell back through the `var()` fallback chain to the **sans** stack: `.thinking-label`, `.tool-diff` (the syntax-diff renderer), and three composer-assign controls (`.composer-assign-label`, `.composer-assign-select`/`-input`, `.composer-assign-locked`). Repointed all five to `var(--mono)`. Verified with a regex sweep: **zero** `var(--font-*)` references remain in `index.css`. Also logged a new debt (#7): the dead, unimported `ui/src/components.tsx` (`SourceBadge`/`ModelPill`) is written entirely against a phantom token vocabulary (`--font-mono`, `--border-subtle`, `--text-tertiary`, `--bg-2`, `--dur-fast`, `--ease-out`) — flagged for a view owner to delete or rewrite against real tokens before anyone wires it in. Gate green (typecheck + build exit 0). | These were live rendering bugs breaking the core "IBM Plex **Mono**" terminal anchor: the thinking indicator's label, the entire diff-view block, and the whole composer agent-assignment strip were rendering in proportional sans instead of monospace — a visible, on-anchor regression hiding as a plausible-looking token name that passes code review. Five one-word fixes restore the intended typography system-wide with zero layout change, reversibly. Higher leverage than any cosmetic tuning because it repairs a broken invariant (every mono surface actually uses the mono face) rather than adding polish. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-07-01 | **Introduced the motion scale — closed the motion half of debt #3.** Added five tokens to `:root` — `--dur-1` (0.08s), `--dur-2` (0.12s), `--dur-3` (0.15s), `--ease-standard` (ease), `--ease-in-out` (ease-in-out) — and repointed **all ~40 inline interaction-transition literals** across `index.css` at them (nav, pills, rows, buttons, composer, search, board/nodes/workflows/settings controls, theme swatches/toggle, etc.), plus the two shared looping easings (`shimmer`, `thinking-bounce`). Verified by regex sweep: **zero** inline transition durations remain (`transition:` … `Ns`). The two former `0.1s` one-offs (`.search-group-header`, `.group-open-icon`) snapped to `--dur-2` — a sub-perceptual +20ms — to land on the scale. Per-animation keyframe durations (shimmer/pulse/spin/olympus-pulse/thinking-bounce) intentionally stay per-animation: each is a characteristic rhythm, not an interaction step, and a shared scale would flatten distinct live-state signals. Added a §7 "Motion tokens" table, updated debt #3 (now type-scale-only). Gate green (typecheck + build exit 0). | This was the top unblocked debt item and a direct mirror of the already-shipped `--space-*` work: motion timing was the last interaction dimension still living as ~40 scattered literals (0.08/0.1/0.12/0.15s with mixed/implicit easing), which blocks consistent rhythm and means a future "snappier/calmer" tuning pass would require editing dozens of rules instead of three tokens. Tokenizing it makes the motion language enforceable ("no inline duration in a component", same invariant as color/space) and tunable from one place, with zero layout change and near-zero visual change (CSS default easing is already `ease`; only the two 0.1s→0.12s consolidations move, sub-perceptually). Reverses by inversion. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-07-01 | **Tokenized the last hardcoded color literals in `index.css` — CSS portion of debt #1 now fully closed.** The three `.diff-line` washes (the syntax-diff renderer in tool-call cards) were the only remaining off-token colors in the stylesheet: `.add` `rgba(134,239,172,.10)`, `.del` `rgba(248,113,113,.10)`, `.hunk` `rgba(125,211,252,.06)`. Repointed them to the existing semantic wash tokens `var(--green-soft)` / `var(--red-soft)` / `var(--accent-soft)`, which are defined in all three `[data-theme]` blocks. Verified with a regex sweep: **zero** hardcoded hex/`rgba()` now exist outside the theme token blocks. Updated debt #1. Gate green (typecheck + build exit 0). | These three literals broke both the "tokens only" rule and the theme contract — diff backgrounds stayed midnight-tinted in daylight/amber-crt instead of re-theming. Worse, `.del` used `rgba(248,113,113,…)` = `#f87171`, which isn't even the theme's `--red` (`#fca5a5`) — so it was off-token *and* off-palette; the token swap corrects the hue too. Closing the entire CSS surface of debt #1 (not just chipping one offender) is the high-leverage move: it makes "no literal lives in index.css" an enforceable invariant going forward, and the only remaining debt-#1 work is inline `style={{}}` in TSX components. Three one-line token references, theme-correct, reverses by inversion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-06-30 | **Honored `prefers-reduced-motion` (closed a11y debt #5).** Added a global `@media (prefers-reduced-motion: reduce)` block in `index.css` (placed beside the shared focus-ring rule, keeping the a11y system rules together) that collapses all transitions to instant and settles every looping keyframe — `shimmer`, `spin`, `pulse`, `thinking-bounce`, `olympus-pulse` — on its final visible, original-position frame via `animation-iteration-count: 1`. Five infinite animations previously ran unconditionally regardless of OS preference. Updated §7 motion rules, §9 a11y, and debt #5. Gate green (typecheck + build exit 0). | This was the top clean a11y debt — vestibular-disorder users get continuous motion (skeleton shimmer, spinners, the live pulse) with no escape hatch, a WCAG 2.3.3 failure the docs already promised to fix. The reset is safe by design: the system mandates "color is never the only signal", so every animated live state (RUNNING/streaming/loading) also carries a text label — removing motion loses movement, not meaning. One `@media` block, theme-agnostic, reverses by deletion, zero layout change. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-06-30 | **Fixed circular self-referential tokens in the default (midnight) theme — a same-day regression.** Four midnight tokens had been left as invalid self-references: `--accent-dim: var(--accent-soft)`, `--accent-soft: var(--accent-soft)`, `--accent-hover-fill: var(--accent-hover-fill)`, and `--amber-soft: var(--amber-soft)` (introduced in `0ab805f`, the structured-tool-calls PR). A `var()` that references itself is invalid and resolves to the *guaranteed-invalid* value (effectively unset/transparent), so in the **default theme only** every surface backed by these tokens rendered with no fill: the brand-mark, board-card / node-card / workflow selected states, the node-session-dot glow, the placeholder/ready/warning badges, the user role badge, the composer-fork hover, and the density toggle. Daylight and amber-crt were unaffected (they carry literal rgba). Repointed all four to explicit rgba matching their documented values and the structure of the other two themes (`--accent-dim`/`--accent-soft` = `rgba(125,211,252,.12)`, `--accent-hover-fill` = `.10`, `--amber-soft` = `.13`). Gate green (typecheck + build exit 0). | This was the single highest-leverage fix available: a broken default-theme token contract silently degrading ~8 surfaces for every user (midnight is the default), invisible in code review because the value *looks* token-shaped. Four one-line literals restore the whole token layer with zero layout change, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-06-30 | **Removed the purple reasoning wash (closed the only *anchor* violation in debt #1).** `.reasoning-content` was the lone control breaking the core "no purple gradients" design anchor — a hardcoded `rgba(240,171,252,…)` violet background + left border that read as foreign in every theme (and stayed purple even in amber-crt, where nothing else is). Repointed it to neutral system tokens: `var(--bg-elev2)` surface + `var(--border-bright)` left rule. Reasoning now reads as what it is — a recessive, italic editorial aside — and re-themes correctly across midnight/daylight/amber-crt. Updated §10 Don't and debt #1. Gate green (typecheck + build exit 0). | The purple was the single most visible breach of the stated personality ("NOT generic AI slop, no purple gradients") and the only off-anchor color left in the UI. Two neutral token references kill it system-wide, reversibly, with zero layout change — higher design leverage than chipping at the remaining same-hue accent/green/amber alpha literals, which are on-anchor and merely need tokenizing. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-06-30 | **Theme-correct primary CTAs (debt #1, top offenders).** Added two semantic tokens — `--on-accent` (text/icon color on an accent fill) and `--accent-hover` (hover fill for accent-filled CTAs) — to all three `[data-theme]` blocks, then repointed `.new-chat-btn` (was hardcoded `#22d3ee` bg / `#0a0e14` text / `#67e8f9` hover) and `.composer-send:hover` (was `#a5e0ff`) at them. Updated §2 token table + debt #1. Verified in browser: New Chat renders sky-blue+dark in midnight and deep-sky-blue+white in daylight (previously stuck bright-cyan with weak contrast in light/amber themes). | The two primary CTAs were the only fully off-token, non-re-theming controls left — they stayed midnight-cyan in every theme, breaking the theme contract and failing contrast in daylight/amber-crt. Two tokens close the largest visible part of debt #1 system-wide, reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-06-30 | **Keyboard focus ring (closed top a11y debt #2).** Added `--ring` token (`var(--accent)`, re-themes for free) + a single shared `:where(button, a, select, textarea, summary, [role="button"], [tabindex]):focus-visible` rule painting a `2px var(--ring)` outline (offset 2px). `:focus-visible` fires for keyboard/programmatic focus only, so pointer users are undisturbed and no per-component focus styling is needed. Wrapped inputs keep their `:focus-within` border. Updated §2 token table, §6 state table + focus note, §9, and the debt list (also reconciled #3/#4: `--space-*` scale + density toggle already shipped). | Every interactive control was keyboard-focusable but showed no focus indicator — the #1 accessibility gap, failing WCAG 2.4.7. One token + one rule fixes it system-wide, theme-correctly and reversibly. | `ui/src/index.css`, `docs/design/DESIGN_SYSTEM.md` |
-| 2026-06-29 | **Created the design system.** Documented all 3 themes + full semantic token table, type scale, spacing rhythm, radius/elevation stance, component inventory with required states, motion table, density target, a11y posture, do/don't, and a ranked debt backlog grounded in the live `index.css` + `shell.tsx`. | First run: establish the canonical system every view worker builds against, and make the existing token-rule violations visible as a fixable backlog. | `docs/design/DESIGN_SYSTEM.md` (new), `docs/design/VISION.md` (new) |
+### 2026-07-01 — Initial creation (first design-lead run)
+
+- Created `DESIGN_SYSTEM.md` from live audit of `ui/src/index.css` (1624 lines),
+  `ui/src/components/shell.tsx` (5 primitives), and all 8 view files.
+- Full token inventory: 13 surface+border+text tokens, 8 semantic color tokens,
+  27 alpha-derived tokens, 15 font-size tokens, 2 typeface families, 11 spacing
+  tokens, 2 radius tokens, 3 duration tokens, 2 easing tokens.
+- Documented component inventory: 5 shell primitives + 6 button variants +
+  6 input patterns + 8 card/panel patterns + 9 loading states + 10 chat/message
+  components, all with states documented.
+- Created companion `VISION.md` with north-star definition, 4 reference products,
+  personality adjectives, and phased look-evolution path (v0.2 → v0.5 → v1.0).
