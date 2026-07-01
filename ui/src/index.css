@@ -171,6 +171,18 @@
   --font-xxl:     15px;      /* brand name, section headers, content H1-H3, workflow panel title */
   --font-xxxl:    17px;      /* sub-page title: node detail title */
   --font-page:    18px;      /* page title H1, board detail title */
+  /* Tracking scale (§3). Letter-spacing is theme-agnostic (glyph geometry
+     doesn't change per theme). Three intents only — the previous CSS drifted
+     across .03/.04/.05/.06em on uppercase labels with no rationale:
+     - tight: display/page titles get a hair of negative tracking so large
+       weights read compact and editorial.
+     - caps: THE canonical tracking for every uppercase mono label/badge/status
+       (the former dominant value). One value = zero drift.
+     - caps-wide: eyebrow/kicker labels only — the smallest caps text, which
+       wants the most tracking to stay legible and read as a section marker. */
+  --tracking-tight:     -0.01em;
+  --tracking-caps:       0.05em;
+  --tracking-caps-wide:  0.06em;
 }
 
 :root[data-density="compact"] {
@@ -275,8 +287,8 @@ html, body, #root {
 }
 
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
-.brand-name { font-size: var(--font-xxl); font-weight: 600; letter-spacing: -0.01em; }
-.brand-sub { font-size: var(--font-sm); color: var(--text-faint); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.05em; }
+.brand-name { font-size: var(--font-xxl); font-weight: 600; letter-spacing: var(--tracking-tight); }
+.brand-sub { font-size: var(--font-sm); color: var(--text-faint); font-family: var(--mono); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
 
 .nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
 
@@ -312,7 +324,7 @@ html, body, #root {
 }
 
 .status-row { display: flex; justify-content: space-between; align-items: center; }
-.status-key { color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.03em; }
+.status-key { color: var(--text-faint); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
 .status-val { color: var(--text-dim); }
 
 .status-dot {
@@ -641,7 +653,7 @@ html, body, #root {
   border-radius: var(--radius-full);
   flex-shrink: 0;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-caps);
 }
 
 .chat-model-pill {
@@ -730,7 +742,7 @@ html, body, #root {
   font-size: var(--font-sm);
   font-family: var(--mono);
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: var(--radius-sm);
@@ -830,7 +842,7 @@ html, body, #root {
   color: var(--text-faint);
   text-transform: lowercase;
   white-space: nowrap;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-caps);
 }
 .msg-divider-time { opacity: 0.6; }
 
@@ -903,7 +915,7 @@ html, body, #root {
   font-size: var(--font-xs);
   font-family: var(--mono);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-caps);
   color: var(--text-faint);
   margin-bottom: 4px;
 }
@@ -932,7 +944,7 @@ html, body, #root {
   font-family: var(--mono);
   font-size: var(--font-sm);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-caps);
   cursor: pointer;
   padding: 2px 0;
 }
@@ -977,7 +989,7 @@ html, body, #root {
   font-family: var(--mono);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-caps);
   color: var(--green);
   background: var(--green-soft);
   border: 1px solid var(--green-border);
@@ -989,7 +1001,7 @@ html, body, #root {
   font-family: var(--mono);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-caps);
   color: var(--text-faint);
   background: var(--bg-elev2);
   border: 1px solid var(--border-bright);
@@ -1005,7 +1017,7 @@ html, body, #root {
   font-family: var(--mono);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-caps);
   color: var(--accent);
   background: var(--accent-soft);
   border: 1px solid var(--accent-border-strong);
@@ -1095,7 +1107,7 @@ html, body, #root {
 .composer-assign-label {
   font-size: var(--font-base);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-caps-wide);
   color: var(--text-faint);
   font-family: var(--mono);
 }
@@ -1350,7 +1362,7 @@ html, body, #root {
 .view-scroll { height: 100%; overflow-y: auto; padding: var(--space-view-y) var(--space-view-x); }
 
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: var(--page-gap); }
-.page-title { font-size: var(--font-page); font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.page-title { font-size: var(--font-page); font-weight: 600; color: var(--text); letter-spacing: var(--tracking-tight); }
 .page-subtitle { font-size: var(--font-md-lg); color: var(--text-dim); margin-top: 3px; }
 .page-header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 
@@ -1368,9 +1380,9 @@ html, body, #root {
 
 .stat-pill { display: inline-flex; align-items: baseline; gap: 5px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: calc(var(--space-panel) - 7px) calc(var(--space-panel-lg) - 6px); }
 .stat-pill-value { font-size: var(--font-xl); font-weight: 600; color: var(--text); font-family: var(--mono); }
-.stat-pill-label { font-size: var(--font-sm-up); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.stat-pill-label { font-size: var(--font-sm-up); color: var(--text-faint); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
 
-.badge { font-family: var(--mono); font-size: var(--font-sm); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--radius-sm); background: var(--bg-elev2); color: var(--text-dim); border: 1px solid var(--border); }
+.badge { font-family: var(--mono); font-size: var(--font-sm); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tracking-caps); padding: 2px 7px; border-radius: var(--radius-sm); background: var(--bg-elev2); color: var(--text-dim); border: 1px solid var(--border); }
 .badge-todo { color: var(--text-dim); }
 .badge-ready { color: var(--accent); border-color: var(--border-bright); background: var(--accent-dim); }
 .badge-running { color: var(--green); border-color: var(--green-border); background: var(--green-soft); }
@@ -1385,7 +1397,7 @@ html, body, #root {
 .board-header-actions { display: flex; gap: 8px; align-items: center; }
 .board-toolbar { display: grid; grid-template-columns: 140px minmax(220px, 1fr) minmax(260px, 1.2fr); gap: 12px; align-items: end; }
 .board-field { display: flex; flex-direction: column; gap: 6px; }
-.board-field-label { font-size: var(--font-sm-up); text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); font-family: var(--mono); }
+.board-field-label { font-size: var(--font-sm-up); text-transform: uppercase; letter-spacing: var(--tracking-caps); color: var(--text-faint); font-family: var(--mono); }
 .board-field input { width: 100%; min-width: 0; background: var(--bg-elev); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; }
 .board-field input:focus { outline: none; border-color: var(--accent); }
 .board-field input::placeholder { color: var(--text-faint); }
@@ -1397,7 +1409,7 @@ html, body, #root {
 .board-columns { display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 4px; }
 .board-column { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); min-height: 240px; min-width: 0; }
 .board-column-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.board-column-title { font-size: var(--font-base); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); }
+.board-column-title { font-size: var(--font-base); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tracking-caps); color: var(--text-dim); }
 .board-column-hint { margin-top: 4px; font-size: var(--font-base); color: var(--text-faint); line-height: 1.35; }
 .board-column-count { font-family: var(--mono); font-size: var(--font-base); color: var(--text-faint); }
 .board-column-body { padding: 8px; }
@@ -1413,7 +1425,7 @@ html, body, #root {
 .board-card-meta-secondary { color: var(--text-faint); font-family: var(--mono); font-size: var(--font-sm-up); }
 .board-detail { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .board-detail-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-.board-detail-label { font-size: var(--font-sm-up); text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); font-family: var(--mono); margin-bottom: 4px; }
+.board-detail-label { font-size: var(--font-sm-up); text-transform: uppercase; letter-spacing: var(--tracking-caps); color: var(--text-faint); font-family: var(--mono); margin-bottom: 4px; }
 .board-detail-title { font-size: var(--font-page); line-height: 1.3; color: var(--text); }
 .board-detail-badges { display: flex; gap: 8px; flex-wrap: wrap; }
 .board-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
@@ -1455,15 +1467,15 @@ html, body, #root {
 .node-slot-bar { height: 7px; border-radius: var(--radius-full); overflow: hidden; background: var(--bg-elev2); border: 1px solid var(--border); }
 .node-slot-bar-fill { height: 100%; background: var(--accent); }
 .node-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
-.node-footer-label { color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; font-size: var(--font-sm-up); }
+.node-footer-label { color: var(--text-faint); text-transform: uppercase; letter-spacing: var(--tracking-caps); font-size: var(--font-sm-up); }
 .node-footer-value { color: var(--text); font-family: var(--mono); font-size: var(--font-base-up); }
 .node-detail-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .node-detail-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
-.node-detail-kicker { color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; font-size: var(--font-sm); font-family: var(--mono); margin-bottom: 5px; }
+.node-detail-kicker { color: var(--text-faint); text-transform: uppercase; letter-spacing: var(--tracking-caps-wide); font-size: var(--font-sm); font-family: var(--mono); margin-bottom: 5px; }
 .node-detail-title { font-size: var(--font-xxxl); font-weight: 600; color: var(--text); }
 .node-detail-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .node-detail-metric { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 11px; display: flex; flex-direction: column; gap: 5px; }
-.node-detail-metric span { color: var(--text-faint); font-size: var(--font-sm-up); text-transform: uppercase; letter-spacing: .05em; }
+.node-detail-metric span { color: var(--text-faint); font-size: var(--font-sm-up); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
 .node-detail-metric strong { color: var(--text); font-size: var(--font-md-lg); font-weight: 600; }
 .node-session-list { display: flex; flex-direction: column; gap: 10px; }
 .node-session-list-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--font-md); color: var(--text-dim); }
@@ -1494,7 +1506,7 @@ html, body, #root {
 .workflow-detail-panel { padding: 14px 16px; }
 .workflow-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
 .workflow-detail-head { padding: 0 0 14px; margin-bottom: 14px; }
-.workflow-panel-kicker { font-family: var(--mono); font-size: var(--font-sm); text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); margin-bottom: 6px; }
+.workflow-panel-kicker { font-family: var(--mono); font-size: var(--font-sm); text-transform: uppercase; letter-spacing: var(--tracking-caps-wide); color: var(--text-faint); margin-bottom: 6px; }
 .workflow-panel-title { font-size: var(--font-xxl); font-weight: 600; color: var(--text); }
 .workflow-panel-copy { margin-top: 6px; font-size: var(--font-md-lg); line-height: 1.5; color: var(--text-dim); max-width: 68ch; }
 .workflow-list { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
@@ -1504,9 +1516,9 @@ html, body, #root {
 .workflow-list-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .workflow-list-name { font-size: var(--font-lg); font-weight: 600; color: var(--text); }
 .workflow-list-description { font-size: var(--font-md); line-height: 1.5; color: var(--text-dim); margin-bottom: 10px; }
-.workflow-list-meta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); font-size: var(--font-sm-up); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.workflow-list-meta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); font-size: var(--font-sm-up); color: var(--text-faint); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
 .workflow-filters { display: flex; flex-wrap: wrap; gap: 6px; }
-.workflow-filter { border: 1px solid var(--border); background: transparent; color: var(--text-dim); border-radius: var(--radius-full); padding: 5px 10px; font-size: var(--font-base); font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; cursor: pointer; }
+.workflow-filter { border: 1px solid var(--border); background: transparent; color: var(--text-dim); border-radius: var(--radius-full); padding: 5px 10px; font-size: var(--font-base); font-family: var(--mono); text-transform: uppercase; letter-spacing: var(--tracking-caps); cursor: pointer; }
 .workflow-filter:hover { border-color: var(--border-bright); color: var(--text); }
 .workflow-filter.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
 .workflow-latest-run { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 16px; }
@@ -1520,7 +1532,7 @@ html, body, #root {
 .workflow-step-node { width: 100%; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
 .workflow-step-node-index { font-family: var(--mono); font-size: var(--font-sm); color: var(--text-faint); margin-bottom: 6px; }
 .workflow-step-node-label { font-size: var(--font-md-lg); font-weight: 600; color: var(--text); margin-bottom: 4px; }
-.workflow-step-node-status { font-family: var(--mono); font-size: var(--font-sm); text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
+.workflow-step-node-status { font-family: var(--mono); font-size: var(--font-sm); text-transform: uppercase; letter-spacing: var(--tracking-caps); color: var(--text-dim); }
 .workflow-step-connector { flex: 0 0 22px; height: 1px; background: var(--border-bright); margin: 0 6px; }
 .workflow-step-done { border-color: var(--green-border); background: var(--green-soft); }
 .workflow-step-running { border-color: var(--accent-border-strong); background: var(--accent-dim); }
@@ -1566,7 +1578,7 @@ html, body, #root {
 }
 .settings-panel-block { padding: var(--space-panel-lg); }
 .settings-section-label-row { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 12px; }
-.settings-section-label { font-size: var(--font-base); font-family: var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); }
+.settings-section-label { font-size: var(--font-base); font-family: var(--mono); text-transform: uppercase; letter-spacing: var(--tracking-caps); color: var(--text-faint); }
 .theme-grid { display: flex; gap: 10px; flex-wrap: wrap; }
 .theme-swatch { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-panel) var(--space-panel-lg); cursor: pointer; transition: border-color var(--dur-3), background var(--dur-3); flex: 1 1 150px; min-width: 0; }
 .theme-swatch.active { border-color: var(--accent); }

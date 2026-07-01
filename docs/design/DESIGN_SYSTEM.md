@@ -149,6 +149,21 @@ Two typeface families:
 - `600`: page titles, brand, card titles, headings
 - `700`: role badges, status badges, mono tags (managed/fork/live)
 
+### Tracking (letter-spacing) scale
+
+Letter-spacing is theme-agnostic (glyph geometry doesn't change per theme).
+Only **three** intents exist — never hardcode a raw `em` value:
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--tracking-tight` | -0.01em | Display / page titles (`.page-title`, `.brand-name`) — large weights read compact and editorial with a hair of negative tracking |
+| `--tracking-caps` | 0.05em | **THE** tracking for every uppercase mono label / badge / status / column title / field label. One value = zero drift |
+| `--tracking-caps-wide` | 0.06em | Eyebrow / kicker labels only (`.node-detail-kicker`, `.workflow-panel-kicker`, `.composer-assign-label`) — the smallest caps text wants the most tracking to read as a section marker |
+
+**Rule:** all-caps labels use `--tracking-caps`. Tiny eyebrow kickers use
+`--tracking-caps-wide`. Display titles use `--tracking-tight`. Sentence-case
+body text sets no letter-spacing (default `normal`).
+
 ---
 
 ## 4. Spacing & Layout
@@ -453,6 +468,34 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Tokenize the tracking (letter-spacing) scale (0 tokens → 3)
+
+- **Problem:** the type system defined size + weight scales but **no tracking
+  scale**. Letter-spacing on uppercase labels had drifted across four raw
+  values — `.03em` (×3), `.04em` (×7), `.05em` (×11), `.06em` (×3) — plus
+  `-0.01em` (×2) on display titles, 26 sites total, none tokenized and no
+  rationale for which caps label got which value. The signature editorial-
+  terminal tracking on the cockpit's many all-caps mono labels (STORE, PROFILE,
+  column titles, badges, kickers) was unenforceable and inconsistent.
+- **Fix:** collapsed the drift to a principled **3-token scale** in `index.css`:
+  `--tracking-tight: -0.01em` (display/page titles), `--tracking-caps: 0.05em`
+  (the dominant value — now THE canonical tracking for every uppercase label /
+  badge / status / column title / field label), `--tracking-caps-wide: 0.06em`
+  (eyebrow kickers only — smallest caps text wants the most tracking). The
+  scattered `.03`/`.04` caps values all snap to `--tracking-caps`; the `.06`
+  kickers keep their wider tracking via `--tracking-caps-wide`.
+- **Behavior:** the only perceptible shift is the former `.03`/`.04em` labels
+  tightening/loosening by 0.01–0.02em to the unified `.05em` — sub-pixel at
+  these sizes, and the point: caps labels now read identically everywhere.
+  No color, layout, size, or view logic touched.
+- Documented the full 3-token tracking scale in §3 with per-token usage + a
+  "never hardcode a raw em; caps labels use `--tracking-caps`" rule.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0; browser
+  screenshot in **both midnight (Sessions) and daylight (Board)** — all caps
+  labels evenly tracked and legible (CONTROL PLANE / PROFILE / STORE / IMPORT,
+  source pills, TODO/READY/RUNNING/BLOCKED/DONE column titles, field labels),
+  zero regressions. Fully reversible.
 
 ### 2026-07-02 — Tokenize the radius scale (2 tokens → 4; kill raw radii)
 
