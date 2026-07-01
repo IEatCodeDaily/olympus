@@ -154,11 +154,11 @@ Known issues tracked for future runs:
 | D2 | Button variants scattered across views — extract to `shell.tsx` primitives | Low | v0.2 |
 | D3 | No custom scrollbar styling beyond basic webkit tokens | Low | v1.0 |
 | D4 | Some views (Usage, Nodes) have thinner empty states than Sessions/Board | Medium | v0.2 |
-| D5 | `placeholder-badge` uses `--accent-dim` bg instead of a dedicated amber token | Low | v0.2 |
+| D5 | ~~`placeholder-badge` uses `--accent-dim` bg instead of a dedicated amber token~~ **FIXED 2026-07-01** — repointed to `--amber-soft`/`--amber-border`; also fixed `.badge-warning` (same mis-tint) | ~~Low~~ Done | ~~v0.2~~ |
 | D6 | Focus ring offset (2px) may clip in tightly-packed rows | Low | v0.5 |
 | D7 | No `aria-live` regions on WS-driven real-time updates | Medium | v0.5 |
 | D8 | Composer lacks smooth auto-resize animation | Low | v0.5 |
 
 ---
 
-*Last updated: 2026-07-01 (initial creation, first design-lead run)*
+*Last updated: 2026-07-01 (D5 closed — amber-semantic fills fixed)*

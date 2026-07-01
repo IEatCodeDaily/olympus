@@ -94,6 +94,7 @@ per-theme so opacity/blending adapts to the theme's base colors.
 
 | Token | Purpose |
 |-------|---------|
+| `--accent-dim` | Accent-tinted fill for accent-semantic surfaces (ready badge, brand mark, fork btn, jump-latest). NOT for amber/green/red elements — use their own `*-soft`. |
 | `--accent-subtle` | Faint wash (user message gutter) |
 | `--accent-soft` | Badge fill / live indicator bg |
 | `--accent-border` | Decorative accent borders |
@@ -444,6 +445,22 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-01 — Fix amber-semantic fills mis-tinted with cyan accent (D5 + badge-warning)
+
+- `.badge-warning` used `background: var(--accent-dim)` (a **cyan** wash) with
+  `--border-bright` — the only colored badge whose fill didn't match its text
+  color (running=green-soft, blocked/failed=red-soft). Repointed to
+  `--amber-soft` + `--amber-border` so a warning reads as amber in all 3 themes.
+- `.placeholder-badge` (debt **D5**) had amber text on the same cyan
+  `--accent-dim` bg + neutral border → muddy amber-on-cyan. Repointed to
+  `--amber-soft` + `--amber-border` (self-consistent amber). Closes D5.
+- Documented the previously-undocumented `--accent-dim` token in §2 with a
+  usage rule: it's the accent-tinted fill for *accent-semantic* surfaces only;
+  amber/green/red elements must use their own `*-soft`. This guards against the
+  same mis-tint recurring.
+- No new tokens; existing per-theme amber tokens reused. No view logic touched.
+  Fully reversible. Gate: `bun run typecheck` + `bun run build` both green.
 
 ### 2026-07-01 — Initial creation (first design-lead run)
 
