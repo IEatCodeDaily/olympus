@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -15,9 +15,14 @@ interface Props {
   onOpenSession: (id: string) => void;
 }
 
+// Stable reference (never re-created) so useSessions' effect doesn't refire.
+const SESSION_META_PARAMS = {};
+
 export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
   const { messages, loading, error, streamingText, streamingIds, loadOlder, hasOlder } = useChat(sessionId);
-  const sessionMeta = useSessions({});
+  // Stable empty-params object so useSessions doesn't re-subscribe every render
+  // (an inline {} is a new reference each render → effect re-fires → lag).
+  const sessionMeta = useSessions(SESSION_META_PARAMS);
   const session = sessionMeta.sessions.find((s) => s.id === sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoFollow, setAutoFollow] = useState(true);
@@ -199,12 +204,17 @@ function Composer({
   onForked: (session: Session) => void;
 }) {
   const [text, setText] = useState("");
+  const [draftModel, setDraftModel] = useState<string | null>(model);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [forking, setForking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const agents = useAgents();
+
+  // Keep the draft synced when the prop changes (e.g. agent pick auto-fills it).
+  useEffect(() => { setDraftModel(model); }, [model]);
+  const onModelChange = useCallback((v: string) => setDraftModel(v), []);
 
   // The runtime is live once a Hermes id has been captured (after first send).
   // Before that the agent/model are still re-bindable.
@@ -337,10 +347,14 @@ function Composer({
             className="composer-assign-input"
             type="text"
             placeholder="default"
-            value={model ?? ""}
+            value={draftModel ?? ""}
             disabled={bound}
             title={bound ? "Model is locked once the session is live" : "Optional model override (e.g. glm-5.2)"}
-            onChange={(e) => assign({ model: e.target.value })}
+            // PATCH on blur, not every keystroke — onChange-per-key fires a
+            // server round-trip on each char and was a typing-lag contributor.
+            onChange={(e) => onModelChange(e.target.value)}
+            onBlur={() => { if (draftModel !== (model ?? "")) assign({ model: draftModel ?? undefined }); }}
+
           />
         </label>
         {bound && <span className="composer-assign-locked">runtime live · binding locked</span>}
@@ -414,7 +428,12 @@ const ROLE_META: Record<string, { label: string; cls: string }> = {
   session_meta: { label: "Event", cls: "role-meta" },
 };
 
-function MessageBubble({ message, streamingText }: { message: Message; streamingText?: string }) {
+// Memoized: the bubble runs ReactMarkdown + SyntaxHighlighter on every render,
+// which is expensive. Without memo, typing in the Composer re-renders ChatView
+// and re-parses markdown for EVERY message on each keystroke → typing lag.
+// memo() short-circuits when props are unchanged (a non-streaming message's
+// props are stable, so it only re-renders when its own content changes).
+const MessageBubble = memo(function MessageBubble({ message, streamingText }: { message: Message; streamingText?: string }) {
   const [showReasoning, setShowReasoning] = useState(false);
   const content = streamingText ?? message.content;
   const role = ROLE_META[message.role] ?? { label: message.role, cls: "role-unknown" };
@@ -510,7 +529,7 @@ function MessageBubble({ message, streamingText }: { message: Message; streaming
       </div>
     </div>
   );
-}
+});
 
 function RoleBadge({ role }: { role: { label: string; cls: string } }) {
   return <span className={`role-badge ${role.cls}`}>{role.label}</span>;
