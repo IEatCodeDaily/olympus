@@ -69,7 +69,7 @@ export default function SessionList({ selectedId, onOpenSession, managed }: Prop
       {/* Toolbar */}
       <div className="toolbar">
         <div className="toolbar-row">
-          <button
+          <button type="button"
             className="new-chat-btn"
             onClick={handleNewChat}
             disabled={creating}
@@ -88,6 +88,7 @@ export default function SessionList({ selectedId, onOpenSession, managed }: Prop
             <input
               type="text"
               placeholder="Search sessions..."
+              aria-label="Search sessions"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -114,7 +115,7 @@ export default function SessionList({ selectedId, onOpenSession, managed }: Prop
             const meta = SOURCE_META[src];
             const active = selectedSources.has(src);
             return (
-              <button
+              <button type="button"
                 key={src}
                 className={`source-pill ${active ? "active" : ""}`}
                 style={active ? { borderColor: meta.color, color: meta.color, background: meta.glow } : {}}
@@ -125,7 +126,7 @@ export default function SessionList({ selectedId, onOpenSession, managed }: Prop
             );
           })}
           {selectedSources.size > 0 && (
-            <button className="source-pill clear" onClick={() => setSelectedSources(new Set())}>
+            <button type="button" className="source-pill clear" onClick={() => setSelectedSources(new Set())}>
               Clear
             </button>
           )}
@@ -145,7 +146,10 @@ export default function SessionList({ selectedId, onOpenSession, managed }: Prop
             key={session.id}
             className={`session-row ${selectedId === session.id ? "selected" : ""}`}
             data-session-id={session.id}
+            role="button"
+            tabIndex={0}
             onClick={() => onOpenSession(session.id)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenSession(session.id); } }}
           >
             <SessionRowContent session={session} />
           </div>

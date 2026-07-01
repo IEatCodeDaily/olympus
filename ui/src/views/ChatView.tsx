@@ -71,7 +71,7 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
     <div className="chat-view" data-session-id={sessionId}>
       {/* Header */}
       <div className="chat-header">
-        <button className="back-btn" onClick={onBack}>
+        <button type="button" className="back-btn" onClick={onBack}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="m15 18-6-6 6-6" />
           </svg>
@@ -131,7 +131,7 @@ export default function ChatView({ sessionId, onBack, onOpenSession }: Props) {
 
       {/* Jump to latest */}
       {!autoFollow && (
-        <button className="jump-latest" onClick={scrollToBottom}>
+        <button type="button" className="jump-latest" onClick={scrollToBottom}>
           Jump to latest ↓
         </button>
       )}
@@ -301,7 +301,7 @@ function Composer({
           </svg>
           This is an observed <strong>{sourceLabel}</strong> session — read-only. Fork it to continue from Olympus.
         </div>
-        <button className="composer-fork-btn" disabled={forking} onClick={fork}>
+        <button type="button" className="composer-fork-btn" disabled={forking} onClick={fork}>
           {forking ? "Forking…" : "Fork to continue"}
         </button>
       </div>
@@ -364,6 +364,7 @@ function Composer({
           ref={taRef}
           className="composer-input"
           placeholder="Message this session…  (Enter to send, Shift+Enter for newline)"
+          aria-label="Message this session"
           value={text}
           rows={1}
           disabled={sending}
@@ -371,7 +372,7 @@ function Composer({
           onKeyDown={onKeyDown}
         />
         {inFlight ? (
-          <button
+          <button type="button"
             className="composer-stop"
             onClick={stop}
             disabled={stopping}
@@ -386,7 +387,7 @@ function Composer({
             )}
           </button>
         ) : (
-          <button className="composer-send" onClick={submit} disabled={!text.trim() || sending}>
+          <button type="button" className="composer-send" onClick={submit} disabled={!text.trim() || sending}>
             {sending ? (
               <span className="composer-spinner" />
             ) : (
@@ -478,7 +479,7 @@ const MessageBubble = memo(function MessageBubble({ message, streamingText }: { 
       <div className="msg-body">
         {message.reasoning && (
           <div className="reasoning-block">
-            <button className="reasoning-toggle" onClick={() => setShowReasoning(!showReasoning)}>
+            <button type="button" className="reasoning-toggle" onClick={() => setShowReasoning(!showReasoning)}>
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                 style={{ transform: showReasoning ? "rotate(90deg)" : "none", transition: "transform .15s" }}>
                 <path d="m9 18 6-6-6-6" />
@@ -491,7 +492,7 @@ const MessageBubble = memo(function MessageBubble({ message, streamingText }: { 
         {message.toolCalls && message.toolCalls.length > 0 && (
           <div className="tool-calls">
             {message.toolCalls.map((tc, i) => (
-              <ToolCallCard key={i} tc={tc} />
+              <ToolCallCard key={`${tc.name}-${i}`} tc={tc} />
             ))}
           </div>
         )}
@@ -554,7 +555,9 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
 
   return (
     <div className="tool-call-card">
-      <div className="tool-call-header" onClick={() => setExpanded(!expanded)}>
+      <div className="tool-call-header" role="button" tabIndex={0}
+           onClick={() => setExpanded(!expanded)}
+           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}>
         <span className={`tool-status ${isRunning ? "running" : "done"}`}>
           {isRunning ? "◌" : "✓"}
         </span>
@@ -620,7 +623,7 @@ function DiffView({ diff }: { diff: string }) {
         else if (ln.startsWith("+")) cls = "diff-line add";
         else if (ln.startsWith("-")) cls = "diff-line del";
         return (
-          <div key={i} className={cls}>
+          <div key={`${i}-${ln.slice(0, 8)}`} className={cls}>
             <span className="diff-gutter">{ln ? ln[0] : " "}</span>
             <span className="diff-text">{ln.replace(/^[+\- ]/, "")}</span>
           </div>

@@ -14,12 +14,12 @@ export const THEME_LABELS: Record<Theme, string> = {
 
 const STORAGE_KEY = "olympus-theme";
 
-export function getStoredTheme(): Theme {
+function getStoredTheme(): Theme {
   const t = (typeof localStorage !== "undefined" && localStorage.getItem(STORAGE_KEY)) as Theme | null;
   return t && (THEMES as readonly string[]).includes(t) ? t : "midnight";
 }
 
-export function applyTheme(theme: Theme): void {
+function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme;
 }
 

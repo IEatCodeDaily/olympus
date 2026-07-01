@@ -292,10 +292,10 @@ export default function BoardView() {
         subtitle="Durable task board wired to live card events"
         actions={
           <div className="board-header-actions">
-            <button className="board-ghost-btn" onClick={() => void loadCards()} disabled={loading || busyAction !== null}>
+            <button type="button" className="board-ghost-btn" onClick={() => void loadCards()} disabled={loading || busyAction !== null}>
               Refresh
             </button>
-            <button className="btn-primary" onClick={handleCreateCard} disabled={busyAction === "create" || !draftTitle.trim()}>
+            <button type="button" className="btn-primary" onClick={handleCreateCard} disabled={busyAction === "create" || !draftTitle.trim()}>
               {busyAction === "create" ? "Creating…" : "+ New card"}
             </button>
           </div>
@@ -364,11 +364,10 @@ export default function BoardView() {
                       {columnCards.map((card) => {
                         const selected = card.id === selectedCardId;
                         return (
-                          <button
+                          <button type="button"
                             key={card.id}
                             className={`board-card ${selected ? "selected" : ""}`}
                             onClick={() => setSelectedCardId(card.id)}
-                            type="button"
                           >
                             <div className="board-card-head">
                               <Badge kind={column}>{column}</Badge>
@@ -454,21 +453,21 @@ export default function BoardView() {
             </div>
 
             <div className="board-detail-actions">
-              <button className="btn-primary" onClick={() => void handleAssign()} disabled={busyAction !== null}>
+              <button type="button" className="btn-primary" onClick={() => void handleAssign()} disabled={busyAction !== null}>
                 {busyAction === "assign"
                   ? (selectedCard.currentSessionId ? "Reassigning…" : "Assigning…")
                   : (selectedCard.currentSessionId ? "Reassign card" : "Assign card")}
               </button>
-              <button className="board-ghost-btn" onClick={() => void handleClaim()} disabled={busyAction !== null || selectedCard.status === "claimed" || selectedCard.status === "done"}>
+              <button type="button" className="board-ghost-btn" onClick={() => void handleClaim()} disabled={busyAction !== null || selectedCard.status === "claimed" || selectedCard.status === "done"}>
                 {busyAction === "claim" ? "Claiming…" : "Claim card"}
               </button>
-              <button className="board-ghost-btn" onClick={() => void handleBlock()} disabled={busyAction !== null || selectedCard.status === "done"}>
+              <button type="button" className="board-ghost-btn" onClick={() => void handleBlock()} disabled={busyAction !== null || selectedCard.status === "done"}>
                 {busyAction === "block" ? "Blocking…" : "Block card"}
               </button>
-              <button className="board-ghost-btn" onClick={() => void handleComplete()} disabled={busyAction !== null || selectedCard.status === "done"}>
+              <button type="button" className="board-ghost-btn" onClick={() => void handleComplete()} disabled={busyAction !== null || selectedCard.status === "done"}>
                 {busyAction === "complete" ? "Completing…" : "Complete card"}
               </button>
-              <button
+              <button type="button"
                 className="board-ghost-btn"
                 onClick={() => {
                   if (selectedCard.currentSessionId) openLinkedSession(selectedCard.currentSessionId);

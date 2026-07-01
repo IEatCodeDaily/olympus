@@ -79,10 +79,10 @@ export default function SearchView({ onOpenSession }: Props) {
             type="text"
             className="search-input"
             placeholder="Search across all sessions..."
+            aria-label="Search across all sessions"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runSearch()}
-            autoFocus
           />
           {searching && <span className="search-spinner" />}
         </div>
@@ -108,7 +108,9 @@ export default function SearchView({ onOpenSession }: Props) {
           const meta = SOURCE_META[group.source as keyof typeof SOURCE_META] ?? SOURCE_META.api_server;
           return (
             <div key={group.sessionId} className="search-group">
-              <div className="search-group-header" onClick={() => onOpenSession(group.sessionId)}>
+              <div className="search-group-header" role="button" tabIndex={0}
+                   onClick={() => onOpenSession(group.sessionId)}
+                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenSession(group.sessionId); } }}>
                 <span className="group-source-dot" style={{ background: meta.color }} />
                 <span className="group-title">{group.sessionTitle}</span>
                 <span className="group-source-label" style={{ color: meta.color }}>{meta.label}</span>
@@ -122,7 +124,10 @@ export default function SearchView({ onOpenSession }: Props) {
                   <div
                     key={`${hit.sessionId}-${hit.messageId}`}
                     className="search-hit"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onOpenSession(hit.sessionId)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenSession(hit.sessionId); } }}
                   >
                     <HighlightSnippet snippet={hit.snippet} query={query} />
                     <span className="hit-time">{relativeTime(hit.timestamp)}</span>
@@ -150,9 +155,9 @@ function HighlightSnippet({ snippet, query }: { snippet: string; query: string }
     <span className="hit-snippet">
       {parts.map((part, i) =>
         regex.test(part) ? (
-          <mark key={i} className="hit-highlight">{part}</mark>
+          <mark key={`hit-${i}`} className="hit-highlight">{part}</mark>
         ) : (
-          <span key={i}>{part}</span>
+          <span key={`txt-${i}`}>{part}</span>
         )
       )}
     </span>

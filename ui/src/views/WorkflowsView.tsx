@@ -104,7 +104,7 @@ export default function WorkflowsView() {
               </div>
             </div>
 
-            <div className="workflow-list" role="list" aria-label="Workflow definitions">
+            <menu className="workflow-list" aria-label="Workflow definitions">
               {workflows.map((workflow) => {
                 const runCount = runs.filter((run) => run.workflowId === workflow.id).length;
                 const activeCount = runs.filter(
@@ -112,7 +112,7 @@ export default function WorkflowsView() {
                 ).length;
 
                 return (
-                  <button
+                  <button type="button"
                     key={workflow.id}
                     className={`workflow-list-item ${workflow.id === selectedWorkflow?.id ? "selected" : ""}`}
                     onClick={() => setSelectedWorkflowId(workflow.id)}
@@ -129,7 +129,7 @@ export default function WorkflowsView() {
                   </button>
                 );
               })}
-            </div>
+            </menu>
           </aside>
 
           <section className="workflow-detail-panel">
@@ -144,7 +144,7 @@ export default function WorkflowsView() {
 
                   <div className="workflow-filters" aria-label="Run status filters">
                     {STATUS_FILTERS.map((filter) => (
-                      <button
+                      <button type="button"
                         key={filter}
                         className={`workflow-filter ${statusFilter === filter ? "active" : ""}`}
                         onClick={() => setStatusFilter(filter)}
