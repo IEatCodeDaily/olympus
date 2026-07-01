@@ -13,6 +13,7 @@ import type { HealthResponse } from "./types";
 
 type ViewName =
   | "sessions"
+  | "history"
   | "search"
   | "board"
   | "nodes"
@@ -28,6 +29,7 @@ interface NavDef {
 
 const VIEW_NAMES: ViewName[] = [
   "sessions",
+  "history",
   "search",
   "board",
   "nodes",
@@ -71,6 +73,7 @@ const ICON = (d: string, extra?: JSX.Element) => (
 
 const NAV: NavDef[] = [
   { name: "sessions", label: "Sessions", icon: ICON("M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01") },
+  { name: "history", label: "History", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></svg> },
   { name: "search", label: "Search", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg> },
   { name: "board", label: "Board", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1" /><rect x="9" y="3" width="6" height="12" rx="1" /><rect x="15" y="3" width="6" height="9" rx="1" /></svg> },
   { name: "nodes", label: "Nodes", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="2" width="8" height="8" rx="1" /><rect x="14" y="2" width="8" height="8" rx="1" /><rect x="8" y="14" width="8" height="8" rx="1" /><path d="M6 10v2a2 2 0 0 0 2 2h0M18 10v2a2 2 0 0 1-2 2h0" /></svg> },
@@ -148,7 +151,7 @@ export default function App() {
               key={item.name}
               className={`nav-item ${view === item.name ? "active" : ""}`}
               onClick={() => {
-                if (item.name === "sessions") backToList();
+                if (item.name === "sessions" || item.name === "history") backToList();
                 setView(item.name);
               }}
             >
@@ -189,10 +192,14 @@ export default function App() {
       </aside>
 
       <main className="main">
-        {view === "sessions" && (
+        {(view === "sessions" || view === "history") && (
           <>
             <div className="list-pane">
-              <SessionList selectedId={selectedSessionId} onOpenSession={openSession} />
+              <SessionList
+                selectedId={selectedSessionId}
+                onOpenSession={openSession}
+                managed={view === "sessions"}
+              />
             </div>
             {selectedSessionId && (
               <div className="chat-pane">

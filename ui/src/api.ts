@@ -60,6 +60,7 @@ export async function fetchSessions(
   if (params?.source) q.set("source", params.source);
   if (params?.model) q.set("model", params.model);
   if (params?.archived !== undefined) q.set("archived", String(params.archived));
+  if (params?.managed !== undefined) q.set("managed", String(params.managed));
   if (params?.q) q.set("q", params.q);
   if (params?.sort) q.set("sort", params.sort);
   if (params?.cursor) q.set("cursor", params.cursor);

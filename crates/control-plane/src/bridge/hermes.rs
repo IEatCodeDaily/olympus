@@ -31,8 +31,8 @@ use futures::stream::Stream;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, warn};
+use tokio::sync::Mutex;
+use tracing::debug;
 
 use super::{AgentCommand, AgentEvent, AgentRuntime};
 use crate::bridge::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest};
@@ -219,9 +219,7 @@ pub struct HermesAgentRuntime {
     config: HermesRuntimeConfig,
     state: Mutex<RuntimeState>,
     next_id: AtomicI64,
-    event_tx: mpsc::Sender<AgentEvent>,
-    /// Receiver is taken once when `events()` is first called.
-    event_rx: Mutex<Option<mpsc::Receiver<AgentEvent>>>,
+    event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
     /// Active ACP session id, shared with the stdout reader task so it can
     /// capture the id from the `session/new` response while `send()` reads it.
     session_id_shared: Arc<Mutex<Option<String>>>,
@@ -230,13 +228,17 @@ pub struct HermesAgentRuntime {
 impl HermesAgentRuntime {
     /// Create a new runtime (Arc-wrapped, the common case).
     pub fn new_arc(config: HermesRuntimeConfig) -> Arc<Self> {
-        let (tx, rx) = mpsc::channel(config.event_buffer);
+        // broadcast (not mpsc): each `events()` call subscribes and gets its
+        // own fresh receiver, so multiple turns on the same runtime each see
+        // the turn's events. The old mpsc take-once receiver was consumed by
+        // the first turn's drain loop, leaving subsequent turns with an empty
+        // stream and silently dropping their assistant reply.
+        let (tx, _rx) = tokio::sync::broadcast::channel(config.event_buffer);
         Arc::new(Self {
             config,
             state: Mutex::new(RuntimeState::new()),
             next_id: AtomicI64::new(1),
             event_tx: tx,
-            event_rx: Mutex::new(Some(rx)),
             session_id_shared: Arc::new(Mutex::new(None)),
         })
     }
@@ -264,7 +266,7 @@ impl HermesAgentRuntime {
     /// the shared session-id cell), so it does not pin the whole runtime alive.
     fn spawn_reader(
         stdout: ChildStdout,
-        tx: mpsc::Sender<AgentEvent>,
+        tx: tokio::sync::broadcast::Sender<AgentEvent>,
         session_id_shared: Arc<Mutex<Option<String>>>,
     ) {
         tokio::spawn(async move {
@@ -283,10 +285,12 @@ impl HermesAgentRuntime {
                     }
                 }
                 if let Some(event) = map_message_to_event(&msg) {
-                    if tx.send(event).await.is_err() {
-                        // receiver dropped — runtime stopped
-                        break;
-                    }
+                    // broadcast::send is synchronous; Err means no receivers
+                    // are subscribed (the drain task may have ended). That's
+                    // fine — we keep reading so a later turn's subscriber sees
+                    // its events. We do NOT break on Err (that would stop the
+                    // reader and kill all future turns).
+                    let _ = tx.send(event);
                 }
             }
             debug!(target: "olympus.bridge.hermes", "ACP stdout reader closed");
@@ -499,24 +503,15 @@ impl AgentRuntime for HermesAgentRuntime {
     }
 
     fn events(&self) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
-        // This needs to be called from an async context. Since the trait
-        // signature is sync, we use try_lock and take the receiver.
-        // In practice events() is called after start(), so the lock is free.
-        // If called before start, returns an empty stream.
-        //
-        // Safety: we use blocking_lock via try_lock; if contended, returns empty.
-        let rx_opt = self
-            .event_rx
-            .try_lock()
-            .ok()
-            .and_then(|mut guard| guard.take());
-        match rx_opt {
-            Some(rx) => Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)),
-            None => {
-                warn!(target: "olympus.bridge.hermes", "events() called before start() or already consumed");
-                Box::pin(futures::stream::empty())
-            }
-        }
+        // Each call subscribes and gets its OWN fresh receiver, so every turn's
+        // drain loop sees that turn's events. (broadcast, not the old take-once
+        // mpsc receiver that was consumed by the first turn.) BroadcastStream
+        // yields Result<Item, Lagged> — we drop lag errors, keeping only Ok.
+        use tokio_stream::StreamExt as _;
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.event_tx.subscribe())
+                .filter_map(|res| res.ok()),
+        )
     }
 
     async fn stop(&self) -> Result<()> {

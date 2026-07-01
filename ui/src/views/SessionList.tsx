@@ -7,6 +7,8 @@ import { relativeTime, formatTokens, SOURCE_META, ALL_SOURCES } from "../lib/for
 interface Props {
   selectedId: string | null;
   onOpenSession: (id: string) => void;
+  /** true → Sessions view (Olympus-managed only); false → History view (imports). */
+  managed: boolean;
 }
 
 const SORT_OPTIONS: { value: SessionSort; label: string }[] = [
@@ -15,7 +17,7 @@ const SORT_OPTIONS: { value: SessionSort; label: string }[] = [
   { value: "messageCount", label: "Messages" },
 ];
 
-export default function SessionList({ selectedId, onOpenSession }: Props) {
+export default function SessionList({ selectedId, onOpenSession, managed }: Props) {
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SessionSort>("lastActivity");
@@ -31,6 +33,7 @@ export default function SessionList({ selectedId, onOpenSession }: Props) {
   const { sessions, loading, error } = useSessions({
     source: sourceParam,
     archived: showArchived ? true : false,
+    managed,
     q: searchDebounced || undefined,
     sort,
   });

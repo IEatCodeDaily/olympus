@@ -165,6 +165,10 @@ async fn auth_gate(
 struct SessionsQuery {
     source: Option<String>,
     archived: Option<bool>,
+    /// Filter by managed status: `true` → Olympus-driven sessions (your active
+    /// workspace), `false` → imported agent history (read-only, fork-to-use).
+    /// Absent → both. This is the basis of the Sessions/History nav split.
+    managed: Option<bool>,
     /// `lastActivity` (default) | `startedAt` | `messageCount`, all descending.
     sort: Option<String>,
     #[serde(default)]
@@ -303,6 +307,23 @@ async fn list_sessions(
             _ => true,
         })
         .map(SessionDto::from_row)
+        // Apply the managed filter (Sessions vs History nav split). Within
+        // managed, hide phantom duplicates: legacy re-imported sessions that are
+        // tagged source=olympus but were never driven by Olympus (agent unset and
+        // hermes_id == id — the pre-dedup signature). They read as managed but
+        // aren't real workspaces; the History view is their honest home.
+        .filter(|dto| {
+            let is_managed = dto.source == "acp" || dto.source == "olympus";
+            let is_phantom = is_managed
+                && dto.agent.is_none()
+                && !dto.hermes_id.is_empty()
+                && dto.hermes_id == dto.id;
+            match q.managed {
+                Some(true) => is_managed && !is_phantom,
+                Some(false) => !is_managed || is_phantom,
+                None => true,
+            }
+        })
         .collect();
     drop(views);
 
@@ -953,7 +974,7 @@ async fn post_message(
 
         let mut stream = runtime.events();
         let mut assistant_text = String::new();
-        let mut assistant_msg_id = assistant_seed_id;
+        let assistant_msg_id = assistant_seed_id;
         // Accumulate structured tool calls seen this turn so they're persisted
         // on the assistant message (and surface in the transcript's tool UI).
         let mut tool_calls_acc: Vec<serde_json::Value> = Vec::new();
@@ -1041,7 +1062,12 @@ async fn post_message(
                     // Accumulate silently for now; reasoning rendering is separate.
                 }
             }
-            assistant_msg_id += 1;
+            // NOTE: assistant_msg_id must NOT increment per event. One prompt
+            // produces one assistant message (text + accumulated tool calls),
+            // persisted once on Done at assistant_seed_id. The old per-iteration
+            // increment inflated the id on any turn with a tool call, colliding
+            // with the next turn's user-message id and dropping/clobbering the
+            // assistant reply (the multi-turn "no response" bug).
         }
         // Turn finished (Done, Error, or stream closed): clear the in-flight flag
         // so liveness drops back to idle.

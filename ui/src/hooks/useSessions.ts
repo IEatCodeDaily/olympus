@@ -13,6 +13,7 @@ export interface UseSessionsResult {
 export function useSessions(params: {
   source?: string[];
   archived?: boolean;
+  managed?: boolean;
   q?: string;
   sort?: SessionSort;
 }): UseSessionsResult {
@@ -28,6 +29,7 @@ export function useSessions(params: {
       const res = await fetchSessions({
         source: paramsRef.current.source?.join(","),
         archived: paramsRef.current.archived,
+        managed: paramsRef.current.managed,
         q: paramsRef.current.q,
         sort: paramsRef.current.sort,
       });
@@ -43,7 +45,7 @@ export function useSessions(params: {
   // Refetch when filters change
   useEffect(() => {
     load();
-  }, [load, params.source, params.archived, params.q, params.sort]);
+  }, [load, params.source, params.archived, params.managed, params.q, params.sort]);
 
   // Merge WS deltas for live updates
   useEffect(() => {

@@ -10,20 +10,20 @@ use tokio::sync::Mutex;
 use crate::bridge::{AgentCommand, AgentEvent, AgentRuntime};
 
 /// A mock runtime that captures a fixed Hermes session id and can emit scripted
-/// events when prompted.
+/// events when prompted. Uses a broadcast channel (matching the real runtime) so
+/// multiple turns each get their own event stream — critical for testing the
+/// multi-turn "second turn drops reply" bug.
 pub struct MockAgentRuntime {
     session_id: Mutex<Option<String>>,
-    events_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    events_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<AgentEvent>>>,
+    events_tx: tokio::sync::broadcast::Sender<AgentEvent>,
 }
 
 impl MockAgentRuntime {
     fn new() -> Self {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::broadcast::channel(256);
         Self {
             session_id: Mutex::new(None),
             events_tx: tx,
-            events_rx: Mutex::new(Some(rx)),
         }
     }
 }
@@ -50,6 +50,7 @@ impl AgentRuntime for MockAgentRuntime {
             } else {
                 format!("echo: {text}")
             };
+            // broadcast::send is sync; Err (no subscribers) is fine.
             let _ = self.events_tx.send(AgentEvent::Text(response));
             let _ = self.events_tx.send(AgentEvent::Done {
                 finish_reason: Some("end_turn".into()),
@@ -59,15 +60,13 @@ impl AgentRuntime for MockAgentRuntime {
     }
 
     fn events(&self) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
-        let rx_opt = self
-            .events_rx
-            .try_lock()
-            .ok()
-            .and_then(|mut guard| guard.take());
-        match rx_opt {
-            Some(rx) => Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx)),
-            None => Box::pin(futures::stream::empty()),
-        }
+        // Each call subscribes and gets its own fresh receiver (broadcast), so
+        // multiple turns each see their events.
+        use tokio_stream::StreamExt as _;
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.events_tx.subscribe())
+                .filter_map(|res| res.ok()),
+        )
     }
 
     async fn stop(&self) -> anyhow::Result<()> {

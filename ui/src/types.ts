@@ -242,6 +242,8 @@ export interface SessionListParams {
   source?: string;        // comma-separated SessionSource values
   model?: string;
   archived?: boolean;
+  /** true → Olympus-managed sessions only; false → imported history only. */
+  managed?: boolean;
   q?: string;
   sort?: SessionSort;
   cursor?: string;
