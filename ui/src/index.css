@@ -144,6 +144,13 @@
   --dur-3: 0.15s;            /* base — buttons, cards, composer, panels, settings */
   --ease-standard: ease;     /* default control transitions */
   --ease-in-out: ease-in-out;/* looping skeleton/thinking animations */
+  /* Disabled-state opacity (§8.6). One value for every :disabled control so a
+     non-interactive button/input reads identically everywhere. The CSS had
+     drifted across five values (.35/.4/.45/.5/.55) for the same semantic state;
+     0.45 is the median and sits inside the documented .4–.5 band — dimmed
+     enough to read as inert, still legible. Theme-agnostic (opacity, not color).
+     NOT for icon-dimming, hover, or keyframe opacities — those are distinct. */
+  --opacity-disabled: 0.45;
   --sidebar-w: 220px;
   --space-view-y: 20px;
   --space-view-x: 24px;
@@ -393,7 +400,7 @@ html, body, #root {
   flex-shrink: 0;
 }
 .new-chat-btn:hover:not(:disabled) { background: var(--accent-hover); }
-.new-chat-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.new-chat-btn:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 
 .search-box {
   flex: 1;
@@ -1125,7 +1132,7 @@ html, body, #root {
 .composer-assign-select:focus,
 .composer-assign-input:focus { border-color: var(--accent); outline: none; }
 .composer-assign-select:disabled,
-.composer-assign-input:disabled { opacity: 0.55; cursor: not-allowed; }
+.composer-assign-input:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .composer-assign-locked {
   font-size: var(--font-base);
   color: var(--accent);
@@ -1172,7 +1179,7 @@ html, body, #root {
   transition: opacity var(--dur-3), background var(--dur-3);
 }
 .composer-send:hover:not(:disabled) { background: var(--accent-hover); }
-.composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
+.composer-send:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 /* Stop button: replaces send while a turn is in-flight. Red, square glyph. */
 .composer-stop {
   flex-shrink: 0;
@@ -1189,7 +1196,7 @@ html, body, #root {
   transition: opacity var(--dur-3), filter var(--dur-3);
 }
 .composer-stop:hover:not(:disabled) { filter: brightness(1.12); }
-.composer-stop:disabled { opacity: 0.5; cursor: not-allowed; }
+.composer-stop:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .composer-error {
   font-size: var(--font-base);
   color: var(--red);
@@ -1233,7 +1240,7 @@ html, body, #root {
   cursor: pointer;
   transition: all var(--dur-3);
 }
-.composer-fork-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.composer-fork-btn:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .composer-fork-btn:hover:not(:disabled) { background: var(--accent-hover-fill); }
 
 /* ── Search View ─────────────────────────────────────── */
@@ -1368,7 +1375,7 @@ html, body, #root {
 
 .btn-primary { background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius-sm); padding: 7px 13px; font-size: var(--font-md-lg); font-weight: 600; cursor: pointer; transition: opacity var(--dur-3); }
 .btn-primary:hover:not(:disabled) { opacity: .88; }
-.btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 48px 24px; color: var(--text-faint); gap: 8px; }
 .empty-state-icon { opacity: .5; }
@@ -1404,7 +1411,7 @@ html, body, #root {
 .board-create-field { min-width: 0; }
 .board-ghost-btn { background: var(--bg-elev); color: var(--text-dim); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 12px; font-size: var(--font-md-lg); cursor: pointer; transition: border-color var(--dur-3), color var(--dur-3), background var(--dur-3); }
 .board-ghost-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text); background: var(--bg-hover); }
-.board-ghost-btn:disabled { opacity: .45; cursor: not-allowed; }
+.board-ghost-btn:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .board-stats { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .board-columns { display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 4px; }
 .board-column { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); min-height: 240px; min-width: 0; }

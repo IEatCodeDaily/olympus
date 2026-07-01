@@ -341,7 +341,10 @@ Not a shell primitive yet (inline in views), but follow this contract:
 | `.workflow-filter` | Workflow filter | transparent | `--text-dim` | `--border` | 999px (pill) |
 
 **Button states (all variants):** default → `:hover` (brighten/tint) → `:active`
-→ `:disabled` (opacity 0.4–0.5, cursor not-allowed).
+→ `:disabled`. Every `:disabled` control uses **`opacity: var(--opacity-disabled)`**
+(0.45) + `cursor: not-allowed` — one token so a non-interactive button/input reads
+identically everywhere. Never inline a raw opacity for a disabled state; use the
+token. (Icon-dimming, hover, and keyframe opacities are distinct and stay inline.)
 
 ### 8.7 Input / Field patterns
 
@@ -468,6 +471,35 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Tokenize disabled-state opacity (0 → 1 token; kill the .35–.55 drift)
+
+- **Problem:** the "button states" contract in §8.6 claimed disabled controls sit
+  at "opacity 0.4–0.5" but the CSS had drifted across **five** values for the same
+  semantic state — `.35` (`.composer-send`), `.4` (`.btn-primary`), `.45`
+  (`.composer-fork-btn`, `.board-ghost-btn`), `.5` (`.new-chat-btn`,
+  `.composer-stop`), `.55` (`.composer-assign-input`) — 7 sites, none tokenized.
+  A disabled Send looked meaningfully fainter than a disabled New-chat; "how
+  inert does inert look" was unenforceable. Same drift class the radius and
+  tracking scales already fixed.
+- **Fix:** added a single **`--opacity-disabled: 0.45`** token in `:root`
+  (theme-agnostic — opacity, not color) and repointed all 7 `:disabled` rules to
+  it. 0.45 is the median of the old spread and sits inside the documented .4–.5
+  band: dimmed enough to read as non-interactive, still legible.
+- **Scope guard:** deliberately did NOT touch the distinct-intent opacities —
+  `.empty-state-icon`/`.row-source` icon-dimming (.5/.8), the `pulse`/
+  `thinking-bounce` keyframe opacities, `.group-open-icon` hover reveal (0→1),
+  `.workflow-step-pending` (.84). Those aren't "disabled control" and each carries
+  its own meaning; documented the boundary in the token comment + §8.6.
+- **Behavior:** sub-perceptual shifts only — Send .35→.45 and assign-input .55→.45
+  converge ±0.1 toward the median; the two .45 sites are unchanged. No color,
+  layout, size, or view logic touched.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0 (CSS bundle
+  50.40 kB). Change is 8 one-line edits + 1 token; fully reversible.
+- **Debt still open (for view owners, not touched):** `ChatView.tsx:512` still
+  passes inline `borderRadius: "6px"` + `fontSize: "13px"` to a syntax-highlighter
+  prop — should become `var(--radius)` / `var(--font-lg)` when that view is next
+  edited.
 
 ### 2026-07-02 — Tokenize the tracking (letter-spacing) scale (0 tokens → 3)
 
