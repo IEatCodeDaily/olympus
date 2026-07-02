@@ -202,10 +202,17 @@ density-agnostic).
 | `--space-7` | 14px | Page-gap (compact), board/node detail cards, workflows layout |
 | `--space-8` | 16px | Widest: chat/search header, page header, board view, settings token/row |
 
-**Rule:** every `gap:` uses a `--space-*` step (or a semantic layout constant
-where one fits). Never a raw `Npx` gap. Steps are even (2px rhythm); if a design
-needs an in-between value, round to the nearest step rather than introducing a
-new literal.
+**Rule:** every `gap:` **and every on-scale `padding:`** uses a `--space-*` step
+(or a semantic layout constant where one fits). Never a raw `Npx` gap or padding.
+Steps are even (2px rhythm); if a design needs an in-between value, round to the
+nearest step rather than introducing a new literal.
+
+**Padding coverage:** the even-rhythm padding values (`2/4/6/8/10/12/14/16px`,
+single- or multi-value, `0` mixed in) are all tokenized to `--space-*`. Padding
+values that are **odd or off-scale** (`1/3/5/7/9/11/13px`) or **large structural
+one-offs** (`20/24/40/42/48px` — view-scroll gutters, empty-state insets) remain
+raw by design: they don't map to a step, and rounding them would move real
+pixels. Those large gutters want their own semantic constants in a later pass.
 
 **Known exception (deliberate, not drift):** `.settings-rows { gap: 1px }` is a
 load-bearing hairline-divider primitive (1px gap over a border-colored
@@ -504,6 +511,50 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Tokenize on-scale padding (42 sites → --space-*; closes the last raw-spacing drift class)
+
+- **Problem:** the spacing scale was fully enforced for `gap:` and single-value
+  `margin:`, but **`padding:` was still raw everywhere** — the last open member
+  of the spacing drift class (radius, tracking, opacity, gaps, margins all
+  already closed). §4 mandated "never raw pixel values for padding," yet 78 raw
+  `padding:` shorthand declarations sat un-tokenized. "Which padding is correct
+  here" was unenforceable and the workhorse values (`8px`, `10px`, `12px`,
+  `16px`) drifted un-named across dozens of rules.
+- **Fix:** repointed all **42 on-scale padding declarations** — every value (or
+  every axis of a 2/3/4-value shorthand) that is `0` or an *exact* member of the
+  existing `--space-*` step scale (`2/4/6/8/10/12/14/16px`) — to the matching
+  token. Multi-value paddings convert per-axis (e.g. `10px 12px` →
+  `var(--space-5) var(--space-6)`; `16px 16px 14px` →
+  `var(--space-8) var(--space-8) var(--space-7)`). Done via a single scripted
+  regex pass that **only** touched declarations where every non-zero axis mapped
+  to a scale step, verified by dumping the before/after of all 78 sites.
+- **Zero-pixel guarantee:** each token equals the literal it replaced — **not a
+  single pixel moved** in comfortable mode. (These are the fixed step scale, not
+  the density-flexing layout constants, so compact mode is unaffected too.)
+- **Deliberately left raw (36 sites):** all-zero resets (`0`); odd/off-scale
+  values (`1/3/5/7/9/11/13px` on chips, badges, metrics, small controls); and
+  large structural one-offs (`20/24/40/42/48px` — view-scroll gutters,
+  empty-state insets). None map to a step; rounding would shift real pixels. The
+  large gutters are flagged in §4 as wanting their own semantic constants.
+- **Scope guard:** only the `padding:` shorthand was touched — no color, layout,
+  font, border, or view logic. `padding-top/right/bottom/left` longhands (none
+  on-scale in this file) untouched.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0 (CSS bundle
+  52.69 kB). Browser screenshot in **both midnight (Sessions) and daylight
+  (Settings)** — nav/toolbar/pills/session-rows and settings palette/density/
+  token panels all evenly padded, zero regressions. Fully reversible.
+- **Debt still open (next design runs):**
+  - The large structural padding one-offs (`24px` view gutters, `40/48px`
+    empty-state insets, `20px` chat/search sections) are the natural next move:
+    they deserve **named semantic layout constants** (e.g. `--space-gutter`,
+    `--space-empty-inset`) that flex under `[data-density]`, not step tokens.
+    This is the same treatment `--space-view-*`/`--space-panel*` already got.
+  - Odd padding tail (`3/5/7/9/11px`) on chips/badges/metrics wants a rounding
+    pass once ±1px shifts are confirmed acceptable — mirrors the odd-gap and
+    odd-margin tails left in prior runs.
+  - `ChatView.tsx:512` still passes inline `borderRadius`/`fontSize` to a
+    highlighter prop (view owner, not a system concern).
 
 ### 2026-07-02 — Card interiors use the semantic panel constants (fixes compact-density bug)
 
