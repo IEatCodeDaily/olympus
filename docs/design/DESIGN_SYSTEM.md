@@ -184,6 +184,36 @@ body text sets no letter-spacing (default `normal`).
 | `--page-gap` | 18px | 14px | Gap between page header and content |
 | `--session-row-h` | 68px | 60px | Session row height |
 
+### Spacing STEP scale (inter-element gaps)
+
+A primitive 2px-base rhythm for ad-hoc `gap:` between siblings — **distinct**
+from the semantic layout constants above (those name a structural role and flex
+under `[data-density]`; the step scale is fixed geometry, theme- and
+density-agnostic).
+
+| Token | Value | Typical use |
+|-------|-------|-------------|
+| `--space-1` | 2px | Tightest: nav-item list gap, swatch-meta stack |
+| `--space-2` | 4px | Tool-call list, density-btn label stack, back-btn icon |
+| `--space-3` | 6px | Status panel, source filters, msg meta, composer assign |
+| `--space-4` | 8px | **The workhorse** — search box, page-header actions, board cards, skeletons, badges row |
+| `--space-5` | 10px | Brand, nav-item content, toolbar controls, session rows, node/usage lists |
+| `--space-6` | 12px | Toolbar row, message gutter, board columns/toolbar, settings panel |
+| `--space-7` | 14px | Page-gap (compact), board/node detail cards, workflows layout |
+| `--space-8` | 16px | Widest: chat/search header, page header, board view, settings token/row |
+
+**Rule:** every `gap:` uses a `--space-*` step (or a semantic layout constant
+where one fits). Never a raw `Npx` gap. Steps are even (2px rhythm); if a design
+needs an in-between value, round to the nearest step rather than introducing a
+new literal.
+
+**Known exception (deliberate, not drift):** `.settings-rows { gap: 1px }` is a
+load-bearing hairline-divider primitive (1px gap over a border-colored
+background paints the row separators) — it is *not* a spacing gap and stays raw.
+A small odd-value tail (`3/5/7/9px`) on a few chips/metrics also remains raw
+pending a follow-up rounding pass; rounding them now would shift real pixels, so
+they were left untouched to keep this change zero-pixel.
+
 ### Spacing philosophy
 - Use the token variables above — never raw pixel values for padding/margin/gaps.
 - The gap between sibling elements should match the most specific applicable token.
@@ -471,6 +501,41 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Tokenize the gap spacing scale (0 → 8-step scale; kill ~93 raw gap literals)
+
+- **Problem:** §4 mandated "never raw pixel values for gaps," but the CSS had
+  **no primitive spacing-step scale** — only semantic layout constants
+  (`--space-view-*`, `--space-panel*`, `--page-gap`). Every inter-element `gap:`
+  was a raw literal: ~104 of them, drifting across `2/4/6/8/10/12/14/16px` (the
+  even 2px rhythm) **plus** an off-rhythm `1/3/5/7/9px` tail. Same drift class
+  the radius, tracking, and opacity scales already closed — "which gap is
+  correct here" was unenforceable, and `gap: 8px` (the workhorse) sat un-named
+  in 29 places.
+- **Fix:** added an 8-token **step scale** in `:root` —
+  `--space-1: 2px` … `--space-8: 16px` (theme- and density-agnostic; distinct
+  from the semantic layout constants, which flex under `[data-density]`).
+  Migrated every even-rhythm gap to its step via 8 `replace_all` passes
+  (93 sites incl. one multi-value `gap: 8px 16px` → `var(--space-4) var(--space-8)`).
+- **Zero-pixel guarantee:** only *exact* even values were repointed — each token
+  equals the literal it replaced, so **not a single pixel moved**. The
+  off-rhythm odd tail (`3/5/7/9px` on a few chips/metrics) was deliberately left
+  raw rather than rounded, because rounding would shift real pixels; noted as a
+  follow-up. `.settings-rows { gap: 1px }` is a load-bearing hairline-divider
+  primitive (paints row separators) — explicitly excluded and documented.
+- Documented the full 8-step scale in §4 with per-token usage, a "never a raw
+  `Npx` gap" rule, and the two deliberate exceptions.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0 (CSS bundle
+  51.49 kB). Browser screenshot in **both midnight (Sessions) and daylight
+  (Board)** — nav/toolbar/pills/session-rows and board columns/cards/stat-pills
+  all evenly spaced, zero regressions. Fully reversible (8 token defs + N
+  mechanical substitutions).
+- **Debt still open (next design runs):** raw `padding:`/`margin:` literals
+  (~120 sites) are the same drift class and the natural follow-up — but they
+  change box size, so they need a per-property audit, not a blind sweep. The
+  odd-gap tail (`3/5/7/9px`) wants a rounding pass once someone confirms the
+  ±1px shifts are acceptable. `ChatView.tsx:512` still passes inline
+  `borderRadius: "6px"` + `fontSize: "13px"` to a highlighter prop (view owner).
 
 ### 2026-07-02 — Tokenize disabled-state opacity (0 → 1 token; kill the .35–.55 drift)
 
