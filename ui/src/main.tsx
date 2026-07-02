@@ -1,26 +1,26 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import { RouterProvider } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { router } from "./router";
+import { useLiveSync } from "./hooks/queries";
 import "./index.css";
 
-// Start MSW mock worker before React mounts (dev only)
-async function bootstrap() {
-  const useMocks = import.meta.env.VITE_USE_MOCKS !== "false";
-  if (useMocks) {
-    const { worker } = await import("./mocks/browser");
-    await worker.start({
-      onUnhandledRequest: "bypass",
-      serviceWorker: {
-        url: "/mockServiceWorker.js",
-      },
-    });
-  }
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 1, refetchOnWindowFocus: false },
+  },
+});
 
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  );
+function Root() {
+  useLiveSync();
+  return <RouterProvider router={router} />;
 }
 
-bootstrap();
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <Root />
+    </QueryClientProvider>
+  </React.StrictMode>,
+);

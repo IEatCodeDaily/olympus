@@ -170,6 +170,7 @@ pub fn jj_has_conflicts(workspace: &Path) -> Result<bool> {
 /// a jj conflict and verify detection.
 ///
 /// Returns a human-readable summary of the spike results.
+#[cfg(test)]
 pub fn run_spike() -> Result<String> {
     let tmp = tempfile::tempdir().context("creating temp dir")?;
     let ws = tmp.path();
