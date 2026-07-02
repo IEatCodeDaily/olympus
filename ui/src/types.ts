@@ -87,6 +87,23 @@ export interface AgentsResponse {
   agents: AgentInfo[];
 }
 
+export type NodeStatus = "online" | "draining" | "offline";
+
+export interface NodeInfo {
+  nodeId: string;
+  hostname: string;
+  status: NodeStatus;
+  slotsUsed: number;
+  slotsTotal: number;
+  version: string;
+  local: boolean;
+  lastHeartbeatAgoSecs: number;
+}
+
+export interface NodesResponse {
+  nodes: NodeInfo[];
+}
+
 export type ServerFrame =
   | { kind: "hello"; snapshot: { sessions: number; messages: number } }
   | { kind: "session.added"; session: Session }
@@ -188,22 +205,6 @@ export interface BlockCardBody {
 
 export interface ReassignCardBody extends AssignCardBody {
   previousSessionId: string;
-}
-
-// Nodes (U4, mock-first — backend Epic L)
-export type NodeStatus = "online" | "draining" | "offline";
-
-export interface NodeInfo {
-  id: string;
-  status: NodeStatus;
-  slotsUsed: number;
-  slotsTotal: number;
-  lastHeartbeat: number;
-  runtime: string;
-}
-
-export interface NodesResponse {
-  nodes: NodeInfo[];
 }
 
 // Workflows (U5, mock-first — backend Epic H)

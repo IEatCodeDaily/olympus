@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use olympus_control_plane::{
     auth, import,
     log::Log,
+    node::NodeRegistry,
     search::SearchIndex,
     server::{self, AppState, ImportState},
     sync,
@@ -150,6 +151,18 @@ async fn main() -> Result<()> {
         .with_spaces_root(org_workspace_root(&default_org())?.join("sessions")),
     );
     let sync_connected = Arc::new(AtomicBool::new(false));
+
+    // ---- fleet node registry ----
+    let node_registry = NodeRegistry::new();
+    // Auto-register the local node (in-process pseudo-envoy per ADR 0005 §3).
+    let local_hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "localhost".to_string());
+    node_registry
+        .register("local", &local_hostname, 4, "0.1", true)
+        .await;
+
     let state = AppState {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
@@ -163,6 +176,7 @@ async fn main() -> Result<()> {
         bridge,
         sync_connected: sync_connected.clone(),
         irc: olympus_control_plane::irc::IrcBus::new(),
+        nodes: node_registry.clone(),
     };
 
     let sync_log = Arc::clone(&log_arc);
@@ -203,6 +217,15 @@ async fn main() -> Result<()> {
         .expect("spawn live sync thread");
 
     let app = server::build_router(state);
+
+    // Spawn the UDS listener for node (envoy) registration.
+    let uds_path = home.join("control.sock");
+    {
+        let reg = node_registry.clone();
+        tokio::spawn(async move {
+            olympus_control_plane::node::run_uds_listener(uds_path, reg).await;
+        });
+    }
 
     let bind = std::env::var("OLYMPUS_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let listener = tokio::net::TcpListener::bind(&bind)

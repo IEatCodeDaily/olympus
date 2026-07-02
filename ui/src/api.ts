@@ -19,6 +19,7 @@ import type {
   SearchResponse,
   ModelsResponse,
   AgentsResponse,
+  NodesResponse,
   HealthResponse,
   SetupResponse,
   SetupQueryParams,
@@ -122,6 +123,12 @@ export async function fetchAgents(): Promise<AgentsResponse> {
   const res = await fetch(`${BASE}/api/agents`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`agents ${res.status}`);
   return res.json() as Promise<AgentsResponse>;
+}
+
+export async function fetchNodes(): Promise<NodesResponse> {
+  const res = await fetch(`${BASE}/api/nodes`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`nodes ${res.status}`);
+  return res.json() as Promise<NodesResponse>;
 }
 
 export async function healthCheck(): Promise<HealthResponse> {

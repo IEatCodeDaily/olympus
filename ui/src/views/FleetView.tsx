@@ -11,37 +11,17 @@
 // synthesize the single "local" node from the health probe + configured agents
 // and show an honest "no other nodes registered" empty state. When the fleet
 // endpoint ships, swap `useFleetNodes()` for the real hook.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Icon } from "../components/Icon";
-import { useAgents, useHealth } from "../hooks/queries";
+import { useAgents, useNodes } from "../hooks/queries";
 import { relativeTime } from "../lib/format";
-import type { AgentInfo } from "../types";
+import type { AgentInfo, NodeInfo, NodeStatus } from "../types";
 
 // ── Local fleet model ──────────────────────────────
-// Mirrors the eventual NodeInfo contract but carries the extra display fields
-// (bind, version) the drawer needs. The health probe is the source of truth
-// for liveness; configured agents fill the slot count.
-type NodeStatus = "online" | "draining" | "offline";
-
-interface FleetNode {
-  id: string;
-  status: NodeStatus;
-  bind: string;
-  slotsUsed: number;
-  slotsTotal: number;
-  /** epoch seconds of the last heartbeat. */
-  heartbeat: number;
-  version: string;
-  /** true for the synthesized local node (no remove action). */
-  local: boolean;
-}
+// FleetNode maps the backend NodeInfo to the display fields the drawer needs.
+type FleetNode = NodeInfo;
 
 type SubView = "fleet" | "agents";
-
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
-const APP_VERSION = "v0.3.1";
-/** Capacity assumed for the local single-node MVP. */
-const LOCAL_SLOTS_TOTAL = 4;
 
 // ── Helpers ────────────────────────────────────────
 
@@ -67,23 +47,10 @@ function agentTypeTag(agent: AgentInfo): string {
   return agent.isDefault ? "acp" : "cli";
 }
 
-/** Reduce VITE_API_BASE (URL or host:port) to a host:port label. */
-function bindLabel(): string {
-  if (!API_BASE) return "127.0.0.1:8787";
-  try {
-    // Full URL form, e.g. http://127.0.0.1:8787
-    return new URL(API_BASE).host;
-  } catch {
-    // Bare host:port form.
-    return API_BASE;
-  }
-}
-
-/** Heartbeat label with second precision (the 15s health poll makes this meaningful). */
-function heartbeatLabel(epochSec: number): string {
-  const diff = Math.max(0, Math.floor(Date.now() / 1000 - epochSec));
-  if (diff < 60) return `${diff}s ago`;
-  return relativeTime(epochSec);
+/** Heartbeat label with second precision (the 10s nodes poll makes this meaningful). */
+function heartbeatLabel(epochSecAgo: number): string {
+  if (epochSecAgo < 60) return `${epochSecAgo}s ago`;
+  return relativeTime(Math.floor(Date.now() / 1000) - epochSecAgo);
 }
 
 // ── Sub-components ─────────────────────────────────
@@ -141,7 +108,7 @@ function NodeCard({
     >
       <div className="grow" style={{ marginBottom: 10 }}>
         <span className="gtitle" style={{ fontSize: 13, fontFamily: "var(--mono)" }}>
-          {node.id}
+          {node.nodeId}
         </span>
         <span className={statusTagClass(node.status)}>{node.status}</span>
       </div>
@@ -156,7 +123,7 @@ function NodeCard({
       </div>
       <div className="grow" style={{ fontSize: 11, color: "var(--faint)", marginTop: 9 }}>
         <span>heartbeat</span>
-        <span>{heartbeatLabel(node.heartbeat)}</span>
+        <span>{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
       </div>
     </div>
   );
@@ -182,9 +149,9 @@ function Drawer({
   onClose: () => void;
 }) {
   return (
-    <aside className="drawer on" role="dialog" aria-label={`Node ${node.id}`}>
+    <aside className="drawer on" role="dialog" aria-label={`Node ${node.nodeId}`}>
       <div className="dr-head">
-        <span className="dr-title">{node.id}</span>
+        <span className="dr-title">{node.nodeId}</span>
         <button
           type="button"
           className="icobtn"
@@ -203,8 +170,8 @@ function Drawer({
           </span>
         </div>
         <div className="kv">
-          <span className="k">BIND</span>
-          <span className="v">{node.bind}</span>
+          <span className="k">HOST</span>
+          <span className="v">{node.hostname}</span>
         </div>
         <div className="kv">
           <span className="k">SLOTS</span>
@@ -214,7 +181,7 @@ function Drawer({
         </div>
         <div className="kv">
           <span className="k">HEARTBEAT</span>
-          <span className="v">{heartbeatLabel(node.heartbeat)}</span>
+          <span className="v">{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
         </div>
         <div className="kv">
           <span className="k">VERSION</span>
@@ -306,10 +273,10 @@ function NodeSection({
           }}
         />
         <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
-          {node.id}
+          {node.nodeId}
         </span>
         <span className="gk">
-          {node.bind} · {agents.length} agent{agents.length === 1 ? "" : "s"}
+          {node.hostname} · {agents.length} agent{agents.length === 1 ? "" : "s"}
         </span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -331,31 +298,17 @@ export default function FleetView() {
   const [sub, setSub] = useState<SubView>("fleet");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const healthQ = useHealth();
+  const nodesQ = useNodes();
   const agentsQ = useAgents();
 
-  const health = healthQ.data;
   const agents = agentsQ.data?.agents ?? [];
 
-  // Synthesize the local node from the health probe. `dataUpdatedAt` (epoch ms
-  // of the last successful fetch) stands in for the heartbeat until the real
-  // fleet endpoint ships.
-  const nodes: FleetNode[] = useMemo(() => {
-    const local: FleetNode = {
-      id: health?.hermesProfile || "local",
-      status: health?.status === "ok" ? "online" : "offline",
-      bind: bindLabel(),
-      slotsUsed: Math.min(agents.length, LOCAL_SLOTS_TOTAL),
-      slotsTotal: LOCAL_SLOTS_TOTAL,
-      heartbeat: Math.floor((healthQ.dataUpdatedAt || Date.now()) / 1000),
-      version: APP_VERSION,
-      local: true,
-    };
-    return [local];
-  }, [health, agents.length, healthQ.dataUpdatedAt]);
+  // Nodes come directly from the backend now — the local node auto-registers
+  // at boot; remote envoys register via UDS. No more synthesis.
+  const nodes: FleetNode[] = nodesQ.data?.nodes ?? [];
 
   const selectedNode =
-    nodes.find((n) => n.id === selectedId) ?? (selectedId ? null : nodes[0] ?? null);
+    nodes.find((n) => n.nodeId === selectedId) ?? (selectedId ? null : nodes[0] ?? null);
 
   return (
     <>
@@ -384,19 +337,19 @@ export default function FleetView() {
             >
               {nodes.map((node) => (
                 <NodeCard
-                  key={node.id}
+                  key={node.nodeId}
                   node={node}
-                  selected={selectedNode?.id === node.id}
-                  onClick={() => setSelectedId(node.id)}
+                  selected={selectedNode?.nodeId === node.nodeId}
+                  onClick={() => setSelectedId(node.nodeId)}
                 />
               ))}
             </div>
 
-            {nodes.length === 1 && (
+            {nodes.length <= 1 && (
               <div style={{ marginTop: 16 }}>
                 <EmptyState
                   title="Single-node fleet"
-                  message="No other nodes registered. Additional operators appear here once fleet orchestration (Epic L) is live."
+                  message="No other nodes registered. Additional envoys appear here once they connect via UDS."
                 />
               </div>
             )}
@@ -413,7 +366,7 @@ export default function FleetView() {
           <div style={{ maxWidth: 680, display: "flex", flexDirection: "column", gap: 20 }}>
             {nodes.map((node) => (
               <NodeSection
-                key={node.id}
+                key={node.nodeId}
                 node={node}
                 agents={node.local ? agents : []}
               />

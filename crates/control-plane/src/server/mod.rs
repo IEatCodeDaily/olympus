@@ -80,6 +80,8 @@ pub struct AppState {
     pub sync_connected: Arc<AtomicBool>,
     /// In-process IRC bus for inter-agent messaging (ADR 0006 §2).
     pub irc: crate::irc::IrcBus,
+    /// Fleet node registry — tracks connected envoys (UDS) + the local node.
+    pub nodes: crate::node::NodeRegistry,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -114,6 +116,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/events", get(tail_events))
         .route("/api/setup", get(get_setup).put(put_setup))
         .route("/api/registry", get(list_registry).put(put_registry_entry))
+        .route("/api/nodes", get(list_nodes))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -680,6 +683,11 @@ async fn models(State(_state): State<AppState>) -> impl IntoResponse {
 /// configured provider + model, so the UI can offer a real agent/model picker.
 async fn list_agents_handler(State(_state): State<AppState>) -> impl IntoResponse {
     Json(json!({ "agents": agents::list_agents() }))
+}
+
+async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {
+    let nodes = state.nodes.list().await;
+    Json(json!({ "nodes": nodes }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1870,6 +1878,7 @@ mod tests {
             )),
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
+            nodes: crate::node::NodeRegistry::new(),
         };
         (state, dir)
     }
@@ -1958,6 +1967,7 @@ mod tests {
             )),
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
+            nodes: crate::node::NodeRegistry::new(),
         };
         let app = build_router(state);
 

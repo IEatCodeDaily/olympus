@@ -5,6 +5,7 @@ import {
   fetchSession,
   fetchMessages,
   fetchAgents,
+  fetchNodes,
   fetchModels,
   healthCheck,
   fetchCards,
@@ -68,6 +69,16 @@ export function useMessages(sessionId: string | null) {
 /** Agents list. */
 export function useAgents() {
   return useQuery({ queryKey: qk.agents(), queryFn: fetchAgents, staleTime: 60_000 });
+}
+
+/** Fleet nodes — connected envoys + the local node. */
+export function useNodes() {
+  return useQuery({
+    queryKey: ["nodes"],
+    queryFn: fetchNodes,
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
 }
 
 /** Models list. */

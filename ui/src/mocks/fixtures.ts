@@ -40,28 +40,34 @@ const NOW = Math.floor(Date.now() / 1000);
 
 export const NODES: NodeInfo[] = [
   {
-    id: "local",
+    nodeId: "local",
+    hostname: "localhost",
     status: "online",
     slotsUsed: 2,
     slotsTotal: 4,
-    lastHeartbeat: NOW - 18,
-    runtime: "hermes-acp",
+    version: "0.1",
+    local: true,
+    lastHeartbeatAgoSecs: 1,
   },
   {
-    id: "gpu-box",
+    nodeId: "gpu-box",
+    hostname: "gpu-box",
     status: "draining",
     slotsUsed: 5,
     slotsTotal: 6,
-    lastHeartbeat: NOW - 165,
-    runtime: "cuda-worker",
+    version: "0.1",
+    local: false,
+    lastHeartbeatAgoSecs: 165,
   },
   {
-    id: "edge-mini",
+    nodeId: "edge-mini",
+    hostname: "edge-mini",
     status: "offline",
     slotsUsed: 0,
     slotsTotal: 2,
-    lastHeartbeat: NOW - 5400,
-    runtime: "ssh-runner",
+    version: "0.1",
+    local: false,
+    lastHeartbeatAgoSecs: 5400,
   },
 ];
 
