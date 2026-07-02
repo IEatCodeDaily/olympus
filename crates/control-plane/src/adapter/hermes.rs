@@ -14,9 +14,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{
-    AgentKind, Capabilities, MergeMode, SetupAdapter, SpawnOverlay, Support,
-};
+use super::{AgentKind, Capabilities, MergeMode, SetupAdapter, SpawnOverlay, Support};
 use crate::views::RegistryEntry;
 
 pub struct HermesAdapter;
@@ -110,8 +108,12 @@ impl SetupAdapter for HermesAdapter {
         //    TODO: when Hermes ACP gains session-scoped hooks, materialize
         //    natively here.
         if !resolved.hooks.resolved.is_empty() {
-            let hook_names: Vec<&str> =
-                resolved.hooks.resolved.iter().map(|e| e.slug.as_str()).collect();
+            let hook_names: Vec<&str> = resolved
+                .hooks
+                .resolved
+                .iter()
+                .map(|e| e.slug.as_str())
+                .collect();
             overlay.warnings.push(format!(
                 "hooks declared ({}) but Hermes ACP has no session-scoped hooks yet; \
                  these are inactive for this session",
@@ -128,8 +130,12 @@ impl SetupAdapter for HermesAdapter {
         //    session-scoped plugin activation via ACP. FallbackToContext: note
         //    them as context so the agent is aware.
         if !resolved.plugins.resolved.is_empty() {
-            let plugin_names: Vec<&str> =
-                resolved.plugins.resolved.iter().map(|e| e.slug.as_str()).collect();
+            let plugin_names: Vec<&str> = resolved
+                .plugins
+                .resolved
+                .iter()
+                .map(|e| e.slug.as_str())
+                .collect();
             overlay.warnings.push(format!(
                 "plugins declared ({}) — Hermes has no session-scoped plugin activation; \
                  ensure these are installed at the node level",
@@ -154,8 +160,8 @@ impl SetupAdapter for HermesAdapter {
 /// Expected shape: `{"dir": "/path/to/skill"}` or
 /// `{"dir": "/path", "name": "...", "description": "..."}`.
 fn parse_skill_dir(definition: &str) -> Result<String> {
-    let v: serde_json::Value = serde_json::from_str(definition)
-        .with_context(|| "skill definition is not valid JSON")?;
+    let v: serde_json::Value =
+        serde_json::from_str(definition).with_context(|| "skill definition is not valid JSON")?;
     let dir = v
         .get("dir")
         .and_then(|d| d.as_str())
@@ -228,10 +234,7 @@ mod tests {
         let overlay = adapter
             .materialize(&resolved, space.path(), MergeMode::Union)
             .unwrap();
-        assert!(overlay
-            .env
-            .iter()
-            .any(|(k, _)| k == "HERMES_SKILLS_PATH"));
+        assert!(overlay.env.iter().any(|(k, _)| k == "HERMES_SKILLS_PATH"));
         // The symlink was created.
         assert!(space.path().join(".skills/code-review").exists());
     }
@@ -250,7 +253,10 @@ mod tests {
         let overlay = adapter
             .materialize(&resolved, tmp.path(), MergeMode::Union)
             .unwrap();
-        assert!(overlay.warnings.iter().any(|w| w.contains("does not exist")));
+        assert!(overlay
+            .warnings
+            .iter()
+            .any(|w| w.contains("does not exist")));
     }
 
     #[test]
@@ -301,6 +307,9 @@ mod tests {
             .materialize(&resolved, tmp.path(), MergeMode::Union)
             .unwrap();
         assert!(overlay.mcp_servers.is_empty());
-        assert!(overlay.warnings.iter().any(|w| w.contains("not valid JSON")));
+        assert!(overlay
+            .warnings
+            .iter()
+            .any(|w| w.contains("not valid JSON")));
     }
 }

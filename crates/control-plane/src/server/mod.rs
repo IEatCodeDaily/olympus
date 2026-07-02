@@ -38,6 +38,8 @@ use bridge_mgr::BridgeManager;
 use dto::{CardDto, MessageDto, RegistryEntryDto, SearchHitDto, SessionDto, SetupDto};
 use ws::ServerFrame;
 
+use crate::adapter::SetupAdapter;
+
 /// Import progress, surfaced on `/api/health`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportState {
@@ -1108,12 +1110,60 @@ async fn post_message(
         .bridge
         .space_path(&id)
         .map(|p| p.to_string_lossy().into_owned());
+
+    // --- ADR 0006 §9.3: resolve the effective setup for this session's
+    // org/project scope, then materialize via the Hermes adapter. ---
+    // This is where the declaration manifest + registry become REAL: MCP
+    // servers resolved from registry definitions get injected into the ACP
+    // session/new, skills get symlinked into the session space, and env vars
+    // (HERMES_SKILLS_PATH) are set on the child.
+    let org_slug = std::env::var("OLYMPUS_DEFAULT_ORG").unwrap_or_else(|_| "default".to_string());
+    let (mcp_servers, env_vars, adapter_warnings) = {
+        let views = state.views.read().await;
+        // Get the effective (merged org+project) setup. For now, no project
+        // scoping — just org-level. TODO: wire project from session metadata.
+        let effective = views.setup.effective_for_project(&org_slug, "");
+        let resolved = crate::adapter::ResolvedSetup::from_registry(
+            &views.registry,
+            &effective.skills,
+            &effective.mcp,
+            &effective.plugins,
+            &effective.hooks,
+        );
+        // Materialize into the session space if we have one.
+        let adapter = crate::adapter::hermes::HermesAdapter;
+        if let Some(ref space_path) = cwd {
+            match adapter.materialize(
+                &resolved,
+                std::path::Path::new(space_path),
+                crate::adapter::MergeMode::Union,
+            ) {
+                Ok(overlay) => (overlay.mcp_servers, overlay.env, overlay.warnings),
+                Err(e) => {
+                    tracing::warn!(error = %e, session = %id, "adapter materialize failed; spawning with empty setup");
+                    (vec![], vec![], vec![format!("adapter failed: {e}")])
+                }
+            }
+        } else {
+            (
+                vec![],
+                vec![],
+                vec!["no session space; skipping adapter".into()],
+            )
+        }
+    };
+    if !adapter_warnings.is_empty() {
+        for w in &adapter_warnings {
+            tracing::info!(session = %id, warning = %w, "adapter warning");
+        }
+    }
+
     let spec = crate::server::bridge_mgr::RuntimeSpec {
         agent,
         node,
         cwd,
-        mcp_servers: vec![],
-        env: vec![],
+        mcp_servers,
+        env: env_vars,
     };
     let resume_hermes = if hermes_id.is_empty() {
         None

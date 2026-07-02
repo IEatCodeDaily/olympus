@@ -8,6 +8,8 @@
 //! This avoids the Hermes Studio cross-contamination original sin by
 //! construction (ADR 0002 §1.1).
 
+pub mod hermes;
+
 use std::path::Path;
 
 use anyhow::Result;
