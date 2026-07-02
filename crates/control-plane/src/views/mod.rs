@@ -13,10 +13,12 @@
 pub mod card;
 pub mod message;
 pub mod session;
+pub mod setup;
 
 pub use card::{CardFilters, CardRow, CardView};
 pub use message::{MessageRow, MessageView};
 pub use session::{Filters, SessionRow, SessionView};
+pub use setup::{SetupRow, SetupView};
 
 use anyhow::Result;
 
@@ -35,6 +37,8 @@ pub struct ViewManager {
     pub messages: MessageView,
     /// Card/board projection (C1).
     pub cards: CardView,
+    /// Setup declaration projection (ADR 0006 §3 — the replicable manifest).
+    pub setup: SetupView,
 }
 
 impl ViewManager {
@@ -44,6 +48,7 @@ impl ViewManager {
             sessions: SessionView::new(),
             messages: MessageView::new(),
             cards: CardView::new(),
+            setup: SetupView::new(),
         }
     }
 
@@ -55,6 +60,7 @@ impl ViewManager {
         self.sessions = SessionView::new();
         self.messages = MessageView::new();
         self.cards = CardView::new();
+        self.setup = SetupView::new();
         for (_seq, event) in log.read_all()? {
             self.apply(&event);
         }
@@ -69,6 +75,7 @@ impl ViewManager {
         self.sessions.apply(event);
         self.messages.apply(event);
         self.cards.apply(event);
+        self.setup.apply(event);
     }
 }
 

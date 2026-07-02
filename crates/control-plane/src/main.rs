@@ -72,11 +72,14 @@ async fn main() -> Result<()> {
     let token = auth::load_or_create_token()?;
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
-    // ---- import state.db → fresh event log ----
+    // ---- open the durable event log; keep Olympus-native records, rebuild the
+    // state.db mirror each boot ----
     let log_path = home.join("eventlog.redb");
-    // Rebuild from scratch each boot (MVP): remove any prior log.
-    let _ = std::fs::remove_file(&log_path);
     let log = Arc::new(Log::open(&log_path).context("opening event log")?);
+    // Drop the previous boot's state.db-imported events (keeping Olympus-native
+    // records: setup declarations, cards, olympus sessions), so the re-import
+    // below is idempotent and the durable declarations survive a restart.
+    log.retain_native().context("retaining native events")?;
 
     let state_db = hermes_state_db()?;
     let (snap_sessions, snap_messages) = if state_db.exists() {

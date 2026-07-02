@@ -118,6 +118,33 @@ GET /api/health
   → 200 { "status":"ok", "importState": "idle"|"running"|"done",
           "snapshot": { "sessions": number, "messages": number } | null,
           "syncConnected": boolean, "hermesProfile": string }
+
+GET /api/metrics                       # process + store stats (unauth, scrapeable)
+  → 200 { "rssKb": number|null, "threads": number|null, "cpuTicks": number|null,
+          "wsSubscribers": number, "snapshot": {...}, "syncConnected": boolean,
+          "inFlight": number }
+
+GET /api/events                        # tail-able event log (replication spine, ADR 0006)
+  ?since=<seq>&limit=<n>               # since is an exclusive cursor; limit ≤ 5000
+  → 200 { "events": [{ "seq": number, "event": {...} }], "next": number|null }
+  # next is null at the head (caller is caught up)
+
+GET /api/setup                         # declared agent setup (ADR 0006 §3)
+  ?scope=org:<org> | ?scope=project:<org>/<project>   # one scope's raw declaration
+  ?org=<org>&project=<project>         # OR: the merged EFFECTIVE setup (org + project)
+  → 200 Setup    # an undeclared scope returns an empty Setup, not 404
+```
+
+Where `Setup` is:
+```ts
+interface Setup {
+  scope: string;      // "org:<org>" | "project:<org>/<project>"
+  skills: string[];   // active skill slugs (refs into the skill library)
+  mcp: string[];      // active MCP server slugs
+  plugins: string[];  // active plugin slugs (LSP, codegraph, services, installers)
+  hooks: string[];    // active hook slugs
+  declaredAt: number; // epoch seconds; 0 for an undeclared/empty scope
+}
 ```
 
 ### Mutations
@@ -135,6 +162,13 @@ POST /api/sessions/:id/messages        # drive a MANAGED session
   body { text: string, model?: string }
   → 202 { "accepted": true }           # response streams over /ws
   → 409 if session is not `managed` (observed sessions must be forked first)
+
+PUT /api/setup                         # declare (set/replace) a scope's agent setup (ADR 0006 §3)
+  body { scope: string, skills?: string[], mcp?: string[],
+         plugins?: string[], hooks?: string[] }   # PUT = full replace of the scope
+  → 200 Setup                          # the stored declaration
+  → 400 if scope is not "org:<slug>" or "project:<org>/<project>"
+
 
 POST /api/sessions/:id/cancel          # (post-spike) → ACP session/cancel
 POST /api/sessions/:id/model           # (post-spike) body { model } → ACP session/set_model

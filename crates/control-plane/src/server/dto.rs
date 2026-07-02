@@ -8,7 +8,7 @@
 use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
-use crate::views::{CardRow, MessageRow, SessionRow};
+use crate::views::{CardRow, MessageRow, SessionRow, SetupRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -267,6 +267,31 @@ impl CardDto {
             priority: row.priority,
             created_at: row.created_at,
             status_changed_at: row.status_changed_at,
+        }
+    }
+}
+
+/// `Setup` as the UI consumes it — a scope's declared agent setup (ADR 0006 §3).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupDto {
+    pub scope: String,
+    pub skills: Vec<String>,
+    pub mcp: Vec<String>,
+    pub plugins: Vec<String>,
+    pub hooks: Vec<String>,
+    pub declared_at: f64,
+}
+
+impl SetupDto {
+    pub fn from_row(row: &SetupRow) -> Self {
+        Self {
+            scope: row.scope.clone(),
+            skills: row.skills.clone(),
+            mcp: row.mcp.clone(),
+            plugins: row.plugins.clone(),
+            hooks: row.hooks.clone(),
+            declared_at: row.declared_at,
         }
     }
 }

@@ -35,7 +35,7 @@ use crate::log::Log;
 use crate::search::SearchIndex;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
-use dto::{CardDto, MessageDto, SearchHitDto, SessionDto};
+use dto::{CardDto, MessageDto, SearchHitDto, SessionDto, SetupDto};
 use ws::ServerFrame;
 
 /// Import progress, surfaced on `/api/health`.
@@ -102,6 +102,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/cards/{id}/complete", post(complete_card))
         .route("/api/cards/{id}/reassign", post(reassign_card))
         .route("/api/events", get(tail_events))
+        .route("/api/setup", get(get_setup).put(put_setup))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -279,6 +280,123 @@ async fn tail_events(State(state): State<AppState>, Query(q): Query<EventsQuery>
             )
                 .into_response()
         }
+    }
+}
+
+/// Query params for `GET /api/setup` — which scope's declaration to fetch.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SetupQuery {
+    /// `"org:<org>"` | `"project:<org>/<project>"`. If `effective` is set with
+    /// an org+project, returns the merged org+project setup instead of a single
+    /// scope's raw declaration.
+    scope: Option<String>,
+    /// When both are present, return the merged effective setup for the project
+    /// (org baseline + project layer). Overrides `scope`.
+    org: Option<String>,
+    project: Option<String>,
+}
+
+/// GET /api/setup?scope=... OR ?org=..&project=.. — the declared agent setup.
+///
+/// - `?scope=org:acme` → that scope's raw declaration (or empty setup).
+/// - `?org=acme&project=web` → the *effective* (merged org+project) setup the
+///   envoy would materialize for a session in that project (ADR 0006 §3.1).
+async fn get_setup(State(state): State<AppState>, Query(q): Query<SetupQuery>) -> Response {
+    let views = state.views.read().await;
+    if let (Some(org), Some(project)) = (q.org.as_deref(), q.project.as_deref()) {
+        let row = views.setup.effective_for_project(org, project);
+        return Json(serde_json::to_value(SetupDto::from_row(&row)).unwrap()).into_response();
+    }
+    let Some(scope) = q.scope.as_deref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": "missing_scope", "message": "provide ?scope= or ?org=&project=" }),
+            ),
+        )
+            .into_response();
+    };
+    match views.setup.get(scope) {
+        Some(row) => Json(serde_json::to_value(SetupDto::from_row(row)).unwrap()).into_response(),
+        None => {
+            // An undeclared scope is a valid empty setup, not a 404.
+            let empty = crate::server::dto::SetupDto {
+                scope: scope.to_string(),
+                skills: vec![],
+                mcp: vec![],
+                plugins: vec![],
+                hooks: vec![],
+                declared_at: 0.0,
+            };
+            Json(serde_json::to_value(empty).unwrap()).into_response()
+        }
+    }
+}
+
+/// Body for `PUT /api/setup` — full-replace a scope's declaration (ADR 0006 §3).
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PutSetupBody {
+    scope: String,
+    #[serde(default)]
+    skills: Vec<String>,
+    #[serde(default)]
+    mcp: Vec<String>,
+    #[serde(default)]
+    plugins: Vec<String>,
+    #[serde(default)]
+    hooks: Vec<String>,
+}
+
+/// PUT /api/setup — declare (set/replace) a scope's agent setup. PUT semantics:
+/// the body fully replaces the scope's prior declaration (ADR 0006 §3).
+async fn put_setup(State(state): State<AppState>, Json(body): Json<PutSetupBody>) -> Response {
+    // Validate the scope shape: "org:<slug>" or "project:<org>/<project>".
+    let scope = body.scope.trim();
+    let valid = scope
+        .strip_prefix("org:")
+        .map(|s| !s.is_empty() && !s.contains('/'))
+        .or_else(|| {
+            scope
+                .strip_prefix("project:")
+                .map(|s| s.split('/').filter(|p| !p.is_empty()).count() == 2)
+        })
+        .unwrap_or(false);
+    if !valid {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_scope",
+                "message": "scope must be 'org:<slug>' or 'project:<org>/<project>'",
+            })),
+        )
+            .into_response();
+    }
+
+    let event = crate::event::Event::SetupDeclared {
+        scope: scope.to_string(),
+        skills: body.skills,
+        mcp: body.mcp,
+        plugins: body.plugins,
+        hooks: body.hooks,
+        declared_at: now_epoch(),
+    };
+    if let Err(e) = state.log.append(&event) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+        )
+            .into_response();
+    }
+    let dto = {
+        let mut views = state.views.write().await;
+        views.apply(&event);
+        views.setup.get(scope).map(SetupDto::from_row)
+    };
+    match dto {
+        Some(dto) => Json(serde_json::to_value(&dto).unwrap()).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "apply failed").into_response(),
     }
 }
 
@@ -2082,6 +2200,147 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- setup declaration endpoints (ADR 0006 §3) ----
+
+    #[tokio::test]
+    async fn put_setup_then_get_roundtrips() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        // PUT an org-scope declaration.
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/setup")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"scope":"org:acme","skills":["code-review"],"plugins":["gitnexus"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["scope"], "org:acme");
+        assert_eq!(v["skills"][0], "code-review");
+        assert_eq!(v["plugins"][0], "gitnexus");
+        // mcp/hooks default to empty arrays (camelCase contract).
+        assert_eq!(v["mcp"].as_array().unwrap().len(), 0);
+
+        // GET it back by scope.
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/setup?scope=org:acme")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["skills"][0], "code-review");
+    }
+
+    #[tokio::test]
+    async fn get_setup_effective_merges_org_and_project() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let put = |scope: &str, skills: &str| {
+            let body = format!(r#"{{"scope":"{scope}","skills":{skills}}}"#);
+            Request::builder()
+                .method("PUT")
+                .uri("/api/setup")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        app.clone()
+            .oneshot(put("org:acme", r#"["code-review"]"#))
+            .await
+            .unwrap();
+        app.clone()
+            .oneshot(put("project:acme/web", r#"["react-doctor"]"#))
+            .await
+            .unwrap();
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/setup?org=acme&project=web")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let skills: Vec<String> = v["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(skills, vec!["code-review", "react-doctor"]);
+    }
+
+    #[tokio::test]
+    async fn put_setup_rejects_invalid_scope() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/setup")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"scope":"nonsense"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn get_undeclared_setup_is_empty_not_404() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/setup?scope=org:ghost")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["scope"], "org:ghost");
+        assert_eq!(v["skills"].as_array().unwrap().len(), 0);
     }
 
     // ---- restart test: cards survive replay from the log (C1 gate) ----

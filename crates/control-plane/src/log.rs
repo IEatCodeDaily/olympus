@@ -119,6 +119,14 @@ enum StoredVariant {
         previous_session_id: String,
         reassigned_at: f64,
     },
+    SetupDeclared {
+        scope: String,
+        skills: Vec<String>,
+        mcp: Vec<String>,
+        plugins: Vec<String>,
+        hooks: Vec<String>,
+        declared_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -276,6 +284,21 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             attempt_bookmark: attempt_bookmark.clone(),
             previous_session_id: previous_session_id.clone(),
             reassigned_at: *reassigned_at,
+        },
+        Event::SetupDeclared {
+            scope,
+            skills,
+            mcp,
+            plugins,
+            hooks,
+            declared_at,
+        } => StoredVariant::SetupDeclared {
+            scope: scope.clone(),
+            skills: skills.clone(),
+            mcp: mcp.clone(),
+            plugins: plugins.clone(),
+            hooks: hooks.clone(),
+            declared_at: *declared_at,
         },
     };
     Ok(StoredEvent { variant })
@@ -446,6 +469,21 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             previous_session_id,
             reassigned_at,
         },
+        StoredVariant::SetupDeclared {
+            scope,
+            skills,
+            mcp,
+            plugins,
+            hooks,
+            declared_at,
+        } => Event::SetupDeclared {
+            scope,
+            skills,
+            mcp,
+            plugins,
+            hooks,
+            declared_at,
+        },
     })
 }
 
@@ -519,6 +557,72 @@ impl Log {
         Ok(Some(first))
     }
 
+    /// Rewrite the log keeping only Olympus-NATIVE events, dropping everything
+    /// derived from a `state.db` import. Called on boot before re-importing
+    /// `state.db`, so Olympus-native durable records (setup declarations, cards,
+    /// olympus-source sessions + their messages) survive a restart while the
+    /// state.db mirror is rebuilt fresh (keeping import idempotent).
+    ///
+    /// Native = SetupDeclared, all Card* events, and SessionCreated with
+    /// `source == "olympus"` plus the messages/updates belonging to those
+    /// olympus sessions. Everything else (imported sessions/messages) is dropped.
+    pub fn retain_native(&self) -> Result<()> {
+        // Collect the survivors first (read txn), then rewrite (write txn).
+        let all = self.read_all()?;
+        // Which session ids are olympus-native? (their SessionCreated said so)
+        let mut native_sessions = std::collections::HashSet::new();
+        for (_seq, ev) in &all {
+            if let Event::SessionCreated {
+                session_id, source, ..
+            } = ev
+            {
+                if source == "olympus" {
+                    native_sessions.insert(session_id.clone());
+                }
+            }
+        }
+        let is_native = |ev: &Event| -> bool {
+            match ev {
+                Event::SetupDeclared { .. }
+                | Event::CardCreated { .. }
+                | Event::CardAssigned { .. }
+                | Event::CardClaimed { .. }
+                | Event::CardBlocked { .. }
+                | Event::CardCompleted { .. }
+                | Event::CardReassigned { .. } => true,
+                Event::SessionCreated { source, .. } => source == "olympus",
+                Event::SessionUpdated { session_id, .. }
+                | Event::MessageAppended { session_id, .. }
+                | Event::MessageRemoved { session_id, .. } => native_sessions.contains(session_id),
+            }
+        };
+        let survivors: Vec<Event> = all
+            .into_iter()
+            .filter(|(_s, ev)| is_native(ev))
+            .map(|(_s, ev)| ev)
+            .collect();
+
+        // Rewrite: clear the events table + reset the seq, then re-append.
+        let txn = self.db.begin_write().context("begin write for retain")?;
+        {
+            let mut events = txn.open_table(EVENTS)?;
+            // redb has no truncate; delete every key.
+            let keys: Vec<u64> = events
+                .iter()?
+                .filter_map(|it| it.ok().map(|(k, _v)| k.value()))
+                .collect();
+            for k in keys {
+                events.remove(k)?;
+            }
+            let mut meta = txn.open_table(META)?;
+            write_next_seq(&mut meta, 0)?;
+        }
+        txn.commit()?;
+        // Re-append survivors in order (contiguous seqs from 0).
+        self.append_batch(&survivors)?;
+        Ok(())
+    }
+
     /// Read up to `limit` events starting at sequence `seq` (inclusive).
     pub fn read_from(&self, seq: u64, limit: usize) -> Result<Vec<(u64, Event)>> {
         let txn = self.db.begin_read().context("begin read for read_from")?;
@@ -580,6 +684,72 @@ mod tests {
         let f = tempfile::NamedTempFile::new().unwrap();
         let log = Log::open(f.path()).unwrap();
         (f, log)
+    }
+
+    #[test]
+    fn retain_native_keeps_setup_and_olympus_sessions_drops_imported() {
+        let (_f, log) = fresh_log();
+        // Olympus-native: a setup declaration + an olympus session + its message.
+        log.append(&Event::SetupDeclared {
+            scope: "org:acme".into(),
+            skills: vec!["code-review".into()],
+            mcp: vec![],
+            plugins: vec![],
+            hooks: vec![],
+            declared_at: 1.0,
+        })
+        .unwrap();
+        log.append(&Event::SessionCreated {
+            session_id: "oly-1".into(),
+            hermes_id: "h".into(),
+            source: "olympus".into(),
+            model: None,
+            title: None,
+            started_at: 2.0,
+            message_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            agent: Some("coding-agent".into()),
+            node: None,
+        })
+        .unwrap();
+        log.append(&sample_message("oly-1", 0, "hi")).unwrap();
+        // Imported (state.db): a cli session + its message.
+        log.append(&sample_session_created("cli-1")).unwrap(); // source=cli
+        log.append(&sample_message("cli-1", 0, "imported")).unwrap();
+
+        log.retain_native().unwrap();
+
+        let kept: Vec<Event> = log
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .map(|(_s, e)| e)
+            .collect();
+        // Setup + olympus session + its message survive; cli session + msg dropped.
+        assert!(kept
+            .iter()
+            .any(|e| matches!(e, Event::SetupDeclared { scope, .. } if scope == "org:acme")));
+        assert!(kept.iter().any(
+            |e| matches!(e, Event::SessionCreated { session_id, .. } if session_id == "oly-1")
+        ));
+        assert!(kept.iter().any(
+            |e| matches!(e, Event::MessageAppended { session_id, .. } if session_id == "oly-1")
+        ));
+        assert!(!kept.iter().any(
+            |e| matches!(e, Event::SessionCreated { session_id, .. } if session_id == "cli-1")
+        ));
+        assert!(!kept.iter().any(
+            |e| matches!(e, Event::MessageAppended { session_id, .. } if session_id == "cli-1")
+        ));
+        // Seqs are contiguous from 0 after the rewrite.
+        let seqs: Vec<u64> = log
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
     }
 
     fn sample_session_created(id: &str) -> Event {

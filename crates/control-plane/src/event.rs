@@ -107,6 +107,25 @@ pub enum Event {
         previous_session_id: String,
         reassigned_at: f64,
     },
+    // ---- Declaration manifest events (ADR 0006 §3) ----
+    /// A scope's agent-setup declaration was set or replaced. The `scope` is
+    /// `"org:<org_slug>"` or `"project:<org_slug>/<project_slug>"`. This is the
+    /// replicable unit: skills/mcp/plugins/hooks the envoy must materialize into
+    /// every session under that scope. PUT semantics — a full replace of the
+    /// scope's declared setup (idempotent).
+    SetupDeclared {
+        /// `"org:<org>"` | `"project:<org>/<project>"`.
+        scope: String,
+        /// Active skill slugs (refs into the skill library).
+        skills: Vec<String>,
+        /// Active MCP server slugs.
+        mcp: Vec<String>,
+        /// Active plugin slugs (LSP, codegraph, services, installers).
+        plugins: Vec<String>,
+        /// Active hook slugs.
+        hooks: Vec<String>,
+        declared_at: f64,
+    },
 }
 
 #[cfg(test)]
@@ -127,6 +146,21 @@ mod tests {
             output_tokens: 20,
             agent: None,
             node: None,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn setup_declared_postcard_roundtrips() {
+        let e = Event::SetupDeclared {
+            scope: "project:acme/web".into(),
+            skills: vec!["code-review".into(), "react-doctor".into()],
+            mcp: vec!["gitnexus".into()],
+            plugins: vec!["lsp-rust".into(), "codegraph".into()],
+            hooks: vec!["pre-commit-verify".into()],
+            declared_at: 1_782_900_000.0,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();
