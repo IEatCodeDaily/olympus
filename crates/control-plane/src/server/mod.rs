@@ -78,6 +78,8 @@ pub struct AppState {
     pub bridge: Arc<BridgeManager>,
     /// Whether the live `state.db` sync worker has successfully connected.
     pub sync_connected: Arc<AtomicBool>,
+    /// In-process IRC bus for inter-agent messaging (ADR 0006 §2).
+    pub irc: crate::irc::IrcBus,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -92,6 +94,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/sessions/{id}/handover",
             axum::routing::post(handover_session),
         )
+        .route("/api/irc/peers", get(list_irc_peers))
+        .route("/api/irc/send", axum::routing::post(irc_send))
         .route(
             "/api/sessions/{id}/messages",
             get(get_messages).post(post_message),
@@ -1604,6 +1608,33 @@ struct ReassignCardBody {
 
 /// Append an event to the log + apply it to views + broadcast. Returns 500 on
 /// log/apply failure. This is the shared mutation path for all card write ops.
+// ---- IRC bus handlers (ADR 0006 §2) ----
+
+#[derive(Debug, Deserialize)]
+struct IrcSendBody {
+    from: String,
+    to: String,
+    content: String,
+}
+
+/// GET /api/irc/peers — list registered IRC peers.
+async fn list_irc_peers(State(state): State<AppState>) -> Response {
+    let peers = state.irc.list_peers().await;
+    Json(json!({ "peers": peers })).into_response()
+}
+
+/// POST /api/irc/send — send a DM from one peer to another.
+async fn irc_send(State(state): State<AppState>, Json(body): Json<IrcSendBody>) -> Response {
+    match state.irc.send(&body.from, &body.to, &body.content).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn append_and_apply(state: &AppState, event: crate::event::Event) -> Response {
     if let Err(e) = state.log.append(&event) {
         tracing::error!(error = %e, "failed to append card event");
@@ -1838,6 +1869,7 @@ mod tests {
                 test_support::mock_factory(),
             )),
             sync_connected: Arc::new(AtomicBool::new(true)),
+            irc: crate::irc::IrcBus::new(),
         };
         (state, dir)
     }
@@ -1925,6 +1957,7 @@ mod tests {
                 test_support::mock_factory(),
             )),
             sync_connected: Arc::new(AtomicBool::new(true)),
+            irc: crate::irc::IrcBus::new(),
         };
         let app = build_router(state);
 

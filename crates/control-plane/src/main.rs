@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
         log: log_arc.clone(),
         bridge,
         sync_connected: sync_connected.clone(),
+        irc: olympus_control_plane::irc::IrcBus::new(),
     };
 
     let sync_log = Arc::clone(&log_arc);

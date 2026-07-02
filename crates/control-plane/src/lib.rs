@@ -10,6 +10,7 @@ pub mod bridge;
 pub mod compress;
 pub mod event;
 pub mod import;
+pub mod irc;
 pub mod log;
 pub mod search;
 pub mod server;
