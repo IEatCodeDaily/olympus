@@ -225,3 +225,120 @@ dependency order:
 
 Start at (1): it's unblocked, it's the load-bearing new artifact, and everything
 else references it.
+
+## 9. Harness adapter design (grounded — verified 2026-07-02)
+
+Increment 1 (the declaration manifest) shipped (commit `0245a03`): a scope
+declares slug lists, org+project merge to an effective set, durable across
+restart. It is currently **inert** — nothing consumes it. Increment 2
+(materialization) is what makes it real, and it forced the real design question,
+which is bigger than footgun 4's state machine:
+
+> **The materialization *target* is harness-specific.** The declaration is
+> harness-AGNOSTIC (slugs); each agent (Hermes / Claude Code / Codex) reads its
+> config from a different place in a different format. So the envoy's
+> materialization is a **per-harness adapter**: given the effective declared
+> setup and the session's locked agent kind, render the config the way THAT
+> harness expects — *into the session space*, never into a shared profile.
+
+### 9.1 Decisions (operator-ratified)
+
+- **Harness-specific adapter is the real design.** Footgun 4's state machine is
+  a sub-concern inside it.
+- **Agent kind is locked at session creation.** Branch/fork/tree inherit the
+  original agent. Switching agents happens ONLY via a **handover** (its own
+  increment). So the adapter runs at session creation (locked kind) and at
+  handover (target kind) — never on branch/fork.
+- **Design the adapter interface up front.** First targets: Hermes, Claude
+  Code, Codex.
+- **Merge mode:** Hermes = union (Olympus adds on top of profile defaults).
+  Claude Code / Codex = configurable (override vs union) where the harness
+  allows it.
+
+### 9.2 Verified config surfaces (the load-bearing facts)
+
+| Harness | Skills path | MCP config | Settings/Hooks | Context file | Session-scope lever |
+|---|---|---|---|---|---|
+| **Hermes** | `~/.hermes/skills/` + profile (union) | ACP `session/new` `mcpServers` param (bridge sends `[]` today — just populate it) | profile | injected | ACP params + env; no profile mutation |
+| **Claude Code** | `.claude/skills/<name>/SKILL.md` (**reads from cwd**) | `.mcp.json` (**cwd**) | `.claude/settings.json` (cwd) | `CLAUDE.md` (cwd) | **the session-space cwd, natively** |
+| **Codex** | skills dir / `AGENTS.md` (cwd) | `[mcp_servers.*]` in `config.toml` (**STDIO only**) | Codex hooks | `AGENTS.md` (cwd) | **`CODEX_HOME` env → session-local config dir** |
+
+**The convergent win:** all three scope by the **session space**. Claude Code
+and Codex read their config from the cwd / a `CODEX_HOME` dir; Hermes takes
+per-session ACP params. Writing config INTO the session space is the native
+path for two of three and the safe path for all three. This avoids the Hermes
+Studio cross-contamination original sin (ADR 0002 §1.1) **by construction** —
+materialization never mutates a shared profile.
+
+### 9.3 Skills are portable as-is (footgun-2-of-materialization dissolved)
+
+Verified: all three harnesses use the **same skill shape** — a per-skill
+directory with `SKILL.md` (YAML frontmatter `name`/`description` + markdown
+body). Claude Code: `.claude/skills/<name>/SKILL.md`; Hermes: same; Codex: same.
+So a skill is portable content; the only per-harness difference is the *install
+path*. The "renderer" for skills is therefore **copy the skill dir to the
+harness's path**, not a schema translation. No canonical-form + heavy-renderer
+layer is needed. (Hooks remain harness-specific and do NOT port; MCP is a
+protocol standard `{command,args,env}` and ports cleanly to all three.)
+
+### 9.4 The registry dependency (new unblocked increment, before the adapter)
+
+Increment 1 stores slug *lists* (`mcp: ["gitnexus"]`). A slug alone can't be
+materialized — nothing yet resolves `"gitnexus"` → its MCP `{command,args,env}`,
+or a skill slug → its `SKILL.md` directory. So the chain is:
+
+```
+registry (resolve slug → definition)  →  adapter (render def into harness config)  →  spawn (point runtime at it)
+```
+
+The **registry** is the unblocked foundational piece — same character as
+increment 1 (pure control-plane record-keeping, references the skill/MCP/plugin
+libraries of ADR 0002 §9 and the resource dirs of ADR 0005 §4). The **adapter**
+is the next layer and is where footgun 4's state machine (declared →
+materializing → ready → failed) actually lives.
+
+### 9.5 The adapter trait (interface, first cut)
+
+```rust
+enum AgentKind { Hermes, ClaudeCode, Codex }
+enum MergeMode { Union, Override }   // Hermes forces Union
+
+struct SetupCapabilities {  // per harness — drives drop-with-warning vs fallback
+    skills: Support, mcp: Support, hooks: Support, plugins: Support,
+}
+enum Support { Native, FallbackToContext, Unsupported }
+
+/// Rendered result the runtime factory applies when spawning.
+struct SpawnOverlay { env: Vec<(String,String)>, args: Vec<String> }
+
+trait SetupAdapter {
+    fn agent_kind(&self) -> AgentKind;
+    fn capabilities(&self) -> SetupCapabilities;
+    /// Render the resolved (registry-looked-up), org+project-merged setup into
+    /// the session space; return the env/args the runtime needs. Never mutates
+    /// a shared profile.
+    fn materialize(&self, resolved: &ResolvedSetup, space: &Path, mode: MergeMode)
+        -> Result<SpawnOverlay>;
+}
+```
+
+Capability fallback: skills/context that a harness can't natively activate
+degrade to prose appended to its context file (`CLAUDE.md`/`AGENTS.md`);
+things that can't degrade (e.g. an LSP plugin on a harness without LSP) are
+**dropped with a surfaced warning** so the operator sees "declared X, harness Y
+can't do it." MCP maps cleanly everywhere (protocol standard).
+
+### 9.6 Resequenced build order (supersedes §8's list from increment 2 on)
+
+1. ✅ Declaration manifest (done, `0245a03`).
+2. **Registry**: resolve slug → definition for skills / MCP / plugins. Unblocked,
+   pure control-plane. *(next)*
+3. **Adapter trait + Hermes adapter** (first concrete impl; populate ACP
+   `mcpServers`, session-scoped skills). Includes footgun 4's state machine.
+4. **Claude Code + Codex adapters** (render into session-space cwd / `CODEX_HOME`).
+5. Session-tree events + card link (footgun 3).
+6. Handover (the sole cross-harness transition — its own increment; translates
+   history to the target harness's transcript format + re-materializes setup).
+7. IRC bus (in-process, then cross-node — footgun 2).
+8. omp edit/diff model on jj (footgun 1 spike).
+
