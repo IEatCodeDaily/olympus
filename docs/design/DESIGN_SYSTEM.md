@@ -502,6 +502,38 @@ All motion collapses instantly. Information is never carried by animation alone
 
 ## 11. Changelog
 
+### 2026-07-02 — Tokenize single-value margins (41 → 10 raw px margins; 34 sites → --space-*)
+
+- **Problem:** The gap-spacing run (previous) killed ~93 raw `gap:` literals, but
+  **~41 single-value `margin:`/`margin-*` declarations** remained raw pixel
+  values across the same CSS file — the same drift class (radius, tracking,
+  opacity, gaps already closed). Every `margin-bottom: 8px`, `margin-top: 4px`,
+  `margin-left: 6px`, etc. was unenforceable and drifting.
+- **Fix:** repointed all **34 single-value even-margin** sites to the existing
+  `--space-*` step scale (`--space-1: 2px` … `--space-8: 16px`). Each token
+  equals the literal it replaced — **zero pixel delta**, fully reversible.
+  Used regex-based substitution with per-rule context anchors for safety.
+- **Deliberately excluded (7 remaining raw px margins):**
+  - `0` (resets — not spacing)
+  - `auto` (layout keyword — not a distance)
+  - Odd values: `3px`, `5px` (sub-perceptual; rounding would shift pixels)
+  - `28px` (settings-section — large structural margin, needs its own semantic token)
+  - Multi-value margins: `6px 0 6px 20px`, `12px 0 6px`, `14px 16px`,
+    `5px 24px 5px 42px`, `0 6px`, `8px 0`, `4px 0`, `6px 0 6px 20px`,
+    `12px 0 6px`, `0 auto`, `6px 0 6px 20px` (asymmetric/compound — need
+    individual property audit in a follow-up pass)
+- **Scope guard:** only `margin` properties touched. No color, layout, font,
+  padding, border, or view logic changed.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0 (CSS bundle
+  51.86 kB). Browser screenshot in **both midnight (Sessions) and daylight
+  (Sessions)** — nav/toolbar/pills/session-rows/messages/composer/settings/
+  board/nodes/workflows all evenly spaced, zero regressions.
+- **Debt still open (next design runs):**
+  - Raw `padding:` literals (~120 sites, many asymmetric two/four-value) are
+    the same drift class but require per-property audit — unsafe to blind-sweep.
+  - Remaining multi-value + odd + structural raw margins (~15 sites) want a
+    follow-up pass once someone confirms ±1px shifts are acceptable.
+
 ### 2026-07-02 — Tokenize the gap spacing scale (0 → 8-step scale; kill ~93 raw gap literals)
 
 - **Problem:** §4 mandated "never raw pixel values for gaps," but the CSS had
