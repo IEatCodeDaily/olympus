@@ -3,12 +3,15 @@ import { AppShell } from "./AppShell";
 
 // ── Route tree ─────────────────────────────────────
 // URL is the single source of truth for:
-//   /              → sessions list (no active session)
-//   /sessions/:id  → chat view for a specific session
-//   /fleet         → fleet management
-//   /agents        → agent management
-//   /board         → kanban board
-//   /settings      → settings
+//   /                         → sessions list (no active session)
+//   /sessions/$sessionId      → chat view for a specific session
+//   /vaults                   → vaults list (placeholder until V-UI)
+//   /vaults/$vaultId          → vault detail (placeholder)
+//   /vaults/$vaultId/$notePath→ note editor (placeholder)
+//   /projects                 → projects / kanban board (placeholder until P1)
+//   /projects/$boardId        → specific board (placeholder)
+//   /fleet                    → fleet management
+//   /settings                 → settings (placeholder until ST1)
 //
 // Everything else (sidebar collapse, panel toggles, right-tab) stays in
 // Zustand — those are ephemeral UI preferences, not things you'd bookmark
@@ -21,7 +24,7 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: () => null, // AppShell reads search params for active session
+  component: () => null, // AppShell reads location for active session
 });
 
 const sessionRoute = createRoute({
@@ -30,21 +33,39 @@ const sessionRoute = createRoute({
   component: () => null,
 });
 
+const vaultsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/vaults",
+  component: () => null,
+});
+
+const vaultDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/vaults/$vaultId",
+  component: () => null,
+});
+
+const vaultNoteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/vaults/$vaultId/$notePath",
+  component: () => null,
+});
+
+const projectsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects",
+  component: () => null,
+});
+
+const projectBoardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects/$boardId",
+  component: () => null,
+});
+
 const fleetRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/fleet",
-  component: () => null,
-});
-
-const agentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/agents",
-  component: () => null,
-});
-
-const boardRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/board",
   component: () => null,
 });
 
@@ -57,9 +78,12 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   sessionRoute,
+  vaultsRoute,
+  vaultDetailRoute,
+  vaultNoteRoute,
+  projectsRoute,
+  projectBoardRoute,
   fleetRoute,
-  agentsRoute,
-  boardRoute,
   settingsRoute,
 ]);
 
@@ -72,18 +96,21 @@ declare module "@tanstack/react-router" {
   }
 }
 
-/** Extract the active view + session from the current URL. */
+/** The five navigable surfaces (in nav order). */
+export type SurfaceName = "sessions" | "vaults" | "projects" | "fleet" | "settings";
+
+/** Extract the active surface + session from the current URL. */
 export function parseRoute(pathname: string): {
-  view: string;
+  surface: SurfaceName;
   sessionId: string | null;
 } {
   if (pathname.startsWith("/sessions/")) {
     const id = pathname.split("/sessions/")[1];
-    return { view: "sessions", sessionId: id || null };
+    return { surface: "sessions", sessionId: id || null };
   }
-  if (pathname.startsWith("/fleet")) return { view: "fleet", sessionId: null };
-  if (pathname.startsWith("/agents")) return { view: "agents", sessionId: null };
-  if (pathname.startsWith("/board")) return { view: "board", sessionId: null };
-  if (pathname.startsWith("/settings")) return { view: "settings", sessionId: null };
-  return { view: "sessions", sessionId: null };
+  if (pathname.startsWith("/vaults")) return { surface: "vaults", sessionId: null };
+  if (pathname.startsWith("/projects")) return { surface: "projects", sessionId: null };
+  if (pathname.startsWith("/fleet")) return { surface: "fleet", sessionId: null };
+  if (pathname.startsWith("/settings")) return { surface: "settings", sessionId: null };
+  return { surface: "sessions", sessionId: null };
 }

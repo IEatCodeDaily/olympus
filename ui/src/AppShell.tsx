@@ -1,20 +1,48 @@
+// AppShell — the Olympus application frame.
+//
+// Layout (matches docs/design/concept/olympus-app-concept.html):
+//   ┌─────────────────────────────────────────────────┐
+//   │ TopBar (sidebar toggle · nav rail · search · org · profile) │
+//   ├──────────┬──────────────┬───────────────────────┤
+//   │ Left     │ Secondary    │ Viewport              │
+//   │ rail     │ sidebar      │ (chat / fleet / etc.) │
+//   │ (icons)  │ (per-surface)│                      │
+//   │          │              │                      │
+//   └──────────┴──────────────┴───────────────────────┘
+//
+// The left rail is a slim icon column with the 5 surfaces. Each surface
+// provides its own secondary sidebar slot (session list, vault tree, etc.).
+// Surfaces whose card hasn't merged render a .ol-* placeholder pane.
+
 import { useCallback } from "react";
 import { useRouterState, useNavigate } from "@tanstack/react-router";
 import { Icon, type IconName } from "./components/Icon";
 import { useUIStore } from "./store";
-import { useSessions, useHealth } from "./hooks/queries";
-import { parseRoute } from "./router";
+import { useSessions, useHealth, useNodes } from "./hooks/queries";
+import { createSession } from "./api";
+import { parseRoute, type SurfaceName } from "./router";
+import { useTheme } from "./theme";
 import type { Session } from "./types";
 import ChatView from "./views/ChatView";
 import FleetView from "./views/FleetView";
+import { VaultsView, ProjectsView, SettingsView } from "./views/PlaceholderViews";
 
-const LAYOUTS: { sec: string; label: string; icon: IconName; path: string }[] = [
-  { sec: "sessions", label: "Sessions", icon: "message-square", path: "/" },
-  { sec: "fleet", label: "Fleet", icon: "server", path: "/fleet" },
-  { sec: "agents", label: "Agents", icon: "bot", path: "/agents" },
-  { sec: "board", label: "Board", icon: "kanban", path: "/board" },
-  { sec: "settings", label: "Settings", icon: "gear", path: "/settings" },
+// ── Nav definition ─────────────────────────────────
+// The 5 surfaces, in nav order. Matches the plan's table exactly.
+const SURFACES: {
+  surface: SurfaceName;
+  label: string;
+  icon: IconName;
+  path: string;
+}[] = [
+  { surface: "sessions", label: "Sessions", icon: "message-square", path: "/" },
+  { surface: "vaults", label: "Vaults", icon: "book", path: "/vaults" },
+  { surface: "projects", label: "Projects", icon: "kanban", path: "/projects" },
+  { surface: "fleet", label: "Fleet", icon: "server", path: "/fleet" },
+  { surface: "settings", label: "Settings", icon: "gear", path: "/settings" },
 ];
+
+// ── Helpers ────────────────────────────────────────
 
 function timeAgo(ts: number): string {
   const diff = Date.now() / 1000 - ts;
@@ -24,24 +52,56 @@ function timeAgo(ts: number): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+// ── Main shell ─────────────────────────────────────
+
 export function AppShell() {
   const { location } = useRouterState();
-  const { view, sessionId } = parseRoute(location.pathname);
+  const { surface, sessionId } = parseRoute(location.pathname);
+  const { sidebarCollapsed, sidebarWidth } = useUIStore();
 
   return (
     <div className="app">
-      <TopBar activeView={view} />
+      <TopBar activeSurface={surface} />
       <div className="body">
-        <LeftSidebar activeView={view} activeSessionId={sessionId} />
+        {/* Left icon rail */}
+        <Rail activeSurface={surface} />
+
+        {/* Secondary sidebar — per-surface content */}
+        {!sidebarCollapsed && surface === "sessions" && (
+          <>
+            <SessionSidebar
+              width={sidebarWidth}
+              activeSessionId={sessionId}
+            />
+          </>
+        )}
+        {!sidebarCollapsed && surface === "fleet" && (
+          <SecondarySidebar width={sidebarWidth}>
+            <FleetSidebar />
+          </SecondarySidebar>
+        )}
+        {!sidebarCollapsed && (surface === "vaults" || surface === "projects" || surface === "settings") && (
+          <SecondarySidebar width={sidebarWidth}>
+            <PlaceholderSidebar surface={surface} />
+          </SecondarySidebar>
+        )}
+
+        {/* Viewport — the active surface's main content */}
         <div className="viewport">
-          {view === "sessions" && sessionId ? (
+          {surface === "sessions" && sessionId ? (
             <ChatView sessionId={sessionId} />
-          ) : view === "fleet" || view === "agents" ? (
-            <FleetView />
-          ) : view === "sessions" ? (
+          ) : surface === "sessions" ? (
             <SessionListPane />
+          ) : surface === "fleet" ? (
+            <FleetView />
+          ) : surface === "vaults" ? (
+            <VaultsView />
+          ) : surface === "projects" ? (
+            <ProjectsView />
+          ) : surface === "settings" ? (
+            <SettingsView />
           ) : (
-            <GenericPane title={view} />
+            <SessionListPane />
           )}
         </div>
       </div>
@@ -49,60 +109,213 @@ export function AppShell() {
   );
 }
 
-function TopBar({ activeView }: { activeView: string }) {
+// ── TopBar ─────────────────────────────────────────
+
+function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
   const navigate = useNavigate();
-  const { toggleSidebar, setPaletteOpen } = useUIStore();
-  const { data: health } = useHealth() as { data: { hermesProfile?: string } | undefined };
+  const { toggleSidebar } = useUIStore();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <div className="topbar">
       <div className="tb-left">
-        <button type="button" className="icobtn" onClick={toggleSidebar} title="Toggle sidebar">
-          <Icon name="panel-left" />
+        <button
+          type="button"
+          className="icobtn"
+          onClick={toggleSidebar}
+          title="Toggle sidebar"
+          aria-label="Toggle sidebar"
+        >
+          <Icon name="panel-left" size={14} />
         </button>
-        <div className="divider" />
+        <span className="divider" />
+        {/* Nav rail — icon chips for each surface */}
         <div className="layouts">
-          {LAYOUTS.map((l) => (
+          {SURFACES.map((s) => (
             <button
               type="button"
-              key={l.sec}
-              className={`chip ${activeView === l.sec ? "on" : ""}`}
-              onClick={() => void navigate({ to: l.path })}
+              key={s.surface}
+              className={`chip ${activeSurface === s.surface ? "on" : ""}`}
+              onClick={() => void navigate({ to: s.path })}
+              title={s.label}
+              aria-label={s.label}
+              aria-current={activeSurface === s.surface ? "page" : undefined}
             >
-              <Icon name={l.icon} size={12} />
-              {l.label}
+              <Icon name={s.icon} size={13} />
             </button>
           ))}
         </div>
       </div>
+
       <div className="tb-center">
-        <button type="button" className="tb-search" onClick={() => setPaletteOpen(true)}>
-          <Icon name="search" size={13} />
-          <span className="ph">Search…</span>
-          <span className="sp" />
-          <span className="kbd">⌘K</span>
-        </button>
+        <SearchPill />
       </div>
+
       <div className="tb-right">
-        <div className="org">
-          <div className="mk" />
-          <span className="nm">{health?.hermesProfile ?? "default"}</span>
-        </div>
-        <div className="profile">rp</div>
+        {/* Theme toggle */}
+        <button
+          type="button"
+          className="icobtn"
+          onClick={toggleTheme}
+          title={theme === "obsidian" ? "Switch to light" : "Switch to dark"}
+          aria-label="Toggle theme"
+        >
+          <Icon name={theme === "obsidian" ? "globe" : "sparkles"} size={14} />
+        </button>
+        <OrgChip />
+        <div className="profile" title="rpw">rp</div>
       </div>
     </div>
   );
 }
 
-function LeftSidebar({
-  activeView,
+function SearchPill() {
+  const { setPaletteOpen } = useUIStore();
+  return (
+    <button
+      type="button"
+      className="tb-search"
+      onClick={() => setPaletteOpen(true)}
+      title="Search (⌘K)"
+    >
+      <Icon name="search" size={13} />
+      <span className="ph">Search…</span>
+      <span className="sp" />
+      <span className="kbd">⌘K</span>
+    </button>
+  );
+}
+
+function OrgChip() {
+  const { data: health } = useHealth() as { data: { hermesProfile?: string } | undefined };
+  return (
+    <div className="org" title="Hermes profile">
+      <span className="mk" />
+      <span className="nm">{health?.hermesProfile ?? "default"}</span>
+    </div>
+  );
+}
+
+// ── Left icon rail ─────────────────────────────────
+
+function Rail({ activeSurface }: { activeSurface: SurfaceName }) {
+  const navigate = useNavigate();
+  return (
+    <nav className="rail" aria-label="Navigation">
+      {SURFACES.map((s) => (
+        <button
+          type="button"
+          key={s.surface}
+          className={`rail-btn ${activeSurface === s.surface ? "on" : ""}`}
+          onClick={() => void navigate({ to: s.path })}
+          title={s.label}
+          aria-label={s.label}
+          aria-current={activeSurface === s.surface ? "page" : undefined}
+        >
+          <Icon name={s.icon} size={16} />
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ── Secondary sidebar wrappers ─────────────────────
+
+function SecondarySidebar({
+  width,
+  children,
+}: {
+  width: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <aside className="sidebar" style={{ width }}>
+        {children}
+      </aside>
+      <div className="rz-x" />
+    </>
+  );
+}
+
+function PlaceholderSidebar({ surface }: { surface: SurfaceName }) {
+  const label = SURFACES.find((s) => s.surface === surface)?.label ?? surface;
+  return (
+    <div className="sb-scroll">
+      <div className="sec-head">
+        <span className="lbl">{label.toUpperCase()}</span>
+      </div>
+      <div className="sec-content">
+        <div
+          className="empty-state"
+          style={{ minHeight: 120, padding: "16px 8px" }}
+        >
+          <div className="empty-state-msg">Coming soon</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FleetSidebar() {
+  const { data: nodesData } = useNodes();
+  const nodes = nodesData?.nodes ?? [];
+
+  return (
+    <div className="sb-scroll">
+      <div className="sb-pad">
+        <button type="button" className="newbtn" title="Add node (UDS registration)">
+          <Icon name="plus" size={14} />
+          Add node
+        </button>
+      </div>
+      <div className="sec-head">
+        <span className="lbl">NODES</span>
+        <span className="sp" />
+        <span className="ct">{nodes.length}</span>
+      </div>
+      <div className="sec-content">
+        {nodes.length === 0 && (
+          <div className="empty-state-msg" style={{ padding: "8px 0" }}>
+            No nodes registered
+          </div>
+        )}
+        {nodes.map((n) => (
+          <div key={n.nodeId} className="srow">
+            <span
+              className="dot"
+              style={{
+                background:
+                  n.status === "online"
+                    ? "var(--green)"
+                    : n.status === "draining"
+                      ? "var(--amber)"
+                      : "var(--red)",
+              }}
+            />
+            <div className="info">
+              <span className="title">{n.nodeId}</span>
+            </div>
+            <span className="meta">
+              <span>{n.lastHeartbeatAgoSecs}s</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Session sidebar ────────────────────────────────
+
+function SessionSidebar({
+  width,
   activeSessionId,
 }: {
-  activeView: string;
+  width: number;
   activeSessionId: string | null;
 }) {
   const navigate = useNavigate();
-  const { sidebarCollapsed, sidebarWidth } = useUIStore();
   const { data: sessionData } = useSessions({ managed: true });
   const { data: historyData } = useSessions({ managed: false, limit: 20 });
   const sessions = sessionData?.sessions ?? [];
@@ -110,19 +323,8 @@ function LeftSidebar({
 
   const handleNewSession = useCallback(async () => {
     try {
-      const res = await fetch("/api/sessions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_API_TOKEN}`,
-        },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const id = data.session?.id;
-        if (id) void navigate({ to: `/sessions/$sessionId`, params: { sessionId: id } });
-      }
+      const session = await createSession();
+      if (session?.id) void navigate({ to: `/sessions/$sessionId`, params: { sessionId: session.id } });
     } catch {
       // sessions list will refetch
     }
@@ -135,49 +337,42 @@ function LeftSidebar({
     [navigate],
   );
 
-  if (sidebarCollapsed) return null;
-
   return (
-    <>
-      <div className="sidebar" style={{ width: sidebarWidth }}>
-        <div className="sb-pad">
-          <button type="button" className="newbtn" onClick={handleNewSession}>
-            <Icon name="plus" size={14} />
-            New Session
-          </button>
-        </div>
-        <div className="sb-scroll">
+    <SecondarySidebar width={width}>
+      <div className="sb-pad">
+        <button type="button" className="newbtn" onClick={handleNewSession}>
+          <Icon name="plus" size={14} />
+          New session
+        </button>
+      </div>
+      <div className="sb-scroll">
+        <SessionSection
+          label="RECENT"
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onSelect={handleSelectSession}
+        />
+        {history.length > 0 && (
           <SessionSection
-            label="RECENT"
-            sessions={sessions}
+            label="OBSERVED"
+            sessions={history}
             activeSessionId={activeSessionId}
             onSelect={handleSelectSession}
           />
-          {history.length > 0 && (
-            <SessionSection
-              label="HISTORY"
-              sessions={history}
-              activeSessionId={activeSessionId}
-              onSelect={handleSelectSession}
-            />
-          )}
-        </div>
+        )}
       </div>
-      <div className="rz-x" />
-    </>
+    </SecondarySidebar>
   );
 }
 
 function SessionSection({
   label,
   sessions,
-  count: _count,
   activeSessionId,
   onSelect,
 }: {
   label: string;
   sessions: Session[];
-  count?: number;
   activeSessionId: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -195,9 +390,13 @@ function SessionSection({
             type="button"
             key={s.id}
             className={`srow ${activeSessionId === s.id ? "on" : ""}`}
+            data-session-id={s.id}
+            data-managed={s.managed ? "true" : "false"}
             onClick={() => onSelect(s.id)}
           >
-            <span className={`dot ${s.liveness === "active" ? "active" : "idle"}`} />
+            <span
+              className={`dot ${s.liveness === "active" ? "active" : "idle"}`}
+            />
             <span className="info">
               <span className="title">{s.title || "Untitled"}</span>
             </span>
@@ -212,6 +411,8 @@ function SessionSection({
   );
 }
 
+// ── Session list empty pane ────────────────────────
+
 function SessionListPane() {
   return (
     <>
@@ -220,27 +421,13 @@ function SessionListPane() {
       </div>
       <div className="gv-body">
         <div className="empty-state">
-          <Icon name="message-square" size={32} />
+          <div className="empty-state-icon">
+            <Icon name="message-square" size={32} />
+          </div>
           <div className="empty-state-title">Select a session</div>
           <div className="empty-state-msg">
             Choose a session from the sidebar or create a new one to start chatting.
           </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function GenericPane({ title }: { title: string }) {
-  return (
-    <>
-      <div className="gv-head">
-        <span className="gv-title">{title.charAt(0).toUpperCase() + title.slice(1)}</span>
-      </div>
-      <div className="gv-body">
-        <div className="empty-state">
-          <div className="empty-state-title">{title} view</div>
-          <div className="empty-state-msg">Loading…</div>
         </div>
       </div>
     </>

@@ -2,7 +2,7 @@ import React, { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Icon } from "../components/Icon";
 import { useSession, useMessages } from "../hooks/queries";
-import { sendMessage, onFrame } from "../api";
+import { sendMessage, forkSession, onFrame } from "../api";
 import type { Message, ServerFrame } from "../types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -79,8 +79,19 @@ export default function ChatView({ sessionId }: { sessionId: string }) {
     [],
   );
 
+  const handleFork = useCallback(async () => {
+    try {
+      const forked = await forkSession(sessionId);
+      if (forked?.id) void navigate({ to: `/sessions/$sessionId`, params: { sessionId: forked.id } });
+    } catch {
+      // ignore — user can retry
+    }
+  }, [sessionId, navigate]);
+
+  const isObserved = session?.managed === false;
+
   return (
-    <div className="chatcol">
+    <div className="chatcol chat-view" data-session-id={sessionId}>
       <div className="vp-head">
         <div className="vp-left">
           <button
@@ -91,15 +102,18 @@ export default function ChatView({ sessionId }: { sessionId: string }) {
           >
             <Icon name="chevron-left" />
           </button>
-          <span className="vp-title">{session?.title || "Untitled session"}</span>
+          <span className="vp-title chat-title">{session?.title || "Untitled"}</span>
           {session?.agent && <span className="gtag ok">{session.agent}</span>}
         </div>
         <div className="vp-right">
           {session?.liveness === "active" && (
-            <div className="live">
+            <div className="live chat-live-badge">
               <span className="dot" />
               <span className="lbl">LIVE</span>
             </div>
+          )}
+          {session?.managed && session?.liveness !== "active" && (
+            <span className="gtag ok chat-managed-badge">managed</span>
           )}
         </div>
       </div>
@@ -122,39 +136,52 @@ export default function ChatView({ sessionId }: { sessionId: string }) {
         </div>
       </div>
 
-      <div className="composer">
-        <div className="comp-box">
-          <textarea
-            rows={1}
-            placeholder="Type a message…"
-            value={text}
-            onChange={handleTextareaInput}
-            onKeyDown={handleKeyDown}
-            autoFocus
-          />
-          <div className="comp-bar">
-            <div className="comp-l">
-              <button type="button" className="modelpill" title="Model">
-                <span className="dot" />
-                <span className="nm">{session?.model || "auto"}</span>
-              </button>
-            </div>
-            <div className="comp-r">
-              {sending && <span className="spin" />}
-              <span className="comp-hint">↵ send · ⇧↵ newline</span>
-              <button
-                type="button"
-                className="send"
-                onClick={handleSend}
-                disabled={!text.trim() || sending}
-                title="Send"
-              >
-                <Icon name="arrow-up" size={14} />
-              </button>
+      {isObserved ? (
+        <div className="composer">
+          <div className="obsbanner">
+            <Icon name="alert" size={14} />
+            <span>This is an observed session — read-only.</span>
+            <button type="button" className="btn pri" onClick={handleFork}>
+              Fork to continue
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="composer">
+          <div className="comp-box">
+            <textarea
+              rows={1}
+              className="composer-input"
+              placeholder="Type a message…"
+              value={text}
+              onChange={handleTextareaInput}
+              onKeyDown={handleKeyDown}
+              autoFocus
+            />
+            <div className="comp-bar">
+              <div className="comp-l">
+                <button type="button" className="modelpill" title="Model">
+                  <span className="dot" />
+                  <span className="nm">{session?.model || "auto"}</span>
+                </button>
+              </div>
+              <div className="comp-r">
+                {sending && <span className="spin" />}
+                <span className="comp-hint">↵ send · ⇧↵ newline</span>
+                <button
+                  type="button"
+                  className="send"
+                  onClick={handleSend}
+                  disabled={!text.trim() || sending}
+                  title="Send"
+                >
+                  <Icon name="arrow-up" size={14} />
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

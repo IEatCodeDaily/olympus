@@ -39,6 +39,10 @@ export const handlers = [
 
     let filtered = [...SESSIONS];
 
+    const managedParam = url.searchParams.get("managed");
+    if (managedParam === "true") filtered = filtered.filter((s) => s.managed);
+    if (managedParam === "false") filtered = filtered.filter((s) => !s.managed);
+
     if (sourceParam) {
       const sources = sourceParam.split(",");
       filtered = filtered.filter((s) => sources.includes(s.source));

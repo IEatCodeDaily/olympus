@@ -12,19 +12,16 @@ import { test, expect, type Page } from "@playwright/test";
  * did not update the selection highlight or the right-panel content.
  */
 
-// Navigation uses Playwright's configured baseURL (see playwright.config.ts),
-// so the e2e server port can change without editing every test.
-
 /** Get the Nth session row (1-indexed for readability). */
 async function row(page: Page, n: number) {
-  const rows = page.locator(".session-row");
+  const rows = page.locator(".srow[data-session-id]");
   return rows.nth(n - 1);
 }
 
 /** Get the text of the session title shown in the row. */
 async function rowTitle(page: Page, n: number): Promise<string> {
   const r = await row(page, n);
-  return (await r.locator(".row-title").textContent()) ?? "";
+  return (await r.locator(".title").textContent()) ?? "";
 }
 
 /** Get the unique session id from the row (always distinct, unlike titles). */
@@ -33,39 +30,39 @@ async function rowId(page: Page, n: number): Promise<string> {
   return (await r.getAttribute("data-session-id")) ?? "";
 }
 
-/** Get the session id currently rendered in the chat panel header. */
+/** Get the session id currently rendered in the chat panel. */
 async function chatId(page: Page): Promise<string> {
   return (await page.locator(".chat-view").getAttribute("data-session-id")) ?? "";
 }
 
 /** Get the title displayed in the chat panel header. */
 async function chatTitle(page: Page): Promise<string> {
-  return (await page.locator(".chat-title span").first().textContent()) ?? "";
+  return (await page.locator(".chat-title").first().textContent()) ?? "";
 }
 
-/** Assert exactly one row has the 'selected' class and it matches the given row number. */
+/** Assert exactly one row has the 'on' class and it matches the given row number. */
 async function expectSelected(page: Page, n: number) {
-  const selectedCount = await page.locator(".session-row.selected").count();
+  const selectedCount = await page.locator(".srow.on[data-session-id]").count();
   expect(selectedCount).toBe(1);
 
   const r = await row(page, n);
-  await expect(r).toHaveClass(/.*\bselected\b.*/);
+  await expect(r).toHaveClass(/.*\bon\b.*/);
 
   // Verify via data-session-id as well (robust against class ordering)
   const selectedId = await page
-    .locator(".session-row.selected")
+    .locator(".srow.on[data-session-id]")
     .getAttribute("data-session-id");
-  const rowId = await r.getAttribute("data-session-id");
-  expect(selectedId).toBe(rowId);
+  const rid = await r.getAttribute("data-session-id");
+  expect(selectedId).toBe(rid);
 }
 
 test.describe("Session selection and chat-view switching", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     // Wait for the session list to render (MSW mocks are synchronous but React mounts async)
-    await page.waitForSelector(".session-row", { timeout: 10_000 });
+    await page.waitForSelector(".srow[data-session-id]", { timeout: 10_000 });
     // Ensure we have at least 3 rows
-    const count = await page.locator(".session-row").count();
+    const count = await page.locator(".srow[data-session-id]").count();
     expect(count).toBeGreaterThanOrEqual(3);
   });
 
@@ -90,7 +87,7 @@ test.describe("Session selection and chat-view switching", () => {
     const id3 = await rowId(page, 3);
 
     // Sanity: rows 1 and 3 are different sessions (ids are always unique,
-    // unlike titles which can both be "(no title)").
+    // unlike titles which can both be "Untitled").
     expect(id3).not.toBe(id1);
 
     // Click session 1 first
@@ -143,11 +140,17 @@ test.describe("Session selection and chat-view switching", () => {
   });
 
   test("forking an observed session opens the managed fork", async ({ page }) => {
+    // Observed sessions are in the OBSERVED section (data-managed="false").
+    // Click through them until we find one with a "Fork to continue" button.
+    const observedRows = page.locator('.srow[data-managed="false"]');
+    const count = await observedRows.count();
+    expect(count).toBeGreaterThan(0);
+
     let sourceId = "";
     let forkButton = page.getByRole("button", { name: "Fork to continue" });
 
-    for (let n = 1; n <= 6; n += 1) {
-      await (await row(page, n)).click();
+    for (let n = 0; n < Math.min(count, 6); n += 1) {
+      await observedRows.nth(n).click();
       await page.waitForSelector(".chat-view", { timeout: 5_000 });
       if ((await forkButton.count()) > 0) {
         sourceId = await chatId(page);

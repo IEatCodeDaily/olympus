@@ -2,11 +2,9 @@ import { create } from "zustand";
 
 export type ViewName =
   | "sessions"
-  | "history"
-  | "board"
-  | "nodes"
-  | "workflows"
-  | "plugins"
+  | "vaults"
+  | "projects"
+  | "fleet"
   | "settings";
 
 interface UIState {
