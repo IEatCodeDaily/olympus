@@ -178,6 +178,15 @@
   --space-nav-x: 12px;
   --space-panel: 12px;
   --space-panel-lg: 16px;
+  /* Content gutter (§4). The horizontal inset of the transcript + search content
+     column (message rows, dividers, search header/stats/groups/hits). It is the
+     transcript's analogue of --space-view-x for the generic view scroll area:
+     a structural gutter that MUST flex under [data-density]. Was a raw 24px on
+     7 rules, so the transcript alone kept its comfortable gutter while every
+     other surface tightened in compact — the same latent density bug the card
+     interiors had. Comfortable 24px (unchanged), compact 20px (matches
+     --space-view-x). Vertical axis of those rows stays its own off-scale value. */
+  --space-content-x: 24px;
   --page-gap: 18px;
   --session-row-h: 68px;
   /* Type scale (§3). Every font-size in index.css references these;
@@ -219,6 +228,7 @@
   --space-nav-x: 10px;
   --space-panel: 10px;
   --space-panel-lg: 14px;
+  --space-content-x: 20px;
   --page-gap: var(--space-7);
   --session-row-h: 60px;
 }
@@ -744,7 +754,7 @@ html, body, #root {
 .msg {
   display: flex;
   gap: var(--space-6);
-  padding: 12px 24px;
+  padding: 12px var(--space-content-x);
   border-left: 2px solid transparent;
   transition: background var(--dur-1);
 }
@@ -858,7 +868,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: var(--space-5);
-  padding: 10px 24px;
+  padding: 10px var(--space-content-x);
 }
 .msg-divider-line { flex: 1; height: 1px; background: var(--border); }
 .msg-divider-label {
@@ -873,7 +883,7 @@ html, body, #root {
 
 /* Transcript loading skeleton */
 .transcript-skeleton { padding: var(--space-6) 0; }
-.skel-msg { display: flex; gap: var(--space-6); padding: 12px 24px; border-left: 2px solid var(--border); }
+.skel-msg { display: flex; gap: var(--space-6); padding: 12px var(--space-content-x); border-left: 2px solid var(--border); }
 .skel-user { border-left-color: var(--accent-border); }
 .skel-ai { border-left-color: var(--green-border); }
 .skel-gutter { width: 52px; flex-shrink: 0; }
@@ -1274,7 +1284,7 @@ html, body, #root {
   display: flex;
   gap: var(--space-8);
   align-items: center;
-  padding: 16px 24px;
+  padding: 16px var(--space-content-x);
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
 }
@@ -1314,7 +1324,7 @@ html, body, #root {
 }
 
 .search-stats {
-  padding: 10px 24px;
+  padding: 10px var(--space-content-x);
   font-size: var(--font-md);
   font-family: var(--mono);
   color: var(--text-faint);
@@ -1333,7 +1343,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: var(--space-5);
-  padding: 8px 24px;
+  padding: 8px var(--space-content-x);
   cursor: pointer;
   transition: background var(--dur-2);
 }
@@ -1352,7 +1362,7 @@ html, body, #root {
   display: flex;
   align-items: flex-start;
   gap: var(--space-6);
-  padding: 5px 24px 5px 42px;
+  padding: 5px var(--space-content-x) 5px 42px;
   cursor: pointer;
   transition: background var(--dur-1);
 }

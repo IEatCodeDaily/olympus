@@ -181,6 +181,7 @@ body text sets no letter-spacing (default `normal`).
 | `--space-nav-x` | 12px | 10px | Nav item horizontal padding |
 | `--space-panel` | 12px | 10px | Inner panel/card padding (small) |
 | `--space-panel-lg` | 16px | 14px | Inner panel/card padding (large) |
+| `--space-content-x` | 24px | 20px | Transcript/search **content-column** horizontal gutter (message rows, dividers, search header/stats/groups/hits) — the transcript's analogue of `--space-view-x` |
 | `--page-gap` | 18px | 14px | Gap between page header and content |
 | `--session-row-h` | 68px | 60px | Session row height |
 
@@ -208,11 +209,15 @@ Steps are even (2px rhythm); if a design needs an in-between value, round to the
 nearest step rather than introducing a new literal.
 
 **Padding coverage:** the even-rhythm padding values (`2/4/6/8/10/12/14/16px`,
-single- or multi-value, `0` mixed in) are all tokenized to `--space-*`. Padding
-values that are **odd or off-scale** (`1/3/5/7/9/11/13px`) or **large structural
-one-offs** (`20/24/40/42/48px` — view-scroll gutters, empty-state insets) remain
-raw by design: they don't map to a step, and rounding them would move real
-pixels. Those large gutters want their own semantic constants in a later pass.
+single- or multi-value, `0` mixed in) are all tokenized to `--space-*`. The
+recurring `24px` transcript/search **content gutter** (7 rules) is now the
+semantic `--space-content-x` constant (§4 table) so it flexes under
+`[data-density]` like every other structural gutter. Padding values that are
+**odd or off-scale** (`1/3/5/7/9/11/13px`) or the remaining **large structural
+one-offs** (`40/42/48px` — empty-state insets, search-hit deep indent) stay raw
+by design: they don't map to a step, and rounding them would move real pixels.
+Those insets want their own semantic constant (`--space-empty-inset`) in a
+later pass.
 
 **Known exception (deliberate, not drift):** `.settings-rows { gap: 1px }` is a
 load-bearing hairline-divider primitive (1px gap over a border-colored
@@ -511,6 +516,47 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Transcript content gutter becomes a density-flexing constant (`--space-content-x`; fixes latent compact bug)
+
+- **Problem:** the chat transcript and search views share a recurring `24px`
+  **horizontal content gutter** — the inset of every message row, lifecycle
+  divider, transcript skeleton, and the search header/stats/group-header/hit
+  rows (7 rules). It was a **raw `24px` literal**, so unlike every other
+  structural gutter (`--space-view-x`, which flexes 24→20px under
+  `[data-density="compact"]`) the entire transcript kept its comfortable gutter
+  in compact mode while the rest of the cockpit tightened — the same latent
+  density bug the card-interior fix caught, hiding in the last flagged class of
+  raw padding (the "large structural one-offs").
+- **Fix:** added a semantic **`--space-content-x`** layout constant (24px
+  comfortable / 20px compact — matching `--space-view-x`) and repointed the
+  **horizontal axis** of all 7 gutter rules to it: `.msg`, `.msg-divider`,
+  `.skel-msg`, `.search-header`, `.search-stats`, `.search-group-header`,
+  `.search-hit` (the right axis of its 4-value `5px 24px 5px 42px` — the 42px
+  deep-indent left axis stays raw, it's not the gutter).
+- **Behavior:** **zero pixel delta in comfortable mode** (constant = the 24px it
+  replaced; verified in-browser: `.msg` padding-left 24px, token 24px). In
+  compact mode the transcript now correctly tightens to 20px (verified: token +
+  `.msg` padding-left both flip to 20px when `data-density="compact"` is set).
+  A bug fix that is a no-op in the default view. Vertical axes of those rows
+  (their own off-scale values) untouched; no color/font/border/view logic
+  touched — only the horizontal padding axis of 7 rules.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0 (CSS bundle
+  52.86 kB). Browser screenshot of the transcript in **both midnight and
+  daylight** — message rows evenly guttered, role gutters aligned, zero
+  regressions; compact-density flex confirmed via computed-style read. Fully
+  reversible (1 token in `:root` + 1 in the compact block + 7 one-line edits).
+- **Debt still open (next design runs):**
+  - The remaining large structural insets (`40/48px` empty-state/chat-empty/
+    search-empty padding, `42px` search-hit deep indent, `20px` chat-scroll/
+    chat-error) want their own semantic constant (e.g. `--space-empty-inset`)
+    — the last members of the raw-padding class, but they're one-offs, not a
+    recurring shared gutter, so they need a deliberate name each rather than a
+    sweep.
+  - Odd padding/margin tail (`3/5/7/9/11px`) on chips/badges/metrics still wants
+    a rounding pass once ±1px shifts are confirmed acceptable.
+  - `ChatView.tsx:512` still passes inline `borderRadius`/`fontSize` to a
+    highlighter prop (view owner, not a system concern).
 
 ### 2026-07-02 — Tokenize on-scale padding (42 sites → --space-*; closes the last raw-spacing drift class)
 
