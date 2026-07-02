@@ -28,3 +28,4 @@ CLAUDE.md
 ui/node_modules/
 ui/dist/
 ui/bun.lock
+.worktrees/

@@ -1131,7 +1131,9 @@ async fn post_message(
             &effective.hooks,
         );
         // Materialize into the session space if we have one.
-        let adapter = crate::adapter::hermes::HermesAdapter;
+        let agent_kind =
+            crate::adapter::AgentKind::from_agent_str(agent.as_deref().unwrap_or(""));
+        let adapter = crate::adapter::for_kind(agent_kind);
         if let Some(ref space_path) = cwd {
             match adapter.materialize(
                 &resolved,

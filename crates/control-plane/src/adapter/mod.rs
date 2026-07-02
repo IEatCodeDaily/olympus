@@ -8,6 +8,8 @@
 //! This avoids the Hermes Studio cross-contamination original sin by
 //! construction (ADR 0002 §1.1).
 
+pub mod claude_code;
+pub mod codex;
 pub mod hermes;
 
 use std::path::Path;
@@ -23,6 +25,22 @@ pub enum AgentKind {
     Hermes,
     ClaudeCode,
     Codex,
+}
+
+impl AgentKind {
+    /// Resolve an agent name string (as stored on the session) into a kind.
+    /// Matching is case-insensitive and checks for common substrings.
+    /// Unknown/empty defaults to Hermes (the original harness).
+    pub fn from_agent_str(agent: &str) -> Self {
+        let lower = agent.to_ascii_lowercase();
+        if lower.contains("claude") {
+            Self::ClaudeCode
+        } else if lower.contains("codex") {
+            Self::Codex
+        } else {
+            Self::Hermes
+        }
+    }
 }
 
 /// How to merge Olympus's declared setup with the harness's existing config.
@@ -154,4 +172,13 @@ pub trait SetupAdapter: Send + Sync {
         space: &Path,
         mode: MergeMode,
     ) -> Result<SpawnOverlay>;
+}
+
+/// Select the concrete adapter for a given agent kind.
+pub fn for_kind(kind: AgentKind) -> Box<dyn SetupAdapter> {
+    match kind {
+        AgentKind::Hermes => Box::new(hermes::HermesAdapter),
+        AgentKind::ClaudeCode => Box::new(claude_code::ClaudeCodeAdapter),
+        AgentKind::Codex => Box::new(codex::CodexAdapter),
+    }
 }
