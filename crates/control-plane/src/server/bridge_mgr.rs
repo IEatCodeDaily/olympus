@@ -32,6 +32,13 @@ pub struct RuntimeSpec {
     /// the server's cwd (legacy behavior); production always sets this to the
     /// per-session space so agents operate in a scoped directory, not the host.
     pub cwd: Option<String>,
+    /// MCP servers to inject into the ACP session/new request (resolved from
+    /// the registry by the setup adapter). Each value is the harness's native
+    /// MCP server JSON. `None`/empty → no MCP servers (legacy behavior).
+    pub mcp_servers: Vec<serde_json::Value>,
+    /// Extra environment variables for the child process (from the setup
+    /// adapter, e.g. HERMES_SKILLS_PATH). Default empty.
+    pub env: Vec<(String, String)>,
 }
 
 /// A type-erased runtime factory. Production uses HermesAgentRuntime; tests

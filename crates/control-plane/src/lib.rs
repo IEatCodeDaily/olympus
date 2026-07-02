@@ -4,6 +4,7 @@
 //! Phase 2: in-memory views (`views`).
 //! Phase 6: tantivy full-text search (`search`).
 
+pub mod adapter;
 pub mod auth;
 pub mod bridge;
 pub mod compress;

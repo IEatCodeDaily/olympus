@@ -727,6 +727,8 @@ async fn create_session(
         agent: body.agent.clone(),
         node: body.node.clone(),
         cwd: None,
+        mcp_servers: vec![],
+        env: vec![],
     };
     match state.bridge.create_draft(&spec) {
         Ok(ns) => {
@@ -1106,7 +1108,13 @@ async fn post_message(
         .bridge
         .space_path(&id)
         .map(|p| p.to_string_lossy().into_owned());
-    let spec = crate::server::bridge_mgr::RuntimeSpec { agent, node, cwd };
+    let spec = crate::server::bridge_mgr::RuntimeSpec {
+        agent,
+        node,
+        cwd,
+        mcp_servers: vec![],
+        env: vec![],
+    };
     let resume_hermes = if hermes_id.is_empty() {
         None
     } else {

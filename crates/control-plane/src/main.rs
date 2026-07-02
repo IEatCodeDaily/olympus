@@ -133,6 +133,12 @@ async fn main() -> Result<()> {
                             config.cwd = cwd.clone();
                         }
                     }
+                    // Pass resolved MCP servers + env from the setup adapter
+                    // (ADR 0006 §9.3) to the Hermes runtime config.
+                    config.mcp_servers = spec.mcp_servers.clone();
+                    for (k, v) in &spec.env {
+                        config.env.push((k.clone(), v.clone()));
+                    }
                     olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(config)
                 },
             ),

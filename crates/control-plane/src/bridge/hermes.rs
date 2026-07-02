@@ -101,15 +101,17 @@ pub fn build_initialize_request(id: AcpId) -> AcpRequest {
     }
 }
 
-/// Build the ACP `session/new` request.
-pub fn build_session_new_request(cwd: &str, id: AcpId) -> AcpRequest {
+/// Build the ACP `session/new` request. If `mcp_servers` is non-empty, they're
+/// passed as the `mcpServers` param (session-scoped MCP activation per
+/// ADR 0006 §9.3). Otherwise `mcpServers: []` (legacy behavior).
+pub fn build_session_new_request(cwd: &str, mcp_servers: &[Value], id: AcpId) -> AcpRequest {
     AcpRequest {
         jsonrpc: "2.0".into(),
         id,
         method: "session/new".into(),
         params: json!({
             "cwd": cwd,
-            "mcpServers": [],
+            "mcpServers": mcp_servers,
         }),
     }
 }
@@ -194,6 +196,12 @@ pub struct HermesRuntimeConfig {
     /// How long `start()` waits for the `session/new` response (the ACP adapter
     /// can take several seconds to boot). Default 30s.
     pub start_timeout_secs: u64,
+    /// MCP servers to pass in the ACP `session/new` request (from the setup
+    /// adapter). Default empty (no session-scoped MCP).
+    pub mcp_servers: Vec<Value>,
+    /// Extra environment variables for the child process (from the setup
+    /// adapter, e.g. HERMES_SKILLS_PATH). Default empty.
+    pub env: Vec<(String, String)>,
 }
 
 impl Default for HermesRuntimeConfig {
@@ -206,6 +214,8 @@ impl Default for HermesRuntimeConfig {
             session_source: Some("olympus".into()),
             event_buffer: 256,
             start_timeout_secs: 30,
+            mcp_servers: Vec::new(),
+            env: Vec::new(),
         }
     }
 }
@@ -328,6 +338,10 @@ impl AgentRuntime for HermesAgentRuntime {
         if let Some(source) = &self.config.session_source {
             cmd.env("HERMES_ACP_SESSION_SOURCE", source);
         }
+        // Apply env vars from the setup adapter (e.g. HERMES_SKILLS_PATH).
+        for (k, v) in &self.config.env {
+            cmd.env(k, v);
+        }
 
         let mut child = cmd
             .spawn()
@@ -367,7 +381,7 @@ impl AgentRuntime for HermesAgentRuntime {
         let req = if let Some(sid) = session_id {
             build_session_resume_request(sid, &self.config.cwd, self.alloc_id())
         } else {
-            build_session_new_request(&self.config.cwd, self.alloc_id())
+            build_session_new_request(&self.config.cwd, &self.config.mcp_servers, self.alloc_id())
         };
         debug!(target: "olympus.bridge.hermes", method = %req.method, "ACP send");
         self.write_message(&AcpMessage::Request(req)).await?;
@@ -580,7 +594,7 @@ mod tests {
 
     #[test]
     fn session_new_request_includes_cwd() {
-        let req = build_session_new_request("/tmp/work", AcpId::from(2));
+        let req = build_session_new_request("/tmp/work", &[], AcpId::from(2));
         assert_eq!(req.method, "session/new");
         assert_eq!(req.params["cwd"], "/tmp/work");
     }
