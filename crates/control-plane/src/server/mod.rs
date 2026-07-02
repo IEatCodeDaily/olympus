@@ -82,6 +82,8 @@ pub struct AppState {
     pub irc: crate::irc::IrcBus,
     /// Fleet node registry — tracks connected envoys (UDS) + the local node.
     pub nodes: crate::node::NodeRegistry,
+    /// Reverse proxy routing table — slug → backend target.
+    pub proxy: crate::proxy::ProxyTable,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -117,13 +119,28 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/setup", get(get_setup).put(put_setup))
         .route("/api/registry", get(list_registry).put(put_registry_entry))
         .route("/api/nodes", get(list_nodes))
+        .route("/api/proxy", get(crate::proxy::list_proxy_endpoints).post(crate::proxy::create_proxy_endpoint))
+        .route("/api/proxy/{slug}", axum::routing::delete(crate::proxy::delete_proxy_endpoint))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
+
+    // The catch-all proxy forward is PUBLIC (auth is checked per-endpoint).
+    // Must be registered AFTER all /api/* routes so it doesn't shadow them.
+    // The fallback handler catches all /proxy/* paths.
+    let proxy_forward = Router::new()
+        .route("/proxy/{slug}/{rest}", get(crate::proxy::proxy_forward)
+            .post(crate::proxy::proxy_forward)
+            .put(crate::proxy::proxy_forward)
+            .delete(crate::proxy::proxy_forward)
+            .patch(crate::proxy::proxy_forward))
+        .route("/proxy/{slug}", get(crate::proxy::proxy_forward_root)
+            .post(crate::proxy::proxy_forward_root));
 
     Router::new()
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
         .merge(protected)
+        .merge(proxy_forward)
         .layer(cors_layer())
         .with_state(state)
 }
@@ -1879,6 +1896,7 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
+            proxy: crate::proxy::ProxyTable::new(),
         };
         (state, dir)
     }
@@ -1968,6 +1986,7 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
+            proxy: crate::proxy::ProxyTable::new(),
         };
         let app = build_router(state);
 

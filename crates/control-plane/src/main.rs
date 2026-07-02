@@ -177,6 +177,7 @@ async fn main() -> Result<()> {
         sync_connected: sync_connected.clone(),
         irc: olympus_control_plane::irc::IrcBus::new(),
         nodes: node_registry.clone(),
+        proxy: olympus_control_plane::proxy::ProxyTable::new(),
     };
 
     let sync_log = Arc::clone(&log_arc);
