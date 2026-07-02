@@ -107,6 +107,41 @@ pub enum Event {
         previous_session_id: String,
         reassigned_at: f64,
     },
+    // ---- Session-tree events (ADR 0006 §7 footgun 3 resolution) ----
+    /// A session was forked/branched from another. Records the parent→child
+    /// relationship, fork type, and the message bookmark in the parent where
+    /// the fork occurred. This is how the session tree is built: the event log
+    /// is the authority on tree topology, and the SessionView projects it.
+    ///
+    /// Fork types:
+    /// - "sub" — a sub-session (child of the same card, same agent, new leaf)
+    /// - "fork" — a full fork (new session, may switch agent via handover)
+    /// - "branch" — a branch from a specific message bookmark
+    ///
+    /// The card link: if the parent session has a card_id, the child inherits
+    /// it (a card owns the whole tree, not just a leaf — ADR 0006 §7 footgun 3).
+    SessionForked {
+        parent_session_id: String,
+        child_session_id: String,
+        /// "sub" | "fork" | "branch"
+        fork_type: String,
+        /// Message bookmark in the parent where the fork occurred (the parent's
+        /// message_id at the fork point). None = fork from session root.
+        fork_point: Option<u64>,
+        forked_at: f64,
+    },
+    /// A card was explicitly linked to a session (the tree root). This is how a
+    /// card claims a session tree: the assigned session becomes the root, and
+    /// all forks inherit the card_id via SessionForked propagation.
+    ///
+    /// A card owns the ENTIRE session tree. Forks/branches stay attached to the
+    /// card. This is the resolution to footgun 3: the card↔session-tree link is
+    /// a single root→tree ownership, not per-leaf.
+    CardSessionLinked {
+        card_id: String,
+        session_id: String,
+        linked_at: f64,
+    },
     // ---- Declaration manifest events (ADR 0006 §3) ----
     /// A scope's agent-setup declaration was set or replaced. The `scope` is
     /// `"org:<org_slug>"` or `"project:<org_slug>/<project_slug>"`. This is the
@@ -320,6 +355,48 @@ mod tests {
             attempt_bookmark: "attempt-2".into(),
             previous_session_id: "sess-1".into(),
             reassigned_at: 1_700_000_005.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    // ---- Session-tree event roundtrips ----
+
+    #[test]
+    fn session_forked_roundtrips() {
+        let e = Event::SessionForked {
+            parent_session_id: "sess-1".into(),
+            child_session_id: "sess-2".into(),
+            fork_type: "fork".into(),
+            fork_point: Some(5),
+            forked_at: 1_700_000_010.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn session_forked_no_bookmark_roundtrips() {
+        let e = Event::SessionForked {
+            parent_session_id: "root".into(),
+            child_session_id: "sub-1".into(),
+            fork_type: "sub".into(),
+            fork_point: None,
+            forked_at: 1_700_000_011.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn card_session_linked_roundtrips() {
+        let e = Event::CardSessionLinked {
+            card_id: "card-1".into(),
+            session_id: "sess-1".into(),
+            linked_at: 1_700_000_012.0,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

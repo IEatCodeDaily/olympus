@@ -57,6 +57,11 @@ pub struct SessionRow {
     pub agent: Option<String>,
     /// Node the session's runtime runs on ("local" for now).
     pub node: Option<String>,
+    // ---- Session-tree fields (ADR 0006 §7 footgun 3) ----
+    /// Parent session if this session was forked/branched. None for roots.
+    pub parent_session_id: Option<String>,
+    /// Card that owns this session tree, if linked. Inherited by forks.
+    pub card_id: Option<String>,
 }
 
 /// In-memory projection of sessions from the event log (ADR §2.4).
@@ -118,6 +123,8 @@ impl SessionView {
                         last_activity: *started_at,
                         agent: agent.clone(),
                         node: node.clone(),
+                        parent_session_id: None,
+                        card_id: None,
                     },
                 );
             }
@@ -168,6 +175,61 @@ impl SessionView {
                 }
             }
             Event::MessageRemoved { .. } => {}
+            // ---- Session-tree events (ADR 0006 §7 footgun 3) ----
+            Event::SessionForked {
+                parent_session_id,
+                child_session_id,
+                fork_point: _,
+                ..
+            } => {
+                // The child session was already created (SessionCreated fires
+                // before SessionForked). We stamp the parent link + inherit
+                // the parent's card_id (a card owns the whole tree).
+                if let Some(child) = self.sessions.get_mut(child_session_id) {
+                    child.parent_session_id = Some(parent_session_id.clone());
+                }
+                // Inherit card_id from parent.
+                let parent_card = self
+                    .sessions
+                    .get(parent_session_id)
+                    .and_then(|p| p.card_id.clone());
+                if let Some(card_id) = parent_card {
+                    if let Some(child) = self.sessions.get_mut(child_session_id) {
+                        child.card_id = Some(card_id);
+                    }
+                }
+            }
+            Event::CardSessionLinked {
+                card_id,
+                session_id,
+                ..
+            } => {
+                // Link the card to the session (the tree root). Existing forks
+                // of this session also get the card_id retroactively.
+                if let Some(row) = self.sessions.get_mut(session_id) {
+                    row.card_id = Some(card_id.clone());
+                }
+                // Propagate to existing children (forks that happened before
+                // the link). Tree is parent→child; walk one level — deeper
+                // propagation happens naturally on fork if the parent already
+                // has the card_id.
+                let children: Vec<String> = self
+                    .sessions
+                    .iter()
+                    .filter_map(|(id, r)| {
+                        if r.parent_session_id.as_deref() == Some(session_id.as_str()) {
+                            Some(id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for child_id in children {
+                    if let Some(child) = self.sessions.get_mut(&child_id) {
+                        child.card_id = Some(card_id.clone());
+                    }
+                }
+            }
             // Card events (and any other variant) do not affect the
             // session-list projection.
             _ => {}

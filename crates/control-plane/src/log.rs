@@ -133,6 +133,18 @@ enum StoredVariant {
         definition: String,
         registered_at: f64,
     },
+    SessionForked {
+        parent_session_id: String,
+        child_session_id: String,
+        fork_type: String,
+        fork_point: Option<u64>,
+        forked_at: f64,
+    },
+    CardSessionLinked {
+        card_id: String,
+        session_id: String,
+        linked_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -316,6 +328,28 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             slug: slug.clone(),
             definition: definition.clone(),
             registered_at: *registered_at,
+        },
+        Event::SessionForked {
+            parent_session_id,
+            child_session_id,
+            fork_type,
+            fork_point,
+            forked_at,
+        } => StoredVariant::SessionForked {
+            parent_session_id: parent_session_id.clone(),
+            child_session_id: child_session_id.clone(),
+            fork_type: fork_type.clone(),
+            fork_point: *fork_point,
+            forked_at: *forked_at,
+        },
+        Event::CardSessionLinked {
+            card_id,
+            session_id,
+            linked_at,
+        } => StoredVariant::CardSessionLinked {
+            card_id: card_id.clone(),
+            session_id: session_id.clone(),
+            linked_at: *linked_at,
         },
     };
     Ok(StoredEvent { variant })
@@ -512,6 +546,28 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             definition,
             registered_at,
         },
+        StoredVariant::SessionForked {
+            parent_session_id,
+            child_session_id,
+            fork_type,
+            fork_point,
+            forked_at,
+        } => Event::SessionForked {
+            parent_session_id,
+            child_session_id,
+            fork_type,
+            fork_point,
+            forked_at,
+        },
+        StoredVariant::CardSessionLinked {
+            card_id,
+            session_id,
+            linked_at,
+        } => Event::CardSessionLinked {
+            card_id,
+            session_id,
+            linked_at,
+        },
     })
 }
 
@@ -618,7 +674,9 @@ impl Log {
                 | Event::CardClaimed { .. }
                 | Event::CardBlocked { .. }
                 | Event::CardCompleted { .. }
-                | Event::CardReassigned { .. } => true,
+                | Event::CardReassigned { .. }
+                | Event::SessionForked { .. }
+                | Event::CardSessionLinked { .. } => true,
                 Event::SessionCreated { source, .. } => source == "olympus",
                 Event::SessionUpdated { session_id, .. }
                 | Event::MessageAppended { session_id, .. }

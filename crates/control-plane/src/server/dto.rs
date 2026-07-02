@@ -44,6 +44,12 @@ pub struct SessionDto {
     /// handler, which has `now` + the bridge in-flight set; `from_row` defaults
     /// it to "idle".
     pub liveness: String,
+    /// Parent session if this was forked/branched (ADR 0006 §7 footgun 3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Card that owns this session tree, if linked (ADR 0006 §7 footgun 3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_id: Option<String>,
 }
 
 /// Recency window (seconds) within which a session with no in-flight turn is
@@ -90,7 +96,9 @@ impl SessionDto {
             managed: row.source == "acp" || row.source == "olympus",
             agent: row.agent.clone(),
             node: row.node.clone(),
-            liveness: "idle".to_string(),
+            liveness: "idle".into(),
+            parent_session_id: row.parent_session_id.clone(),
+            card_id: row.card_id.clone(),
         }
     }
 }
@@ -391,6 +399,8 @@ mod tests {
             last_activity: 200.0,
             agent: None,
             node: None,
+            parent_session_id: None,
+            card_id: None,
         }
     }
 

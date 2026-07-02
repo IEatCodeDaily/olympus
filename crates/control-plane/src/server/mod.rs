@@ -778,6 +778,8 @@ async fn create_session(
                         agent: body.agent.clone(),
                         node: body.node.clone(),
                         liveness: "active".to_string(),
+                        parent_session_id: None,
+                        card_id: None,
                     })
             };
 
@@ -993,11 +995,41 @@ async fn fork_session(
                 agent: None,
                 node: None,
                 liveness: "active".to_string(),
+                parent_session_id: None,
+                card_id: None,
             },
         }
     };
-    dto.forked_from = Some(id);
-    dto.fork_type = Some(fork_type);
+    dto.forked_from = Some(id.clone());
+    dto.fork_type = Some(fork_type.clone());
+    dto.parent_session_id = Some(id.clone());
+
+    // Emit SessionForked so the session tree is durable (ADR 0006 §7 footgun 3).
+    // The child inherits the parent's card_id (if any) via the view projection.
+    let forked_event = crate::event::Event::SessionForked {
+        parent_session_id: id.clone(),
+        child_session_id: fork.session_id.clone(),
+        fork_type: fork_type.clone(),
+        fork_point: None,
+        forked_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0),
+    };
+    if let Err(e) = state.log.append(&forked_event) {
+        tracing::warn!(error = %e, "failed to append SessionForked event");
+    }
+    {
+        let mut views = state.views.write().await;
+        views.apply(&forked_event);
+    }
+    // Re-read the child row to get the projected card_id (inherited from parent).
+    if let Some(child_row) = {
+        let views = state.views.read().await;
+        views.sessions.get(&fork.session_id).cloned()
+    } {
+        dto.card_id = child_row.card_id.clone();
+    }
 
     let _ = state.deltas.send(ServerFrame::SessionAdded {
         session: dto.clone(),
@@ -1131,8 +1163,7 @@ async fn post_message(
             &effective.hooks,
         );
         // Materialize into the session space if we have one.
-        let agent_kind =
-            crate::adapter::AgentKind::from_agent_str(agent.as_deref().unwrap_or(""));
+        let agent_kind = crate::adapter::AgentKind::from_agent_str(agent.as_deref().unwrap_or(""));
         let adapter = crate::adapter::for_kind(agent_kind);
         if let Some(ref space_path) = cwd {
             match adapter.materialize(
@@ -1482,6 +1513,8 @@ async fn assign_card(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
+    let card_id = id.clone();
+    let session_id = body.session_id.clone();
     let event = crate::event::Event::CardAssigned {
         card_id: id,
         assigned_id: body.assigned_id,
@@ -1490,7 +1523,19 @@ async fn assign_card(
         attempt_bookmark: body.attempt_bookmark,
         assigned_at: now,
     };
-    append_and_apply(&state, event).await
+    let response = append_and_apply(&state, event).await;
+    // Link the card to the session tree (ADR 0006 §7 footgun 3).
+    if !session_id.is_empty() {
+        let link_event = crate::event::Event::CardSessionLinked {
+            card_id,
+            session_id,
+            linked_at: now,
+        };
+        let _ = state.log.append(&link_event);
+        let mut views = state.views.write().await;
+        views.apply(&link_event);
+    }
+    response
 }
 
 async fn claim_card(State(state): State<AppState>, Path(id): Path<String>) -> Response {
