@@ -1,214 +1,648 @@
-import { useState, useEffect } from "react";
-import SessionList from "./views/SessionList";
-import ChatView from "./views/ChatView";
-import SearchView from "./views/SearchView";
-import BoardView from "./views/BoardView";
-import NodesView from "./views/NodesView";
-import WorkflowsView from "./views/WorkflowsView";
-import UsageView from "./views/UsageView";
-import SettingsView from "./views/SettingsView";
-import { healthCheck, connectWs, onFrame } from "./api";
-import { useTheme, THEMES, THEME_LABELS } from "./lib/theme";
-import type { HealthResponse } from "./types";
+import React, { useEffect, useCallback, useState } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Icon, type IconName } from "./components/Icon";
+import { useUIStore, type ViewName } from "./store";
+import {
+  useSessions,
+  useSession,
+  useMessages,
+  useHealth,
+  useLiveSync,
+} from "./hooks/queries";
+import { sendMessage } from "./api";
+import { onFrame } from "./api";
+import type { Message, ServerFrame, HealthResponse, Session } from "./types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-type ViewName =
-  | "sessions"
-  | "history"
-  | "search"
-  | "board"
-  | "nodes"
-  | "workflows"
-  | "usage"
-  | "settings";
+// ── Query client ──────────────────────────────────
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 1, refetchOnWindowFocus: false },
+  },
+});
 
-interface NavDef {
-  name: ViewName;
-  label: string;
-  icon: JSX.Element;
-}
-
-const VIEW_NAMES: ViewName[] = [
-  "sessions",
-  "history",
-  "search",
-  "board",
-  "nodes",
-  "workflows",
-  "usage",
-  "settings",
+// ── Layout chips config ───────────────────────────
+const LAYOUTS: { sec: ViewName; label: string; icon: IconName }[] = [
+  { sec: "sessions", label: "Sessions", icon: "message-square" },
+  { sec: "history", label: "History", icon: "archive" },
+  { sec: "board", label: "Board", icon: "kanban" },
+  { sec: "nodes", label: "Fleet", icon: "server" },
+  { sec: "workflows", label: "Workflow", icon: "workflow" },
+  { sec: "plugins", label: "Plugins", icon: "puzzle" },
+  { sec: "settings", label: "Settings", icon: "gear" },
 ];
 
-/// Parse the current URL path into a (view, sessionId) pair. The address bar is
-/// the source of truth for what's open, so a session is shareable/bookmarkable:
-///   /                       → sessions list
-///   /sessions               → sessions list
-///   /sessions/<id>          → that session open in the chat pane
-///   /<view>                 → one of the other nav views
-function parseLocation(path: string): { view: ViewName; sessionId: string | null } {
-  const parts = path.replace(/^\/+|\/+$/g, "").split("/");
-  const head = parts[0] || "sessions";
-  if (head === "sessions") {
-    return { view: "sessions", sessionId: parts[1] ? decodeURIComponent(parts[1]) : null };
-  }
-  if ((VIEW_NAMES as string[]).includes(head)) {
-    return { view: head as ViewName, sessionId: null };
-  }
-  return { view: "sessions", sessionId: null };
+// ── Time format helper ────────────────────────────
+function timeAgo(ts: number): string {
+  const diff = Date.now() / 1000 - ts;
+  if (diff < 60) return "now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
 }
 
-/// Build the URL path for a (view, sessionId) pair — inverse of parseLocation.
-function pathFor(view: ViewName, sessionId: string | null): string {
-  if (view === "sessions") {
-    return sessionId ? `/sessions/${encodeURIComponent(sessionId)}` : "/sessions";
-  }
-  return `/${view}`;
-}
-
-const NAV: NavDef[] = [
-  { name: "sessions", label: "Sessions", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg> },
-  { name: "history", label: "History", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></svg> },
-  { name: "search", label: "Search", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg> },
-  { name: "board", label: "Board", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1" /><rect x="9" y="3" width="6" height="12" rx="1" /><rect x="15" y="3" width="6" height="9" rx="1" /></svg> },
-  { name: "nodes", label: "Nodes", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="2" width="8" height="8" rx="1" /><rect x="14" y="2" width="8" height="8" rx="1" /><rect x="8" y="14" width="8" height="8" rx="1" /><path d="M6 10v2a2 2 0 0 0 2 2h0M18 10v2a2 2 0 0 1-2 2h0" /></svg> },
-  { name: "workflows", label: "Workflows", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M9 6h6a3 3 0 0 1 3 3v6" /></svg> },
-  { name: "usage", label: "Usage", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18M7 16l4-6 3 3 5-7" /></svg> },
-  { name: "settings", label: "Settings", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg> },
-];
-
+// ═══════════════════════════════════════════════════
+// App Root
+// ═══════════════════════════════════════════════════
 export default function App() {
-  const initial = parseLocation(window.location.pathname);
-  const [view, setView] = useState<ViewName>(initial.view);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initial.sessionId);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [syncConnected, setSyncConnected] = useState(true);
-  const [theme, setTheme] = useTheme();
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppInner />
+    </QueryClientProvider>
+  );
+}
 
-  useEffect(() => {
-    connectWs();
-    healthCheck().then(setHealth).catch(() => {});
-    return onFrame((frame) => {
-      if (frame.kind === "sync.status") setSyncConnected(frame.connected);
-      if (frame.kind === "hello") setSyncConnected(true);
-    });
-  }, []);
-
-  // Keep the address bar in sync with the active view/session (shareable URLs),
-  // and react to browser back/forward via popstate.
-  useEffect(() => {
-    const onPop = () => {
-      const loc = parseLocation(window.location.pathname);
-      setView(loc.view);
-      setSelectedSessionId(loc.sessionId);
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
-  // Push a history entry whenever the view/session changes and the URL is stale.
-  useEffect(() => {
-    const target = pathFor(view, selectedSessionId);
-    if (window.location.pathname !== target) {
-      window.history.pushState(null, "", target);
-    }
-  }, [view, selectedSessionId]);
-
-  const openSession = (id: string) => {
-    setView("sessions");
-    setSelectedSessionId(id);
-  };
-  const backToList = () => setSelectedSessionId(null);
-
-  const cycleTheme = () => {
-    const i = THEMES.indexOf(theme);
-    setTheme(THEMES[(i + 1) % THEMES.length]);
-  };
+function AppInner() {
+  const { view } = useUIStore();
+  useLiveSync();
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
-          </div>
-          <div className="brand-text">
-            <span className="brand-name">Olympus</span>
-            <span className="brand-sub">control plane</span>
-          </div>
-        </div>
+      <TopBar />
+      <div className="body">
+        <LeftSidebar />
+        <MainViewport />
+      </div>
+    </div>
+  );
+}
 
-        <nav className="nav">
-          {NAV.map((item) => (
+// ═══════════════════════════════════════════════════
+// TopBar
+// ═══════════════════════════════════════════════════
+function TopBar() {
+  const { view, setView, toggleSidebar, setPaletteOpen } = useUIStore();
+  const { data: health } = useHealth() as { data: HealthResponse | undefined };
+
+  return (
+    <div className="topbar">
+      <div className="tb-left">
+        <button type="button" className="icobtn" onClick={toggleSidebar} title="Toggle sidebar">
+          <Icon name="panel-left" />
+        </button>
+        <div className="divider" />
+        <div className="layouts">
+          {LAYOUTS.map((l) => (
             <button
               type="button"
-              key={item.name}
-              className={`nav-item ${view === item.name ? "active" : ""}`}
-              onClick={() => {
-                if (item.name === "sessions" || item.name === "history") backToList();
-                setView(item.name);
-              }}
+              key={l.sec}
+              className={`chip ${view === l.sec ? "on" : ""}`}
+              onClick={() => setView(l.sec)}
             >
-              {item.icon}
-              {item.label}
+              <Icon name={l.icon} size={12} />
+              {l.label}
             </button>
           ))}
-        </nav>
+        </div>
+      </div>
+      <div className="tb-center">
+        <button type="button" className="tb-search" onClick={() => setPaletteOpen(true)}>
+          <Icon name="search" size={13} />
+          <span className="ph">Search sessions, messages…</span>
+          <span className="sp" />
+          <span className="kbd">⌘K</span>
+        </button>
+      </div>
+      <div className="tb-right">
+        <div className="org">
+          <div className="mk" />
+          <span className="nm">{health?.hermesProfile ?? "default"}</span>
+        </div>
+        <div className="profile">rp</div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="status-panel">
-          <div className="status-row">
-            <span className={`status-dot ${syncConnected ? "connected" : "disconnected"}`} />
-            <span className="status-label">{syncConnected ? "synced" : "disconnected"}</span>
-          </div>
-          {health && (
-            <>
-              <div className="status-row">
-                <span className="status-key">profile</span>
-                <span className="status-val">{health.hermesProfile}</span>
-              </div>
-              {health.snapshot && (
-                <div className="status-row">
-                  <span className="status-key">store</span>
-                  <span className="status-val">{health.snapshot.sessions} sess / {health.snapshot.messages} msg</span>
-                </div>
-              )}
-              <div className="status-row">
-                <span className="status-key">import</span>
-                <span className="status-val">{health.importState}</span>
-              </div>
-            </>
-          )}
-          <button type="button" className="theme-toggle" onClick={cycleTheme} title="Switch theme">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" /></svg>
-            {THEME_LABELS[theme]}
+// ═══════════════════════════════════════════════════
+// Left Sidebar
+// ═══════════════════════════════════════════════════
+function LeftSidebar() {
+  const {
+    sidebarCollapsed,
+    sidebarWidth,
+    view,
+    setView,
+    setActiveSession,
+  } = useUIStore();
+
+  const { data: sessionData } = useSessions({ managed: true });
+  const { data: historyData } = useSessions({ managed: false, limit: 20 });
+
+  const sessions = sessionData?.sessions ?? [];
+  const history = historyData?.sessions ?? [];
+
+  const handleNewSession = useCallback(async () => {
+    // Create a session via the API, then select it.
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_API_TOKEN}`,
+        },
+        body: JSON.stringify({ title: null, model: null }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setActiveSession(data.session?.id ?? null);
+        setView("sessions");
+      }
+    } catch {
+      // ignore — the sessions list will refetch
+    }
+  }, [setActiveSession, setView]);
+
+  if (sidebarCollapsed) return null;
+
+  return (
+    <>
+      <div className="sidebar" style={{ width: sidebarWidth }}>
+        <div className="sb-pad">
+          <button type="button" className="newbtn" onClick={handleNewSession}>
+            <Icon name="plus" size={14} />
+            New Session
           </button>
         </div>
-      </aside>
-
-      <main className="main">
-        {(view === "sessions" || view === "history") && (
-          <>
-            <div className="list-pane">
-              <SessionList
-                selectedId={selectedSessionId}
-                onOpenSession={openSession}
-                managed={view === "sessions"}
+        <div className="sb-scroll">
+          {view === "sessions" || view === "history" ? (
+            <>
+              <SessionSection
+                label="ACTIVE"
+                sessions={sessions}
+                count={sessions.length}
               />
+              {history.length > 0 && (
+                <SessionSection
+                  label="HISTORY"
+                  sessions={history}
+                  count={history.length}
+                  dimmed
+                />
+              )}
+            </>
+          ) : (
+            <div className="sb-pad">
+              <button
+                type="button"
+                className={`navitem on`}
+                onClick={() => setView("sessions")}
+              >
+                <Icon name="message-square" size={14} />
+                Sessions
+              </button>
+              <button
+                type="button"
+                className={`navitem ${view === "board" ? "on" : ""}`}
+                onClick={() => setView("board")}
+              >
+                <Icon name="kanban" size={14} />
+                Board
+              </button>
+              <button
+                type="button"
+                className={`navitem ${view === "nodes" ? "on" : ""}`}
+                onClick={() => setView("nodes")}
+              >
+                <Icon name="server" size={14} />
+                Fleet
+              </button>
             </div>
-            {selectedSessionId && (
-              <div className="chat-pane">
-                <ChatView sessionId={selectedSessionId} onBack={backToList} onOpenSession={openSession} />
+          )}
+        </div>
+      </div>
+      <div className="rz-x" />
+    </>
+  );
+}
+
+function SessionSection({
+  label,
+  sessions,
+  count,
+  dimmed,
+}: {
+  label: string;
+  sessions: Session[];
+  count: number;
+  dimmed?: boolean;
+}) {
+  const { activeSessionId, setActiveSession, setView } = useUIStore();
+  if (count === 0) return null;
+
+  return (
+    <>
+      <div className="sec-head">
+        <span className="lbl">{label}</span>
+        <span className="sp" />
+        <span className="ct">{count}</span>
+      </div>
+      <div className="sec-content">
+        {sessions.slice(0, 50).map((s) => (
+          <button
+            type="button"
+            key={s.id}
+            className={`srow ${activeSessionId === s.id ? "on" : ""}`}
+            onClick={() => {
+              setActiveSession(s.id);
+              setView("sessions");
+            }}
+          >
+            <span className={`dot ${s.liveness === "active" ? "active" : "idle"}`} />
+            <span className="info">
+              <span className="title">{s.title || "Untitled"}</span>
+            </span>
+            <span className="meta">
+              <span>{s.messageCount}</span>
+              <span>{timeAgo(s.lastActivity)}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// Main Viewport
+// ═══════════════════════════════════════════════════
+function MainViewport() {
+  const { view } = useUIStore();
+
+  return (
+    <div className="viewport">
+      {view === "sessions" ? (
+        <ChatViewport />
+      ) : (
+        <GenericView title={LAYOUTS.find((l) => l.sec === view)?.label ?? view} />
+      )}
+    </div>
+  );
+}
+
+function GenericView({ title }: { title: string }) {
+  return (
+    <>
+      <div className="gv-head">
+        <span className="gv-title">{title}</span>
+      </div>
+      <div className="gv-body">
+        <div className="empty-state">
+          <div className="empty-state-title">{title} view</div>
+          <div className="empty-state-msg">
+            This view is part of the Olympus control plane. Backend wiring in progress.
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// Chat Viewport (transcript + composer + right sidebar)
+// ═══════════════════════════════════════════════════
+function ChatViewport() {
+  const { activeSessionId, bottomCollapsed, toggleBottom, rightSidebarCollapsed, toggleRightSidebar } =
+    useUIStore();
+  const { data: session } = useSession(activeSessionId);
+
+  if (!activeSessionId) {
+    return (
+      <>
+        <div className="vp-head">
+          <div className="vp-left">
+            <span className="vp-title">No session selected</span>
+          </div>
+        </div>
+        <div className="vp-body">
+          <div className="empty-state">
+            <Icon name="message-square" size={32} />
+            <div className="empty-state-title">Select a session</div>
+            <div className="empty-state-msg">
+              Choose a session from the sidebar or create a new one to start chatting.
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="vp-head">
+        <div className="vp-left">
+          <span className="vp-title">{session?.title || "Untitled session"}</span>
+          {session?.agent && (
+            <span className="gtag ok">{session.agent}</span>
+          )}
+        </div>
+        <div className="vp-right">
+          {session?.liveness === "active" && (
+            <div className="live">
+              <span className="dot" />
+              <span className="lbl">LIVE</span>
+            </div>
+          )}
+          <button type="button" className="toggle" onClick={toggleBottom} title="Toggle bottom panel">
+            <Icon name="panel-bottom" size={14} />
+          </button>
+          <button type="button" className="toggle" onClick={toggleRightSidebar} title="Toggle right panel">
+            <Icon name="panel-right" size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="vp-body">
+        <ChatColumn sessionId={activeSessionId} />
+        {!rightSidebarCollapsed && <RightSidebar sessionId={activeSessionId} />}
+      </div>
+      {!bottomCollapsed && <BottomPanel />}
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// Chat Column (transcript + composer)
+// ═══════════════════════════════════════════════════
+function ChatColumn({ sessionId }: { sessionId: string }) {
+  const { data: msgData } = useMessages(sessionId);
+  const [streamingText, setStreamingText] = useState("");
+  const messages = msgData?.messages ?? [];
+
+  // Listen for streaming deltas for this session.
+  useEffect(() => {
+    const unsub = onFrame((frame: ServerFrame) => {
+      if (frame.kind === "message.delta" && frame.sessionId === sessionId) {
+        setStreamingText((prev) => prev + frame.textDelta);
+      }
+      if (frame.kind === "message.done" && frame.sessionId === sessionId) {
+        setStreamingText("");
+      }
+    });
+    return unsub;
+  }, [sessionId]);
+
+  return (
+    <div className="chatcol">
+      <div className="transcript">
+        <div className="tcol">
+          {messages.length === 0 && !streamingText && (
+            <div className="msg-empty">No messages yet. Send a message below.</div>
+          )}
+          {messages.map((m) => (
+            <MessageBubble key={m.messageId} msg={m} />
+          ))}
+          {streamingText && (
+            <div className="msg-ai">
+              <div className="who">ASSISTANT</div>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+            </div>
+          )}
+        </div>
+      </div>
+      <Composer sessionId={sessionId} />
+    </div>
+  );
+}
+
+const MessageBubble = React.memo(function MessageBubble({ msg }: { msg: Message }) {
+  const isUser = msg.role === "user";
+  const ts = new Date(msg.timestamp * 1000).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  return (
+    <div className={isUser ? "msg-user" : "msg-ai"}>
+      {!isUser && <div className="who">ASSISTANT</div>}
+      {isUser ? (
+        msg.content
+      ) : (
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content || ""}</ReactMarkdown>
+      )}
+    </div>
+  );
+});
+
+// ═══════════════════════════════════════════════════
+// Composer
+// ═══════════════════════════════════════════════════
+function Composer({ sessionId }: { sessionId: string }) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const { data: session } = useSession(sessionId);
+
+  const handleSend = useCallback(async () => {
+    if (!text.trim() || sending) return;
+    setSending(true);
+    try {
+      await sendMessage(sessionId, text.trim());
+      setText("");
+    } catch {
+      // keep text on error so user can retry
+    } finally {
+      setSending(false);
+    }
+  }, [text, sending, sessionId]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void handleSend();
+      }
+    },
+    [handleSend],
+  );
+
+  return (
+    <div className="composer">
+      <div className="comp-box">
+        <textarea
+          rows={1}
+          placeholder="Send a message…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          autoFocus
+        />
+        <div className="comp-bar">
+          <div className="comp-l">
+            <button type="button" className="modelpill">
+              <span className="dot" />
+              <span className="nm">{session?.model || "auto"}</span>
+            </button>
+          </div>
+          <div className="comp-r">
+            <span className="comp-hint">↵ to send · ⇧↵ for newline</span>
+            <button
+              type="button"
+              className="send"
+              onClick={handleSend}
+              disabled={!text.trim() || sending}
+              title="Send"
+            >
+              <Icon name="arrow-up" size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// Right Sidebar
+// ═══════════════════════════════════════════════════
+function RightSidebar({ sessionId }: { sessionId: string }) {
+  const { rightTab, setRightTab } = useUIStore();
+  const { data: session } = useSession(sessionId);
+  const { data: msgData } = useMessages(sessionId);
+
+  return (
+    <div className="rsidebar">
+      <div className="rs-tabbar">
+        <button
+          type="button"
+          className={`rs-tab ${rightTab === "info" ? "on" : ""}`}
+          onClick={() => setRightTab("info")}
+          title="Info"
+        >
+          <Icon name="activity" size={13} />
+        </button>
+        <button
+          type="button"
+          className={`rs-tab ${rightTab === "artifacts" ? "on" : ""}`}
+          onClick={() => setRightTab("artifacts")}
+          title="Artifacts"
+        >
+          <Icon name="file" size={13} />
+        </button>
+      </div>
+      {rightTab === "info" && (
+        <>
+          <div className="rs-sec">
+            <div className="kv">
+              <span className="k">SESSION</span>
+              <span className="v">{sessionId.slice(0, 12)}</span>
+            </div>
+            <div className="kv">
+              <span className="k">MODEL</span>
+              <span className="v">{session?.model || "—"}</span>
+            </div>
+            <div className="kv">
+              <span className="k">AGENT</span>
+              <span className="v">{session?.agent || "—"}</span>
+            </div>
+            <div className="kv">
+              <span className="k">SOURCE</span>
+              <span className="v">{session?.source || "—"}</span>
+            </div>
+            <div className="kv">
+              <span className="k">MESSAGES</span>
+              <span className="v">{session?.messageCount ?? 0}</span>
+            </div>
+            <div className="kv">
+              <span className="k">TOKENS</span>
+              <span className="v">
+                {((session?.inputTokens ?? 0) + (session?.outputTokens ?? 0)).toLocaleString()}
+              </span>
+            </div>
+          </div>
+          <div className="rs-sec">
+            <div className="rs-label">STATS</div>
+            <div className="stats">
+              <div className="stat">
+                <span className="v">{session?.inputTokens ?? 0}</span>
+                <span className="l">IN</span>
               </div>
-            )}
-          </>
+              <div className="stat">
+                <span className="v">{session?.outputTokens ?? 0}</span>
+                <span className="l">OUT</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+      {rightTab === "artifacts" && (
+        <div className="rs-sec">
+          <div className="rs-label">ARTIFACTS</div>
+          <div className="empty-state-msg">No artifacts generated yet.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+// Bottom Panel (events tail)
+// ═══════════════════════════════════════════════════
+function BottomPanel() {
+  const { bottomTab, setBottomTab, toggleBottom } = useUIStore();
+  const [events, setEvents] = useState<string[]>([]);
+
+  useEffect(() => {
+    // Tail the event log endpoint
+    let since = 0;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/events?since=${since}&limit=20`,
+          { headers: { Authorization: `Bearer ${import.meta.env.VITE_API_TOKEN}` } },
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.events?.length > 0) {
+            since = data.events[data.events.length - 1].seq + 1;
+            setEvents((prev) =>
+              [...prev, ...data.events.map((e: { event: string }) => JSON.stringify(e.event).slice(0, 200))].slice(-100),
+            );
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="bpanel">
+      <div className="bp-tabs">
+        <div className="bp-tablist">
+          <button
+            type="button"
+            className={`bp-tab ${bottomTab === "events" ? "on" : ""}`}
+            onClick={() => setBottomTab("events")}
+          >
+            Events
+          </button>
+          <button
+            type="button"
+            className={`bp-tab ${bottomTab === "logs" ? "on" : ""}`}
+            onClick={() => setBottomTab("logs")}
+          >
+            Logs
+          </button>
+        </div>
+        <div className="bp-right">
+          <button type="button" className="toggle" onClick={toggleBottom}>
+            <Icon name="chevron-down" size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="bp-body">
+        {events.length === 0 ? (
+          <div className="ln d">No events yet.</div>
+        ) : (
+          events.map((e, i) => (
+            <div key={i} className="ln d">
+              {e}
+            </div>
+          ))
         )}
-        {view === "search" && <SearchView onOpenSession={openSession} />}
-        {view === "board" && <BoardView />}
-        {view === "nodes" && <NodesView />}
-        {view === "workflows" && <WorkflowsView />}
-        {view === "usage" && <UsageView />}
-        {view === "settings" && <SettingsView />}
-      </main>
+      </div>
     </div>
   );
 }
