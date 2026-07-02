@@ -230,6 +230,27 @@ impl SessionView {
                     }
                 }
             }
+            Event::SessionHandover {
+                source_session_id,
+                target_session_id,
+                ..
+            } => {
+                // The target session already exists (SessionCreated fired).
+                // Stamp the parent link (target is a child of source for tree
+                // purposes) and inherit the card_id.
+                if let Some(target) = self.sessions.get_mut(target_session_id) {
+                    target.parent_session_id = Some(source_session_id.clone());
+                }
+                let source_card = self
+                    .sessions
+                    .get(source_session_id)
+                    .and_then(|s| s.card_id.clone());
+                if let Some(card_id) = source_card {
+                    if let Some(target) = self.sessions.get_mut(target_session_id) {
+                        target.card_id = Some(card_id);
+                    }
+                }
+            }
             // Card events (and any other variant) do not affect the
             // session-list projection.
             _ => {}

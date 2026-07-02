@@ -142,6 +142,22 @@ pub enum Event {
         session_id: String,
         linked_at: f64,
     },
+    /// A session was handed over from one agent kind to another (ADR 0006 §9.1).
+    /// This is the SOLE mechanism for switching harnesses mid-card: the source
+    /// session is tombstoned (archived), and a new session is created with the
+    /// target agent kind, inheriting the card_id + tree link. The history is
+    /// translated to the target harness's context format.
+    SessionHandover {
+        source_session_id: String,
+        target_session_id: String,
+        /// Source agent kind (e.g. "Hermes").
+        from_agent_kind: String,
+        /// Target agent kind (e.g. "ClaudeCode").
+        to_agent_kind: String,
+        /// Number of messages translated from the source.
+        translated_message_count: u64,
+        handed_over_at: f64,
+    },
     // ---- Declaration manifest events (ADR 0006 §3) ----
     /// A scope's agent-setup declaration was set or replaced. The `scope` is
     /// `"org:<org_slug>"` or `"project:<org_slug>/<project_slug>"`. This is the
@@ -397,6 +413,21 @@ mod tests {
             card_id: "card-1".into(),
             session_id: "sess-1".into(),
             linked_at: 1_700_000_012.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn session_handover_roundtrips() {
+        let e = Event::SessionHandover {
+            source_session_id: "sess-1".into(),
+            target_session_id: "sess-2".into(),
+            from_agent_kind: "Hermes".into(),
+            to_agent_kind: "ClaudeCode".into(),
+            translated_message_count: 15,
+            handed_over_at: 1_700_000_020.0,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

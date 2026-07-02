@@ -145,6 +145,14 @@ enum StoredVariant {
         session_id: String,
         linked_at: f64,
     },
+    SessionHandover {
+        source_session_id: String,
+        target_session_id: String,
+        from_agent_kind: String,
+        to_agent_kind: String,
+        translated_message_count: u64,
+        handed_over_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -350,6 +358,21 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             card_id: card_id.clone(),
             session_id: session_id.clone(),
             linked_at: *linked_at,
+        },
+        Event::SessionHandover {
+            source_session_id,
+            target_session_id,
+            from_agent_kind,
+            to_agent_kind,
+            translated_message_count,
+            handed_over_at,
+        } => StoredVariant::SessionHandover {
+            source_session_id: source_session_id.clone(),
+            target_session_id: target_session_id.clone(),
+            from_agent_kind: from_agent_kind.clone(),
+            to_agent_kind: to_agent_kind.clone(),
+            translated_message_count: *translated_message_count,
+            handed_over_at: *handed_over_at,
         },
     };
     Ok(StoredEvent { variant })
@@ -568,6 +591,21 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             session_id,
             linked_at,
         },
+        StoredVariant::SessionHandover {
+            source_session_id,
+            target_session_id,
+            from_agent_kind,
+            to_agent_kind,
+            translated_message_count,
+            handed_over_at,
+        } => Event::SessionHandover {
+            source_session_id,
+            target_session_id,
+            from_agent_kind,
+            to_agent_kind,
+            translated_message_count,
+            handed_over_at,
+        },
     })
 }
 
@@ -676,7 +714,8 @@ impl Log {
                 | Event::CardCompleted { .. }
                 | Event::CardReassigned { .. }
                 | Event::SessionForked { .. }
-                | Event::CardSessionLinked { .. } => true,
+                | Event::CardSessionLinked { .. }
+                | Event::SessionHandover { .. } => true,
                 Event::SessionCreated { source, .. } => source == "olympus",
                 Event::SessionUpdated { session_id, .. }
                 | Event::MessageAppended { session_id, .. }

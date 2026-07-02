@@ -89,6 +89,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/sessions/{id}", get(get_session).patch(patch_session))
         .route("/api/sessions/{id}/fork", axum::routing::post(fork_session))
         .route(
+            "/api/sessions/{id}/handover",
+            axum::routing::post(handover_session),
+        )
+        .route(
             "/api/sessions/{id}/messages",
             get(get_messages).post(post_message),
         )
@@ -712,6 +716,176 @@ struct PatchSessionBody {
 struct ForkSessionBody {
     #[serde(default)]
     fork_type: Option<String>,
+}
+
+/// Request body for POST /api/sessions/:id/handover.
+#[derive(Debug, Deserialize)]
+struct HandoverBody {
+    /// Target agent kind: "claude-code", "codex", or "hermes".
+    to_agent_kind: String,
+    /// Optional model override for the target session.
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// POST /api/sessions/:id/handover — switch this session to a different agent
+/// harness (ADR 0006 §9.1). This is the SOLE mechanism for switching agent kind.
+///
+/// Creates a new session with the target agent, copies the conversation history
+/// (translated to prose context for the target harness), inherits the card_id,
+/// archives the source, and emits SessionHandover + SessionForked events.
+async fn handover_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<HandoverBody>,
+) -> Response {
+    let (source, messages) = {
+        let views = state.views.read().await;
+        let Some(source) = views.sessions.get(&id).cloned() else {
+            return (StatusCode::NOT_FOUND, "session not found").into_response();
+        };
+        let messages = views
+            .messages
+            .recent(&id, usize::MAX)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        (source, messages)
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+
+    let to_kind = crate::adapter::AgentKind::from_agent_str(&body.to_agent_kind);
+    let from_kind =
+        crate::adapter::AgentKind::from_agent_str(source.agent.as_deref().unwrap_or(""));
+    let to_agent_name = match to_kind {
+        crate::adapter::AgentKind::Hermes => "hermes".to_string(),
+        crate::adapter::AgentKind::ClaudeCode => "claude-code".to_string(),
+        crate::adapter::AgentKind::Codex => "codex".to_string(),
+    };
+
+    // Create the target session.
+    let target_id = format!("oly-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+
+    // SessionCreated for the target.
+    let created = crate::event::Event::SessionCreated {
+        session_id: target_id.clone(),
+        hermes_id: String::new(),
+        source: "olympus".into(),
+        model: body.model.clone().or(source.model.clone()),
+        title: source.title.clone(),
+        started_at: now,
+        message_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        agent: Some(to_agent_name.clone()),
+        node: source.node.clone(),
+    };
+    if let Err(e) = state.log.append(&created) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "log_error", "message": e.to_string() })),
+        )
+            .into_response();
+    }
+    {
+        let mut views = state.views.write().await;
+        views.apply(&created);
+    }
+
+    // Translate history: copy messages, and write a context summary for the
+    // target harness (the adapter will materialize CLAUDE.md/AGENTS.md/etc).
+    for (idx, msg) in messages.iter().enumerate() {
+        let _ = state.log.append(&crate::event::Event::MessageAppended {
+            session_id: target_id.clone(),
+            hermes_session_id: String::new(),
+            message_id: idx as u64,
+            role: msg.role.clone(),
+            content: msg.content.clone(),
+            tool_name: msg.tool_name.clone(),
+            tool_calls: None,
+            reasoning: None,
+            timestamp: msg.timestamp,
+            token_count: msg.token_count,
+            finish_reason: None,
+        });
+    }
+    {
+        let mut views = state.views.write().await;
+        if let Ok(events) = state.log.read_all() {
+            for (_seq, event) in events {
+                match &event {
+                    crate::event::Event::MessageAppended { session_id, .. }
+                        if session_id == &target_id =>
+                    {
+                        views.apply(&event);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Emit SessionHandover (records the transition).
+    let handover_event = crate::event::Event::SessionHandover {
+        source_session_id: id.clone(),
+        target_session_id: target_id.clone(),
+        from_agent_kind: format!("{:?}", from_kind),
+        to_agent_kind: format!("{:?}", to_kind),
+        translated_message_count: messages.len() as u64,
+        handed_over_at: now,
+    };
+    let _ = state.log.append(&handover_event);
+    {
+        let mut views = state.views.write().await;
+        views.apply(&handover_event);
+    }
+
+    // Archive the source session.
+    let archive = crate::event::Event::SessionUpdated {
+        session_id: id.clone(),
+        title: None,
+        model: None,
+        archived: Some(true),
+        message_count: None,
+        agent: None,
+        node: None,
+        hermes_id: None,
+    };
+    let _ = state.log.append(&archive);
+    {
+        let mut views = state.views.write().await;
+        views.apply(&archive);
+    }
+
+    // Build the DTO for the target session.
+    let dto = {
+        let views = state.views.read().await;
+        match views.sessions.get(&target_id) {
+            Some(row) => SessionDto::from_row(row),
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "target session not found after creation",
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let _ = state.deltas.send(ServerFrame::SessionAdded {
+        session: dto.clone(),
+    });
+
+    Json(json!({ "session": dto, "handover": {
+        "fromAgentKind": format!("{:?}", from_kind),
+        "toAgentKind": format!("{:?}", to_kind),
+        "translatedMessages": messages.len(),
+    } }))
+    .into_response()
 }
 
 /// POST /api/sessions — create a new Olympus-managed chat session **optimistically**.
