@@ -217,7 +217,10 @@ they were left untouched to keep this change zero-pixel.
 ### Spacing philosophy
 - Use the token variables above — never raw pixel values for padding/margin/gaps.
 - The gap between sibling elements should match the most specific applicable token.
-- `--space-panel` / `--space-panel-lg` are the "atomic unit" for card/panel interiors.
+- `--space-panel` / `--space-panel-lg` are the "atomic unit" for card/panel
+  interiors — and they **flex under `[data-density="compact"]`**. A card
+  interior MUST use these constants, never a raw `12px`/`16px`, or it won't
+  tighten in compact mode.
 - Density mode (`[data-density="compact"]`) reduces all spacing by ~20%.
 
 ---
@@ -501,6 +504,40 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-02 — Card interiors use the semantic panel constants (fixes compact-density bug)
+
+- **Problem:** §4 mandates that card/panel interiors are the "atomic unit" —
+  `--space-panel` (12px) / `--space-panel-lg` (16px) — and those constants
+  *flex under `[data-density="compact"]`* (12→10px, 16→14px). But five card
+  rules had drifted to raw `padding: 12px` / `padding: 16px`, so they were
+  **out of compliance with the doc AND silently broken in compact mode**: the
+  cards kept their comfortable padding while every other panel tightened. A real
+  density bug hiding inside the padding-literal debt, not cosmetic drift.
+- **Fix:** repointed the five exact-match card interiors to the semantic panel
+  constants they were supposed to use:
+  - `.board-detail`, `.node-detail-card` → `padding: var(--space-panel-lg)` (was 16px)
+  - `.node-card`, `.workflow-list-item`, `.workflow-run-card` → `padding: var(--space-panel)` (was 12px)
+- **Behavior:** **zero pixel delta in comfortable mode** (each constant equals
+  the literal it replaced); in compact mode these cards now correctly tighten to
+  14px/10px alongside the rest of the cockpit. Net: a bug fix that is a no-op in
+  the default view. No color, layout, font, or view logic touched — only
+  `padding` on card containers, matched by full class-prefixed rule to avoid
+  collateral hits.
+- **Scope guard:** only the five cards whose raw value *exactly matched* a panel
+  constant were converted. Asymmetric/two-value paddings (`10px 12px`,
+  `8px 10px`, buttons, chips, toolbars) were left raw — they don't map cleanly to
+  the panel constants and changing them would move real pixels; they remain the
+  documented follow-up.
+- **Verified:** `bun run typecheck` + `bun run build` both exit 0 (CSS bundle
+  51.94 kB). Fully reversible (5 one-line edits).
+- **Debt still open (next design runs):**
+  - Remaining raw `padding:` literals (~85 sites) are mostly asymmetric
+    two-value paddings on buttons/pills/toolbars/rows — they need a proper
+    padding *scale* (or dedicated semantic tokens), not a blind sweep, since each
+    changes box size. This is the natural next system-level move.
+  - Odd single-value paddings (`3px`, `5px`, `7px`, `9px`) on chips/metrics
+    still want a rounding pass once ±1px shifts are confirmed acceptable.
 
 ### 2026-07-02 — Tokenize single-value margins (41 → 10 raw px margins; 34 sites → --space-*)
 
