@@ -20,6 +20,12 @@ import type {
   ModelsResponse,
   AgentsResponse,
   HealthResponse,
+  SetupResponse,
+  SetupQueryParams,
+  PutSetupBody,
+  RegistryResponse,
+  RegistryQueryParams,
+  PutRegistryBody,
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE as string;
@@ -315,6 +321,77 @@ export function sendFrame(frame: ClientFrame): void {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(frame));
   }
+}
+
+// ── Setup & Registry (ADR 0006) ──────────────────────
+
+export async function fetchSetup(
+  params?: SetupQueryParams
+): Promise<SetupResponse> {
+  const q = new URLSearchParams();
+  if (params?.scope) q.set("scope", params.scope);
+  if (params?.effective) q.set("effective", "true");
+  if (params?.org) q.set("org", params.org);
+  if (params?.project) q.set("project", params.project);
+  const qs = q.toString();
+  const res = await fetch(`${BASE}/api/setup${qs ? `?${qs}` : ""}`, {
+    headers: authHeaders(),
+  });
+  return expectJson(res, "setup");
+}
+
+export async function putSetup(body: PutSetupBody): Promise<SetupResponse> {
+  const res = await fetch(`${BASE}/api/setup`, {
+    method: "PUT",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return expectJson(res, "putSetup");
+}
+
+export async function fetchRegistry(
+  params?: RegistryQueryParams
+): Promise<RegistryResponse> {
+  const q = new URLSearchParams();
+  if (params?.kind) q.set("kind", params.kind);
+  if (params?.slug) q.set("slug", params.slug);
+  const qs = q.toString();
+  const res = await fetch(`${BASE}/api/registry${qs ? `?${qs}` : ""}`, {
+    headers: authHeaders(),
+  });
+  return expectJson(res, "registry");
+}
+
+export async function putRegistryEntry(
+  body: PutRegistryBody
+): Promise<RegistryResponse> {
+  const res = await fetch(`${BASE}/api/registry`, {
+    method: "PUT",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return expectJson(res, "putRegistry");
+}
+
+export async function handoverSession(
+  id: string,
+  toAgentKind: string,
+  model?: string
+): Promise<{ session: Session }> {
+  return postJson(`/api/sessions/${id}/handover`, { toAgentKind, model }, "handover");
+}
+
+export async function fetchIrcPeers(): Promise<{ peers: string[] }> {
+  const res = await fetch(`${BASE}/api/irc/peers`, { headers: authHeaders() });
+  return expectJson(res, "ircPeers");
+}
+
+export async function sendIrcMessage(
+  from: string,
+  to: string,
+  content: string
+): Promise<{ ok: boolean }> {
+  return postJson(`/api/irc/send`, { from, to, content }, "ircSend");
 }
 
 export type { Session, Message, SearchHit, ModelInfo, ServerFrame, ClientFrame };

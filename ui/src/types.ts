@@ -260,3 +260,57 @@ export interface SearchParams {
   limit?: number;
   includeArchived?: boolean;
 }
+
+// ---- Setup declaration (ADR 0006 §3) ----
+
+export interface SetupScope {
+  scope: string;
+  skills: string[];
+  mcp: string[];
+  plugins: string[];
+  hooks: string[];
+  declaredAt: number;
+}
+
+export interface SetupResponse {
+  scopes: SetupScope[];
+}
+
+export interface SetupQueryParams {
+  scope?: string;
+  effective?: boolean;
+  org?: string;
+  project?: string;
+}
+
+export interface PutSetupBody {
+  scope: string;
+  skills: string[];
+  mcp: string[];
+  plugins: string[];
+  hooks: string[];
+}
+
+// ---- Registry (ADR 0006 §9.4) ----
+
+export interface RegistryEntry {
+  kind: string;
+  slug: string;
+  definition: string;
+  registeredAt: number;
+}
+
+export interface RegistryResponse {
+  entries: RegistryEntry[];
+}
+
+export interface RegistryQueryParams {
+  kind?: string;
+  slug?: string;
+}
+
+export interface PutRegistryBody {
+  kind: string;
+  slug: string;
+  definition: string;
+}
