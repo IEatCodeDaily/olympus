@@ -1,0 +1,8 @@
+/* Olympus — webfonts.
+   Type voice matches the shipped app:
+     - IBM Plex Sans — all UI + body (also display / brand at weight 600)
+     - IBM Plex Mono — data, meta, timestamps, code, badges, micro-labels
+   Loaded from Google Fonts. Swap the @import for self-hosted @font-face to
+   pin/offline the fonts (see readme.md → Fonts). */
+
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");

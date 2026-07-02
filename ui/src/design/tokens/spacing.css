@@ -1,0 +1,57 @@
+/* Olympus — Spacing & layout.
+   A tight 2px-quantum scale (the app is DENSE). Named --space-N by pixel value
+   so math stays obvious. Layout constants mirror the shipped app's chrome
+   measurements exactly.
+
+   Density: [data-density="compact"] on <html> tightens layout constants
+   further for small viewports. */
+
+:root {
+  /* ── Base spacing step scale ── */
+  --space-0:   0;
+  --space-1:   2px;
+  --space-2:   4px;
+  --space-3:   6px;
+  --space-4:   8px;
+  --space-5:   10px;
+  --space-6:   12px;
+  --space-8:   16px;
+  --space-10:  20px;
+  --space-12:  24px;
+  --space-16:  32px;
+  --space-20:  40px;
+  --space-24:  48px;
+  --space-32:  64px;
+
+  /* ── Layout constants (from the shipped app) ── */
+  --topbar-h:       34px;    /* global top bar */
+  --toolbar-h:      32px;    /* view headers (.vp-head / .gv-head) */
+  --tabbar-h:       30px;    /* tab strips (.dtabs / .bp-tabs) */
+  --sidebar-w:      220px;   /* left session sidebar */
+  --rsidebar-w:     279px;   /* right info sidebar */
+  --bpanel-h:       152px;   /* bottom terminal/output panel */
+  --palette-w:      560px;   /* ⌘K command palette */
+  --drawer-w:       300px;   /* detail drawer */
+  --view-pad-y:     16px;    /* view scroll padding */
+  --view-pad-x:     18px;
+  --panel-pad:      13px;    /* card interior (.gcard) */
+  --panel-pad-lg:   16px;    /* dialog / large panel interior */
+  --nav-pad-y:      5px;     /* nav item (.navitem) */
+  --nav-pad-x:      10px;
+  --gap-page:       16px;    /* header → content */
+
+  /* Reading measure — transcript column + message caps */
+  --measure:        760px;   /* transcript column (.tcol) */
+  --measure-msg:    640px;   /* AI message / tool card max width */
+}
+
+:root[data-density="compact"] {
+  --sidebar-w:    190px;
+  --rsidebar-w:   240px;
+  --view-pad-y:   12px;
+  --view-pad-x:   14px;
+  --panel-pad:    10px;
+  --panel-pad-lg: 13px;
+  --nav-pad-y:    4px;
+  --gap-page:     12px;
+}

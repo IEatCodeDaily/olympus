@@ -1,0 +1,31 @@
+/* Olympus — Radius & elevation.
+   Softly-squared, matched to the shipped app: 3–4px on controls, 6px on cards
+   and menus, 8px on dialogs/composer, true pills (999px) for chips, search,
+   status dots. Never larger than 8px.
+
+   Elevation is mostly FLAT — depth reads through surface layering (--bg →
+   --bg-elev → --bg-elev-2) plus hairline borders. Floating chrome (menus,
+   palettes, composer, toasts) gets a soft dark drop shadow. */
+
+:root {
+  --radius-sm:   3px;    /* kbd, tiny tags, inline code, arch buttons */
+  --radius:      4px;    /* buttons, inputs, chips, rows, tool cards */
+  --radius-md:   6px;    /* cards, panels, menus, drawers */
+  --radius-lg:   8px;    /* dialogs, command palette, composer, message bubbles */
+  --radius-full: 999px;  /* pills, search field, org pill, dots */
+
+  /* Overlay elevation — floating chrome that leaves the plane. */
+  --shadow-pop:   0 12px 34px rgba(0, 0, 0, 0.55);   /* menus, popovers, overlays */
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.6);    /* dialogs, command palette */
+  --shadow-float: 0 6px 20px rgba(0, 0, 0, 0.45);    /* composer box */
+
+  /* Focus ring — derives from accent, re-themes for free */
+  --ring: var(--accent);
+  --ring-w: 2px;
+  --ring-offset: 2px;
+
+  --border-w: 1px;
+
+  /* Disabled-state opacity — one value everywhere a control is inert */
+  --opacity-disabled: 0.42;   /* @kind other */
+}

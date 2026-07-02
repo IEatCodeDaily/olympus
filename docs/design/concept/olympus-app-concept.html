@@ -1,0 +1,1684 @@
+<!-- @dsCard group="App" viewport="1440x900" name="Olympus app — groundtruth" subtitle="The shipped app; canonical reference for all patterns" -->
+<!-- Olympus app — GROUNDTRUTH recreation (imported from the shipped standalone app). This file is the canonical reference for all Olympus UI patterns. -->
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Olympus — Sessions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0b; --chrome:#131315; --elev:#1b1b1d; --hover:#232326;
+    --border:#262629; --border-strong:#3a3a3e;
+    --text:#e6e6e6; --dim:#999a9c; --faint:#5e5e60;
+    --silver:#c9c9c9; --on-silver:#0b0b0b; --silver-wash:#c9c9c91a; --silver-line:#c9c9c940; --silver-subtle:#c9c9c90d;
+    --green:#86efac; --green-wash:#86efac26; --green-line:#86efac40;
+    --amber:#fcd34d; --red:#fca5a5;
+    --sans:"IBM Plex Sans",-apple-system,system-ui,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;-webkit-font-smoothing:antialiased;overflow:hidden;}
+  button{font-family:inherit;color:inherit;background:none;border:none;cursor:pointer;}
+  svg{display:block;flex-shrink:0;}
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  .mono{font-family:var(--mono);}
+
+  .app{display:flex;flex-direction:column;height:100vh;}
+
+  /* TopBar */
+  .topbar{height:34px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:var(--chrome);}
+  .tb-left{display:flex;align-items:center;gap:8px;flex:1;}
+  .icobtn{display:flex;align-items:center;justify-content:center;padding:5px;border-radius:4px;color:var(--dim);}
+  .icobtn:hover{background:var(--hover);color:var(--text);}
+  .divider{width:1px;height:20px;background:var(--border);}
+  .layouts{display:flex;align-items:center;gap:4px;}
+  .chip{display:flex;align-items:center;gap:5px;padding:4px 7px;border-radius:4px;color:var(--faint);border:1px solid transparent;}
+  .chip:hover{color:var(--text);background:var(--hover);}
+  .chip.on{background:var(--silver-wash);border-color:var(--silver-line);color:var(--silver);}
+  .tb-center{display:flex;align-items:center;gap:3px;}
+  .tb-search{width:320px;display:flex;align-items:center;gap:7px;padding:3px 10px;background:var(--elev);border:1px solid var(--border);border-radius:999px;color:var(--faint);}
+  .tb-nav{display:flex;align-items:center;background:var(--elev);border:1px solid var(--border);border-radius:999px;padding:2px 3px;}
+  .tbn{display:flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;color:var(--dim);font-family:var(--mono);font-size:10px;white-space:nowrap;}
+  .tbn:hover{background:var(--hover);color:var(--text);}
+  .tbn.fwd{color:var(--faint);}
+  .tbn-sep{width:1px;height:12px;background:var(--border);}
+  .tb-search .ph{font-size:11px;color:var(--faint);white-space:nowrap;}
+  .tb-search .sp{flex:1;}
+  .kbd{font-family:var(--mono);font-size:9px;color:var(--faint);padding:1px 5px;background:var(--bg);border:1px solid var(--border);border-radius:3px;}
+  .tb-right{display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end;}
+  .org{display:flex;align-items:center;gap:6px;padding:3px 10px;background:var(--elev);border:1px solid var(--border);border-radius:999px;}
+  .org .mk{width:14px;height:14px;background:var(--silver);border-radius:3px;}
+  .org .nm{font-size:12px;font-weight:500;color:var(--text);}
+  .profile{width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:var(--elev);border:1px solid var(--border-strong);border-radius:999px;font-family:var(--mono);font-size:10px;font-weight:600;color:var(--dim);}
+
+  .body{flex:1;min-height:0;display:flex;background:var(--chrome);}
+
+  /* Session sidebar */
+  .sidebar{width:220px;flex-shrink:0;background:var(--chrome);display:flex;flex-direction:column;overflow-y:auto;}
+  .sidebar.collapsed{display:none;}
+  .sb-pad{padding:8px;display:flex;flex-direction:column;gap:2px;}
+  .newbtn{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--silver);border-radius:4px;color:var(--on-silver);font-size:12px;font-weight:500;}
+  .newbtn:hover{background:#d8d8d8;}
+  .navitem{display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:4px;color:var(--dim);font-size:12px;font-weight:500;}
+  .navitem:hover{background:var(--hover);color:var(--text);}
+  .navitem.on{background:var(--silver-wash);color:var(--silver);}
+  .sbv{display:none;flex-direction:column;flex:1;min-height:0;overflow-y:auto;}
+  .sbv.on{display:flex;}
+  .rz-x{width:4px;cursor:col-resize;flex-shrink:0;}
+  .rz-x:hover{background:var(--silver-wash);}
+  .rz-y{height:4px;cursor:row-resize;flex-shrink:0;}
+  .rz-y:hover{background:var(--silver-wash);}
+  .spin{width:9px;height:9px;border-radius:999px;border:1.5px solid var(--border-strong);border-top-color:var(--silver);animation:rot .8s linear infinite;flex-shrink:0;}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .sic{display:flex;align-items:center;flex-shrink:0;}
+  .vsel{display:flex;align-items:center;gap:7px;margin:8px 8px 2px;padding:5px 10px;background:var(--elev);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;}
+  .vsel:hover{border-color:var(--border-strong);}
+  .vsel .vn{font-weight:500;flex:1;}
+  .vsel .vc{font-family:var(--mono);font-size:9px;color:var(--faint);}
+  .dtabs{height:30px;flex-shrink:0;display:flex;align-items:stretch;border-bottom:1px solid var(--border);padding:0 6px;}
+  .dtab{display:flex;align-items:center;gap:6px;padding:0 11px;font-size:11.5px;color:var(--faint);border-bottom:2px solid transparent;cursor:pointer;}
+  .dtab.on{color:var(--text);border-bottom-color:var(--silver);}
+  .dtab:hover:not(.on){color:var(--dim);}
+  .md{max-width:680px;font-size:13.5px;line-height:1.7;color:var(--text);}
+  .md h1{font-size:18px;font-weight:600;margin-bottom:10px;}
+  .md h2{font-family:var(--mono);font-size:10px;font-weight:600;margin:18px 0 8px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;}
+  .md p{color:var(--dim);margin-bottom:10px;}
+  .md code{font-family:var(--mono);font-size:12px;background:var(--elev);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--silver);}
+  .md table{border-collapse:collapse;width:100%;font-size:12px;margin:8px 0;}
+  .md th,.md td{border:1px solid var(--border);padding:6px 9px;text-align:left;}
+  .md th{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--faint);background:var(--elev);}
+  .md td{color:var(--dim);font-family:var(--mono);font-size:11.5px;}
+  .md a{color:var(--silver);border-bottom:1px dotted var(--border-strong);cursor:pointer;}
+  .sec-head{display:flex;align-items:center;gap:6px;padding:9px 12px 4px;}
+  .sec-head .lbl{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.6px;color:var(--faint);}
+  .sec-head .sp{flex:1;}
+  .sec-head .ct{font-family:var(--mono);font-size:10px;color:var(--faint);}
+  .sec-content{display:flex;flex-direction:column;gap:2px;padding:2px 8px 8px;}
+  .srow{display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:4px;cursor:pointer;}
+  .srow:hover{background:var(--hover);}
+  .srow.on{background:var(--silver-wash);}
+  .srow .dot{width:6px;height:6px;border-radius:999px;flex-shrink:0;}
+  .srow .info{display:flex;flex-direction:row;align-items:baseline;gap:8px;min-width:0;flex:1;}
+  .srow .title{flex:1;min-width:0;font-size:11.5px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .srow .meta{display:flex;gap:5px;margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--faint);flex-shrink:0;}
+  .srow .meta span:not(:last-child){display:none;}
+  .srow .arch{display:flex;visibility:hidden;align-items:center;padding:2px;border-radius:3px;color:var(--faint);flex-shrink:0;}
+  .srow:hover .arch{visibility:visible;} .srow .arch:hover{background:var(--hover);color:var(--text);}
+  .proj-head{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:4px;cursor:pointer;}
+  .proj-head:hover{background:var(--hover);}
+  .proj-head .nm{font-size:12px;font-weight:500;color:var(--text);}
+  .proj-head .sp{flex:1;}
+  .proj-count{display:flex;gap:4px;padding:1px 5px;background:var(--elev);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--faint);}
+  .proj-sessions{display:flex;flex-direction:column;gap:1px;padding:2px 0 2px 20px;}
+
+  /* Viewport */
+  .viewport{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);border-top:1px solid var(--border);border-left:1px solid var(--border);border-top-left-radius:12px;overflow:hidden;}
+  .vp-head{height:32px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:transparent;border-bottom:1px solid var(--border);}
+  .vp-left{display:flex;align-items:center;gap:10px;}
+  .vp-title{font-size:12.5px;font-weight:600;color:var(--text);}
+  .proj-badge{display:flex;align-items:center;padding:2px 8px;background:var(--silver-subtle);border:1px solid var(--silver-line);border-radius:999px;font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.5px;color:var(--silver);}
+  .vp-right{display:flex;align-items:center;gap:6px;}
+  .live{display:flex;align-items:center;gap:5px;padding:2px 7px;background:var(--green-wash);border:1px solid var(--green-line);border-radius:999px;}
+  .live .dot{width:6px;height:6px;border-radius:999px;background:var(--green);}
+  .live .lbl{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--green);}
+  .toggle{padding:5px;border-radius:4px;color:var(--dim);}
+  .toggle:hover{background:var(--hover);color:var(--text);}
+
+  .vp-body{flex:1;min-height:0;display:flex;}
+  .chatcol{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .transcript{flex:1;overflow-y:auto;padding:20px 24px;}
+  .tcol{width:100%;max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:16px;}
+  .msg-user{position:relative;align-self:flex-end;max-width:80%;background:var(--elev);border:1px solid var(--border);border-radius:8px 8px 4px 8px;padding:10px 14px;font-size:13.5px;line-height:1.55;color:var(--text);}
+  .msg-ai{position:relative;max-width:640px;font-size:14px;line-height:1.65;color:var(--text);padding:2px 0;}
+  .msg-ai .who{font-family:var(--mono);font-size:9px;letter-spacing:.5px;color:var(--faint);margin-bottom:6px;}
+  .msg-ai p{margin-bottom:10px;} .msg-ai p:last-child{margin:0;}
+  .msg-ai strong{color:#fff;font-weight:600;}
+  .msg-ai code{font-family:var(--mono);font-size:12px;background:var(--elev);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--silver);}
+  .msg-ai ol{margin:2px 0 10px 18px;} .msg-ai li{margin-bottom:5px;}
+  .msg-acts{position:absolute;bottom:-30px;left:0;display:flex;align-items:center;gap:2px;padding:3px 5px;background:var(--chrome);border:1px solid var(--border);border-radius:4px;opacity:0;pointer-events:none;transition:opacity .15s .4s;z-index:3;box-shadow:0 3px 10px rgba(0,0,0,.4);}
+  .msg-acts::before{content:'';position:absolute;left:-12px;right:-12px;top:-12px;height:12px;}
+  .msg-user .msg-acts{left:auto;right:0;}
+  .msg-user:hover .msg-acts,.msg-ai:hover .msg-acts,.msg-acts:hover{opacity:1;pointer-events:auto;transition-delay:0s;}
+  .msg-acts .ts{font-family:var(--mono);font-size:9px;color:var(--faint);padding:0 5px;white-space:nowrap;}
+  .msg-acts button{display:flex;padding:3px;border-radius:3px;color:var(--faint);}
+  .msg-acts button:hover{background:var(--hover);color:var(--text);}
+  .toolcard{max-width:640px;background:var(--elev);border:1px solid var(--border);border-radius:4px;overflow:hidden;}
+  .tc-head{display:flex;align-items:center;gap:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;}
+  .tc-head .nm{color:var(--text);font-weight:500;}
+  .tc-head .st{color:var(--green);}
+  .tc-head .sp{flex:1;}
+  .tc-body{border-top:1px solid var(--border);padding:9px 12px;}
+  .tc-out{font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--dim);white-space:pre-wrap;}
+
+  /* Composer */
+  .composer{flex-shrink:0;padding:6px 16px 10px;}
+  .comp-box{max-width:760px;margin:0 auto;background:var(--elev);border:1px solid var(--border-strong);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,.45);}
+  .comp-box textarea{width:100%;background:none;border:none;outline:none;resize:none;color:var(--text);font-family:var(--sans);font-size:13px;line-height:1.5;max-height:150px;}
+  .comp-box textarea::placeholder{color:var(--faint);}
+  .comp-bar{display:flex;align-items:center;justify-content:space-between;}
+  .comp-l{display:flex;align-items:center;gap:8px;}
+  .modelpill{display:flex;align-items:center;gap:6px;padding:4px 7px;background:none;border:none;border-radius:4px;}
+  .modelpill:hover{background:var(--hover);}
+  .modelpill .dot{width:6px;height:6px;border-radius:999px;background:var(--green);}
+  .modelpill .nm{font-family:var(--mono);font-size:10px;color:var(--dim);}
+  .comp-r{display:flex;align-items:center;gap:8px;}
+  .comp-hint{font-family:var(--mono);font-size:9px;color:var(--faint);}
+  .send{width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;background:var(--silver);border-radius:4px;color:var(--on-silver);}
+  .send:hover{background:#d8d8d8;}
+
+  /* Bottom panel */
+  .bpanel{flex-shrink:0;height:152px;background:var(--bg);border-top:1px solid var(--border);display:flex;flex-direction:column;}
+  .bpanel.collapsed{display:none;}
+  .bp-tabs{height:30px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--border);}
+  .bp-tablist{display:flex;height:36px;}
+  .bp-tab{display:flex;align-items:center;padding:0 10px;font-size:11.5px;color:var(--faint);border-bottom:2px solid transparent;}
+  .bp-tab.on{color:var(--silver);font-weight:600;border-bottom-color:var(--silver);}
+  .bp-tab:hover:not(.on){color:var(--dim);}
+  .bp-right{display:flex;align-items:center;gap:6px;}
+  .bp-body{flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:2px;font-family:var(--mono);font-size:11.5px;background:var(--bg);}
+  .bp-body .ln{white-space:pre-wrap;}
+  .bp-body .g{color:var(--green);} .bp-body .d{color:var(--dim);} .bp-body .a{color:var(--amber);}
+
+  /* Right sidebar */
+  .rsidebar{width:279px;flex-shrink:0;background:var(--bg);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;}
+  .rsidebar.collapsed{display:none;}
+  .rs-tabbar{display:flex;align-items:center;gap:2px;width:fit-content;margin:8px auto;padding:2px 3px;background:var(--elev);border:1px solid var(--border);border-radius:999px;}
+  .rs-tab{width:27px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:999px;color:var(--faint);border:1px solid transparent;}
+  .rs-tab.on{background:var(--silver-wash);border-color:var(--silver-line);color:var(--silver);}
+  .rs-tab:hover:not(.on){color:var(--dim);}
+  .rs-sec{padding:11px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:10px;}
+  .kv{display:flex;justify-content:space-between;align-items:baseline;}
+  .kv .k{font-family:var(--mono);font-size:10px;letter-spacing:.5px;color:var(--faint);}
+  .kv .v{font-family:var(--mono);font-size:12px;color:var(--text);}
+  .stats{display:flex;gap:8px;}
+  .stat{flex:1;padding:6px 10px;background:var(--elev);border:1px solid var(--border);border-radius:4px;display:flex;flex-direction:column;gap:2px;}
+  .stat .v{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text);}
+  .stat .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.5px;color:var(--faint);}
+  .arts{padding:14px;display:flex;flex-direction:column;gap:8px;}
+  .art-head{display:flex;justify-content:space-between;align-items:center;}
+  .art-head .l{font-family:var(--mono);font-size:10px;letter-spacing:.5px;color:var(--faint);}
+  .art{display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--elev);border:1px solid var(--border);border-radius:4px;}
+  .art .nm{font-family:var(--mono);font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .art .tag{font-family:var(--mono);font-size:9px;padding:1px 5px;border-radius:3px;}
+
+  .version{position:fixed;right:12px;bottom:8px;font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:.4px;pointer-events:none;z-index:5;}
+  /* Generic views */
+  .view{display:none;flex-direction:column;flex:1;min-height:0;}
+  .view.on{display:flex;}
+  .gv-head{height:32px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);}
+  .gv-title{font-size:12.5px;font-weight:600;color:var(--text);}
+  .gv-sub{font-size:11px;color:var(--faint);}
+  .gv-actions{margin-left:auto;display:flex;gap:6px;}
+  .gv-body{flex:1;overflow-y:auto;padding:16px 18px;}
+  .ggrid{display:grid;gap:10px;}
+  .gcard{background:var(--elev);border:1px solid var(--border);border-radius:6px;padding:13px;}
+  .gcard.click{cursor:pointer;transition:border-color .12s,background .12s,transform .12s;}
+  .gcard.click:hover{border-color:var(--border-strong);background:var(--hover);transform:translateY(-1px);}
+  .gk{font-family:var(--mono);font-size:10px;letter-spacing:.5px;color:var(--faint);text-transform:uppercase;}
+  .gtitle{font-size:14px;font-weight:600;color:var(--text);}
+  .gtag{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:2px 7px;border-radius:4px;border:1px solid var(--border);color:var(--dim);}
+  .gtag.ok{color:var(--green);background:var(--green-wash);border-color:var(--green-line);}
+  .gtag.warn{color:var(--amber);background:#fcd34d1a;border-color:#fcd34d40;}
+  .gtag.err{color:var(--red);background:#fca5a51a;border-color:#fca5a540;}
+  .gbar{height:6px;background:var(--hover);border-radius:999px;overflow:hidden;}
+  .gbar>i{display:block;height:100%;background:var(--silver);}
+  .grow{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .gsw{width:32px;height:18px;border-radius:999px;background:var(--hover);border:1px solid var(--border-strong);position:relative;flex-shrink:0;cursor:pointer;}
+  .gsw>i{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:999px;background:var(--faint);transition:transform .15s,background .15s;}
+  .gsw.on{background:var(--silver);border-color:var(--silver);} .gsw.on>i{transform:translateX(14px);background:var(--on-silver);}
+  .col{background:var(--elev);border:1px solid var(--border);border-radius:6px;display:flex;flex-direction:column;min-height:120px;}
+  .col-h{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);}
+  .col-b{padding:8px;display:flex;flex-direction:column;gap:8px;}
+  .kcard{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:9px 10px;cursor:pointer;}
+  .kcard:hover{border-color:var(--border-strong);}
+  .step{flex:1;min-width:120px;padding:9px 11px;border-radius:4px;border:1px solid var(--border);}
+  .step.done{border-color:var(--green-line);background:var(--green-wash);}
+  .step.run{border-color:var(--silver-line);background:var(--silver-wash);}
+  .step.pend{opacity:.6;}
+  .step{cursor:pointer;} .step:hover{border-color:var(--border-strong);}
+  .gv-wrap{flex:1;min-height:0;display:flex;}
+  .drawer{width:300px;flex-shrink:0;border-left:1px solid var(--border);display:none;flex-direction:column;overflow-y:auto;background:var(--bg);}
+  .drawer.on{display:flex;}
+  .dr-head{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;}
+  .dr-title{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .dr-body{padding:12px;display:flex;flex-direction:column;gap:14px;}
+  .dr-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  .btn{padding:5px 10px;border:1px solid var(--border);border-radius:4px;font-size:11.5px;color:var(--dim);}
+  .btn:hover{background:var(--hover);color:var(--text);border-color:var(--border-strong);}
+  .btn.pri{background:var(--silver);color:var(--on-silver);border-color:var(--silver);font-weight:500;}
+  .btn.pri:hover{background:#d8d8d8;}
+  .plv{display:none;} .plv.on{display:block;}
+  .stv{display:none;flex-direction:column;gap:12px;} .stv.on{display:flex;}
+  .agrow{display:flex;align-items:center;gap:10px;padding:8px 11px;background:var(--elev);border:1px solid var(--border);border-radius:4px;}
+  .agrow .nm{font-family:var(--mono);font-size:12px;color:var(--text);}
+  .agrow .sp{flex:1;}
+  .nodehead{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .ubar-row{display:flex;flex-direction:column;gap:8px;padding:11px 13px;background:var(--elev);border:1px solid var(--border);border-radius:6px;}
+  .pal-scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);display:none;align-items:flex-start;justify-content:center;padding-top:12vh;z-index:50;}
+  .pal-scrim.on{display:flex;}
+  .pal{width:560px;max-width:90vw;background:var(--chrome);border:1px solid var(--border-strong);border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;}
+  .pal-in{display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--border);color:var(--faint);}
+  .pal-in input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:13px;font-family:var(--sans);}
+  .pal-list{max-height:340px;overflow-y:auto;padding:4px 6px 8px;}
+  .pal-gl{font-family:var(--mono);font-size:9px;letter-spacing:.5px;color:var(--faint);padding:8px 8px 3px;}
+  .pal-r{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:4px;font-size:12.5px;color:var(--dim);cursor:pointer;}
+  .pal-r:hover,.pal-r.sel{background:var(--hover);color:var(--text);}
+  .pal-r .m{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--faint);white-space:nowrap;}
+  /* Right-sidebar tab panels */
+  .rsv{display:none;flex-direction:column;} .rsv.on{display:flex;}
+  /* Chat edge overlays */
+  .chatcol{position:relative;}
+  .hz{position:absolute;top:0;bottom:0;width:calc((100% - 800px)/2);min-width:18px;z-index:6;}
+  .hz-l{left:0;} .hz-r{right:0;}
+  .ovl{position:absolute;top:14px;width:240px;max-height:72%;overflow-y:auto;background:var(--chrome);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 12px 34px rgba(0,0,0,.55);padding:8px;display:flex;flex-direction:column;gap:3px;z-index:7;opacity:0;pointer-events:none;transition:opacity .12s .1s,transform .12s;}
+  .ovl-l{left:auto;right:calc(50% + 392px);transform:translateX(-6px);background:none;border:none;box-shadow:none;padding:0;}
+  .ovl-r{right:auto;left:calc(50% + 392px);transform:translateX(6px);}
+  .hz-l:hover~.ovl-l,.ovl-l:hover,.ovl-l.pinned{opacity:1;pointer-events:auto;transform:none;}
+  .hz-r:hover~.ovl-r,.ovl-r:hover,.ovl-r.pinned{opacity:1;pointer-events:auto;transform:none;}
+  .ovl-head{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 6px;}
+  .ovl-it{padding:4px 8px 4px 0;border-radius:4px;font-size:11.5px;line-height:1.45;color:var(--dim);cursor:pointer;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+  .ovl-it:hover{color:var(--text);}
+  .todo{display:flex;align-items:flex-start;gap:7px;padding:4px 6px;font-size:11.5px;color:var(--dim);}
+  .todo .bx{width:11px;height:11px;border:1px solid var(--border-strong);border-radius:3px;margin-top:2px;flex-shrink:0;}
+  .todo.done{color:var(--faint);text-decoration:line-through;}
+  .todo.done .bx{background:var(--silver);border-color:var(--silver);}
+  .diffln{font-family:var(--mono);font-size:11px;line-height:1.55;white-space:pre-wrap;color:var(--dim);}
+  .diffln.add{color:var(--green);} .diffln.del{color:var(--red);}
+  /* Composer menus + context popover */
+  .plusmenu-wrap,.ctx-wrap,.selwrap{position:relative;}
+  .psep{width:1px;height:12px;background:var(--border-strong);flex-shrink:0;}
+  .selpop{left:auto;right:0;width:224px;}
+  .mi .mk2{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--silver);visibility:hidden;}
+  .mi.on .mk2{visibility:visible;}
+  .mi.on{color:var(--text);}
+  input[type=range]{accent-color:var(--silver);height:14px;cursor:pointer;}
+  .menu{position:absolute;bottom:32px;left:0;min-width:190px;background:var(--chrome);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 12px 34px rgba(0,0,0,.55);padding:4px;display:none;flex-direction:column;z-index:20;}
+  .menu.on{display:flex;}
+  .mi{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:4px;font-size:12px;color:var(--dim);text-align:left;}
+  .mi:hover{background:var(--hover);color:var(--text);}
+  .ctxbtn{display:flex;align-items:center;gap:5px;padding:4px 7px;border:none;border-radius:4px;color:var(--dim);font-family:var(--mono);font-size:10px;}
+  .ctxbtn:hover{background:var(--hover);color:var(--text);}
+  .ctxpop{position:absolute;bottom:32px;right:0;width:264px;background:var(--chrome);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 12px 34px rgba(0,0,0,.55);padding:12px;display:none;flex-direction:column;gap:8px;z-index:20;}
+  .ctx-wrap:hover .ctxpop{display:flex;}
+  .cp-row{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim);}
+  .cp-row .d{width:6px;height:6px;border-radius:99px;background:var(--silver);flex-shrink:0;}
+  .cp-row .v{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--text);}
+  .cp-bar{height:5px;background:var(--hover);border-radius:99px;overflow:hidden;}
+  .cp-bar>i{display:block;height:100%;background:var(--silver);}
+  .cp-div{height:1px;background:var(--border);margin:2px 0;}
+  /* Concept-view interactivity */
+  .wbf{display:none;} .wbf.on{display:block;}
+  .wbt{display:none;} .wbt.on{display:flex;}
+  @keyframes edgeflow{to{stroke-dashoffset:-14;}}
+  #atlassvg.lens-activity line{stroke-dasharray:4 3;animation:edgeflow 1s linear infinite;}
+  #atlassvg.lens-prov g:not(.prov),#atlassvg.lens-prov line:not(.prov){opacity:.15;}
+  .atlas-node rect{transition:stroke-width .12s;}
+  .atlas-node.sel rect{stroke-width:2.5;}
+  .lg-hide{display:none !important;}
+  /* Forms + modal + kanban dnd */
+  .fld{display:flex;flex-direction:column;gap:5px;}
+  .fld .lb{font-family:var(--mono);font-size:9px;letter-spacing:.5px;color:var(--faint);text-transform:uppercase;}
+  .fld input,.fld select,.fld textarea{background:var(--elev);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--sans);font-size:12.5px;padding:7px 9px;outline:none;}
+  .fld input:focus,.fld select:focus,.fld textarea:focus{border-color:var(--border-strong);}
+  .seg{display:flex;gap:4px;}
+  .seg .sg{flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;color:var(--dim);text-align:center;cursor:pointer;}
+  .seg .sg:hover{background:var(--hover);color:var(--text);}
+  .seg .sg.on{background:var(--silver-wash);border-color:var(--silver-line);color:var(--silver);}
+  .kcard.dragging{opacity:.35;}
+  .col-b.dropover{background:var(--silver-subtle);border-radius:0 0 6px 6px;}
+  .obsbanner{max-width:760px;margin:0 auto 8px;display:flex;align-items:center;gap:10px;padding:8px 12px;background:#fcd34d12;border:1px solid #fcd34d33;border-radius:6px;font-size:12px;color:var(--dim);}
+  .cmdline{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;font-family:var(--mono);font-size:10.5px;color:var(--dim);word-break:break-all;}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- TopBar -->
+  <div class="topbar">
+    <div class="tb-left">
+      <button class="icobtn" title="Collapse sidebar" data-x="side">%olympus%</button>
+      <span class="divider"></span>
+      <div class="layouts" id="layouts">
+        <button class="chip on" data-sec="sessions" title="Sessions">%message-square%</button>
+        <button class="chip" data-sec="vaults" title="Vaults">%book%</button>
+        <button class="chip" data-sec="projects" title="Projects">%kanban%</button>
+        <button class="chip" data-sec="workflow" title="Workflow">%workflow%</button>
+        <button class="chip" data-sec="plugins" title="Plugins">%puzzle%</button>
+        <button class="chip" data-sec="fleet" title="Fleet">%server%</button>
+        <button class="chip" data-sec="workbench" title="Workbench">%code%</button>
+        <button class="chip" data-sec="console" title="Console">%terminal%</button>
+        <button class="chip" data-sec="ledger" title="Ledger">%archive-lg%</button>
+        <button class="chip" data-sec="atlas" title="Atlas">%map%</button>
+        <button class="chip" data-sec="settings" title="Settings">%gear%</button>
+      </div>
+    </div>
+    <div class="tb-center">
+      <button class="icobtn" title="Back">%chevron-left-sm%</button>
+      <button class="icobtn" title="Forward">%chevron-right-sm%</button>
+      <div class="tb-search">%search%<span class="ph">Search…</span><span class="kbd">⌘K</span></div>
+      <button class="icobtn" title="Notifications">%bell%</button>
+    </div>
+    <div class="tb-right">
+      <div class="org"><span class="mk"></span><span class="nm">Acme</span>%chevron-down-sm%</div>
+      <div class="profile">R</div>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- Session sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sbv on" data-sbv="sessions">
+      <div class="sb-pad">
+        <button class="newbtn">%plus%<span>New Session</span></button>
+        <button class="navitem" data-goto="agents">%bot%<span>Agents</span></button>
+        <button class="navitem" data-goto="usage">%activity%<span>Usage</span></button>
+      </div>
+      <div class="sec">
+        <div class="sec-head"><span class="lbl">PINNED</span><span class="sp"></span><span class="ct">1</span></div>
+        <div class="sec-content">
+          <div class="srow"><span class="sic" style="color:var(--faint)">%pin-sm%</span><div class="info"><span class="title">Olympus MVP architecture</span><div class="meta"><span>default</span><span>·</span><span>2d</span></div></div></div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-head"><span class="lbl">RECENT</span><span class="sp"></span><span class="ct">3</span></div>
+        <div class="sec-content">
+          <div class="srow"><span class="sic" style="color:var(--amber)">%alert-sm%</span><div class="info"><span class="title">Generate vault schema</span><div class="meta"><span>codex</span><span>·</span><span>13:18</span></div></div></div>
+          <div class="srow"><span class="sic" style="color:var(--green)">%check-sm%</span><div class="info"><span class="title">Patch sessiondb fork</span><div class="meta"><span>hermes</span><span>·</span><span>11:04</span></div></div></div>
+          <div class="srow"><div class="info"><span class="title">Wire ACP transport</span><div class="meta"><span>claude-code</span><span>·</span><span>09:47</span></div></div></div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-head"><span class="lbl">OBSERVED · HERMES STUDIO</span><span class="sp"></span><span class="ct">2</span></div>
+        <div class="sec-content" id="obslist">
+          <div class="srow" data-obs="Payment flow debugging"><span class="dot" style="background:var(--amber)"></span><div class="info"><span class="title">Payment flow debugging</span><div class="meta"><span>hermes</span><span>·</span><span>tg</span></div></div></div>
+          <div class="srow" data-obs="Prompt library cleanup"><span class="dot" style="background:var(--amber)"></span><div class="info"><span class="title">Prompt library cleanup</span><div class="meta"><span>hermes</span><span>·</span><span>2d</span></div></div></div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sec-head"><span class="lbl">PROJECTS</span><span class="sp"></span><span class="ct">2</span></div>
+        <div class="sec-content">
+          <div class="proj-head">%folder-open%<span class="nm">olympus-ui</span><span class="sp"></span><span class="proj-count"><span>3r</span><span>·</span><span>2v</span></span></div>
+          <div class="proj-sessions">
+            <div class="srow on"><span class="spin"></span><div class="info"><span class="title">Refactor auth</span><div class="meta"><span>claude-code</span><span>·</span><span>14:32</span></div></div></div>
+            <div class="srow"><div class="info"><span class="title">Document fleet API</span><div class="meta"><span>codex</span><span>·</span><span>Yesterday</span></div></div></div>
+          </div>
+          <div class="proj-head">%folder-sm%<span class="nm">vault-core</span><span class="sp"></span><span class="proj-count"><span>1r</span><span>·</span><span>3v</span></span></div>
+        </div>
+      </div>
+      </div>
+
+      <div class="sbv" data-sbv="vaults">
+        <div class="vsel" title="Switch vault">%book%<span class="vn">engineering</span><span class="vc">142</span>%chevron-down-sm%</div>
+        <div class="sec-head"><span class="lbl">NOTES</span><span class="sp"></span><span class="ct">142</span></div>
+        <div class="sec-content">
+          <div class="proj-head" style="padding:3px 6px">%folder-open%<span class="nm" style="font-size:11.5px">redb</span></div>
+          <div style="padding-left:14px;display:flex;flex-direction:column;gap:1px">
+            <div class="srow on" data-note="redb-compaction.md"><span class="sic" style="color:var(--faint)">%file-sm%</span><div class="info"><span class="title">redb-compaction.md</span><div class="meta"><span>2h</span></div></div></div>
+            <div class="srow" data-note="event-log-design.md"><span class="sic" style="color:var(--faint)">%file-sm%</span><div class="info"><span class="title">event-log-design.md</span><div class="meta"><span>1w</span></div></div></div>
+          </div>
+          <div class="proj-head" style="padding:3px 6px">%folder-open%<span class="nm" style="font-size:11.5px">runbooks</span></div>
+          <div style="padding-left:14px;display:flex;flex-direction:column;gap:1px">
+            <div class="srow" data-note="grafana-runbook.md"><span class="sic" style="color:var(--faint)">%file-sm%</span><div class="info"><span class="title">grafana-runbook.md</span><div class="meta"><span>3d</span></div></div></div>
+          </div>
+          <div class="srow" data-note="acp-wire-spike.md"><span class="sic" style="color:var(--faint)">%file-sm%</span><div class="info"><span class="title">acp-wire-spike.md</span><div class="meta"><span>1d</span></div></div></div>
+        </div>
+        <div class="sec-head"><span class="lbl">VIEWS</span></div>
+        <div class="sec-content">
+          <button class="navitem" data-note="graph">%workflow%<span>Graph</span></button>
+          <button class="navitem">%layout-grid%<span>Tables</span></button>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="projects">
+        <div class="sb-pad"><button class="newbtn">%plus%<span>New Card</span></button></div>
+        <div class="sec-head"><span class="lbl">BOARDS</span><span class="sp"></span><span class="ct">2</span></div>
+        <div class="sec-content">
+          <div class="srow on"><span class="dot" style="background:var(--silver)"></span><div class="info"><span class="title">default</span><div class="meta"><span>7</span></div></div></div>
+          <div class="srow"><span class="dot" style="background:var(--faint)"></span><div class="info"><span class="title">infra</span><div class="meta"><span>3</span></div></div></div>
+        </div>
+        <div class="sec-head"><span class="lbl">FILTERS</span></div>
+        <div class="sec-content">
+          <button class="navitem">%bot%<span>By agent</span></button>
+          <button class="navitem">%activity%<span>Blocked only</span></button>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="workflow">
+        <div class="sb-pad"><button class="newbtn">%plus%<span>New Workflow</span></button></div>
+        <div class="sec-head"><span class="lbl">WORKFLOWS</span><span class="sp"></span><span class="ct">2</span></div>
+        <div class="sec-content">
+          <div class="srow on"><span class="dot" style="background:var(--green)"></span><div class="info"><span class="title">Code review loop</span><div class="meta"><span>2h</span></div></div></div>
+          <div class="srow"><span class="dot" style="background:var(--faint)"></span><div class="info"><span class="title">Incident triage</span><div class="meta"><span>8h</span></div></div></div>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="plugins">
+        <div class="sec-head" style="padding-top:12px"><span class="lbl">PLUGINS</span></div>
+        <div class="sec-content">
+          <button class="navitem on" data-plv-btn="installed">%puzzle%<span>Installed</span></button>
+          <button class="navitem" data-plv-btn="market">%search%<span>Marketplace</span></button>
+          <button class="navitem" data-plv-btn="updates">%activity%<span>Updates</span></button>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="fleet">
+        <div class="sb-pad"><button class="newbtn" id="flnew">%plus%<span>Add Node</span></button></div>
+        <div class="sec-head"><span class="lbl">NODES</span><span class="sp"></span><span class="ct" id="flct">3</span></div>
+        <div class="sec-content" id="flrows">
+          <div class="srow on"><span class="dot" style="background:var(--green)"></span><div class="info"><span class="title">local</span><div class="meta"><span>18s</span></div></div></div>
+          <div class="srow"><span class="dot" style="background:var(--amber)"></span><div class="info"><span class="title">gpu-box</span><div class="meta"><span>2m</span></div></div></div>
+          <div class="srow"><span class="dot" style="background:var(--red)"></span><div class="info"><span class="title">edge-mini</span><div class="meta"><span>90m</span></div></div></div>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="workbench">
+        <div class="sec-head" style="padding-top:12px"><span class="lbl">WORKSPACE · OLYMPUS-UI</span></div>
+        <div class="sec-content">
+          <div class="proj-head" style="padding:3px 6px">%folder-open%<span class="nm" style="font-size:11.5px">crates/control-plane</span></div>
+          <div style="padding-left:14px;display:flex;flex-direction:column;gap:1px">
+            <div class="srow on" data-wbrow="auth.rs"><span class="sic" style="color:var(--green)">%file-sm%</span><div class="info"><span class="title">auth.rs</span><div class="meta"><span>M</span></div></div></div>
+            <div class="srow" data-wbrow="auth_test.rs"><span class="sic" style="color:var(--silver)">%file-sm%</span><div class="info"><span class="title">auth_test.rs</span><div class="meta"><span>A</span></div></div></div>
+            <div class="srow" data-wbrow="gate.rs"><span class="sic" style="color:var(--faint)">%file-sm%</span><div class="info"><span class="title">gate.rs</span></div></div>
+            <div class="srow" data-wbrow="lib.rs"><span class="sic" style="color:var(--faint)">%file-sm%</span><div class="info"><span class="title">lib.rs</span></div></div>
+          </div>
+          <div class="proj-head" style="padding:3px 6px">%folder-sm%<span class="nm" style="font-size:11.5px">crates/sessiondb</span></div>
+          <div class="proj-head" style="padding:3px 6px">%folder-sm%<span class="nm" style="font-size:11.5px">ui/src</span></div>
+        </div>
+        <div class="sec-head"><span class="lbl">AGENT TABS</span><span class="sp"></span><span class="ct">2</span></div>
+        <div class="sec-content">
+          <div class="srow"><span class="spin"></span><div class="info"><span class="title">Refactor auth</span><div class="meta"><span>claude-code</span></div></div></div>
+          <div class="srow"><span class="sic" style="color:var(--green)">%check-sm%</span><div class="info"><span class="title">Redb compaction</span><div class="meta"><span>default</span></div></div></div>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="console">
+        <div class="sec-head" style="padding-top:12px"><span class="lbl">LAYOUTS</span></div>
+        <div class="sec-content">
+          <button class="navitem on" data-clay="ps">%layout-grid%<span>fleet ps</span></button>
+          <button class="navitem" data-clay="tail">%message-square%<span>session tail</span></button>
+          <button class="navitem" data-clay="diff">%git-compare%<span>diff pager</span></button>
+          <button class="navitem" data-clay="usage">%activity%<span>usage table</span></button>
+        </div>
+        <div class="sec-head"><span class="lbl">RECENT COMMANDS</span></div>
+        <div class="sec-content mono" style="font-size:10.5px;color:var(--dim);gap:5px;padding:4px 14px 8px">
+          <span class="conrecent" style="cursor:pointer">ol attach 42</span><span class="conrecent" style="cursor:pointer">ol ps</span><span class="conrecent" style="cursor:pointer">ol logs 40 --follow</span><span class="conrecent" style="cursor:pointer">ol trace 42</span><span class="conrecent" style="cursor:pointer">ol approve 40</span>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="ledger">
+        <div class="sec-head" style="padding-top:12px"><span class="lbl">FACETS</span></div>
+        <div class="sec-content">
+          <button class="navitem on" data-facet="all">%archive%<span>All entries</span></button>
+          <button class="navitem" data-facet="patch">%file-sm%<span>Patches</span></button>
+          <button class="navitem" data-facet="report">%book%<span>Reports</span></button>
+          <button class="navitem" data-facet="approval">%check-sm%<span>Approvals</span></button>
+        </div>
+        <div class="sec-head"><span class="lbl">COLLECTIONS</span><span class="sp"></span><span class="ct">2</span></div>
+        <div class="sec-content">
+          <div class="srow"><span class="dot" style="background:var(--silver)"></span><div class="info"><span class="title">auth hardening</span><div class="meta"><span>6</span></div></div></div>
+          <div class="srow"><span class="dot" style="background:var(--faint)"></span><div class="info"><span class="title">storage epic</span><div class="meta"><span>11</span></div></div></div>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="atlas">
+        <div class="sec-head" style="padding-top:12px"><span class="lbl">LENSES</span></div>
+        <div class="sec-content">
+          <button class="navitem on" data-lens="topo">%workflow%<span>Topology</span></button>
+          <button class="navitem" data-lens="activity">%activity%<span>Activity</span></button>
+          <button class="navitem" data-lens="prov">%git-branch%<span>Provenance</span></button>
+        </div>
+        <div class="sec-head"><span class="lbl">VIEWPOINTS</span></div>
+        <div class="sec-content">
+          <button class="navitem">%pin%<span>olympus-ui cluster</span></button>
+          <button class="navitem">%pin%<span>fleet hosts</span></button>
+        </div>
+      </div>
+
+      <div class="sbv" data-sbv="settings">
+        <div class="sec-head" style="padding-top:12px"><span class="lbl">SETTINGS</span></div>
+        <div class="sec-content">
+          <button class="navitem on" data-stv-btn="appearance">%gear%<span>Appearance</span></button>
+          <button class="navitem" data-stv-btn="runtime">%server%<span>Runtime</span></button>
+          <button class="navitem" data-stv-btn="agents">%bot%<span>Agents</span></button>
+          <button class="navitem" data-stv-btn="usage">%activity%<span>Usage</span></button>
+        </div>
+      </div>
+    </aside>
+    <div class="rz-x" data-rz="sidebar"></div>
+
+    <!-- Viewport -->
+    <div class="viewport">
+      <section class="view on" data-view="sessions">
+      <div class="vp-head">
+        <div class="vp-left">
+          <button class="icobtn" style="padding:0" title="Back">%chevron-left%</button>
+          <span class="vp-title" id="vptitle">Refactor auth</span>
+          <span class="proj-badge" id="vpproj">OLYMPUS-UI</span>
+          <button class="icobtn" title="More">%ellipsis%</button>
+        </div>
+        <div class="vp-right">
+          <div class="live" id="vplive"><span class="dot"></span><span class="lbl">LIVE</span></div>
+          <button class="toggle" data-x="bottom" title="Bottom panel">%panel-bottom%</button>
+          <button class="toggle" data-x="right" title="Right panel">%panel-right%</button>
+        </div>
+      </div>
+
+      <div class="vp-body">
+        <div class="chatcol">
+          <div class="hz hz-l"></div>
+          <div class="hz hz-r"></div>
+          <div class="ovl ovl-l" id="outline">
+            <div class="ovl-head"><span class="gk">session outline</span><button class="icobtn" id="outlinepin" title="Keep outline open" style="padding:2px">%pin%</button></div>
+            <div id="outlinelist" style="display:flex;flex-direction:column;gap:2px"></div>
+          </div>
+          <div class="ovl ovl-r" id="ctxpanel">
+            <div class="ovl-head"><span class="gk">session context</span><button class="icobtn" id="ctxpin" title="Keep context open" style="padding:2px">%pin%</button></div>
+            <div class="gk" style="padding:2px 4px">todo</div>
+            <div class="todo done"><span class="bx"></span><span>Reorder origin check before token compare</span></div>
+            <div class="todo done"><span class="bx"></span><span>Return 403 on origin failure</span></div>
+            <div class="todo"><span class="bx"></span><span>Add regression test — remote origin + valid token</span></div>
+            <div class="gk" style="padding:10px 4px 2px">git</div>
+            <div class="kv" style="padding:2px 4px"><span class="k">BRANCH</span><span class="v" style="font-size:11px">fix/auth-gate-order</span></div>
+            <div class="kv" style="padding:2px 4px"><span class="k">PR</span><span class="v" style="font-size:11px">#142 · open</span></div>
+          </div>
+          <div class="transcript"><div class="tcol">
+            <div class="msg-user" data-ts="14:32">The auth gate needs the loopback-origin check before it hits the token compare — right now a remote origin with a stolen token still passes. Can you reorder and add an origin allowlist?</div>
+            <div class="msg-ai" data-ts="14:33">
+              <div class="who">CLAUDE-CODE</div>
+              <p>Good catch — the <code>Origin</code> check currently runs <strong>after</strong> the bearer compare, so a valid token from a non-loopback origin is accepted. I'll reorder so the gate fails closed on origin first, then compares the token.</p>
+              <p>Plan for <code>auth.rs</code>:</p>
+              <ol>
+                <li>Parse <code>Origin</code> / <code>Host</code> and reject anything not in the loopback allowlist (<code>127.0.0.1</code>, <code>::1</code>, configured remote bind).</li>
+                <li>Only then constant-time compare the per-install token.</li>
+                <li>Return <code>403</code> (not <code>401</code>) on origin failure so the client doesn't retry with creds.</li>
+              </ol>
+            </div>
+            <div class="toolcard">
+              <div class="tc-head"><span class="st">✓</span><span class="nm">patch · crates/control-plane/src/auth.rs</span><span class="sp"></span>%chevron-down-sm%</div>
+              <div class="tc-body"><div class="tc-out">@@ -41,9 +41,14 @@ pub fn gate(req: &amp;Request) -&gt; Result&lt;(), Deny&gt; {
++    // fail closed on origin BEFORE token compare
++    if !origin_allowed(req) {
++        return Err(Deny::Origin);
++    }
+     if !token_eq(req.token(), &amp;self.install_token) {
+         return Err(Deny::Token);
+     }</div></div>
+            </div>
+            <div class="msg-ai" data-ts="14:35">
+              <div class="who">CLAUDE-CODE</div>
+              <p>Done. Origin now gates first and returns <strong>403</strong>; the token compare stays constant-time. Typecheck is clean — want me to add a regression test for the remote-origin + valid-token case?</p>
+            </div>
+            <div class="msg-user" data-ts="14:36">Yes — add the regression test and run the full suite.</div>
+            <div class="msg-ai" data-ts="14:37">
+              <div class="who">CLAUDE-CODE</div>
+              <p>Added <code>remote_origin_valid_token_denied</code> to <code>auth_test.rs</code> — full suite passes, 43/43. PR <strong>#142</strong> updated.</p>
+            </div>
+          </div></div>
+
+          <div class="composer">
+            <div class="obsbanner" id="obsbanner" style="display:none">%alert-sm%<span style="flex:1">This is an observed hermes-studio session — read-only. Fork it to continue from Olympus.</span><button class="btn pri" id="forkbtn">Fork to continue</button></div>
+            <div class="comp-box">
+              <textarea rows="1" placeholder="Type a message…"></textarea>
+              <div class="comp-bar">
+                <div class="comp-l">
+                  <div class="plusmenu-wrap">
+                    <button class="icobtn" id="plusbtn" title="Insert">%plus%</button>
+                    <div class="menu" id="plusmenu">
+                      <button class="mi">%paperclip%<span>Add attachment</span></button>
+                      <button class="mi">%at%<span>Insert @ mention</span></button>
+                      <button class="mi">%hash%<span>Insert # session</span></button>
+                      <button class="mi">%slash%<span>Insert / command</span></button>
+                    </div>
+                  </div>
+                  <button class="modelpill" title="Mode">%shield%<span class="nm">Full access</span>%chevron-down-sm%</button>
+                </div>
+                <div class="comp-r">
+                  <div class="ctx-wrap">
+                    <button class="ctxbtn"><svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" stroke="var(--border-strong)" stroke-width="2" fill="none"></circle><circle cx="8" cy="8" r="6.5" stroke="var(--silver)" stroke-width="2" fill="none" stroke-dasharray="9.7 31" transform="rotate(-90 8 8)"></circle></svg></button>
+                    <div class="ctxpop">
+                      <div class="grow"><span style="font-size:12px;font-weight:600;color:var(--text)">Context window</span><span class="mono" style="font-size:10.5px;color:var(--dim)">236.7k / 1M · 23.7%</span></div>
+                      <div class="cp-bar"><i style="width:23.7%"></i></div>
+                      <div class="cp-row"><span class="d"></span><span>Messages</span><span class="v">95.5%</span></div>
+                      <div class="cp-row"><span class="d" style="opacity:.85"></span><span>System tools</span><span class="v">3.5%</span></div>
+                      <div class="cp-row"><span class="d" style="opacity:.7"></span><span>MCP tools</span><span class="v">0.8%</span></div>
+                      <div class="cp-row"><span class="d" style="opacity:.55"></span><span>System prompt</span><span class="v">0.2%</span></div>
+                      <div class="cp-row"><span class="d" style="opacity:.4"></span><span>Skills</span><span class="v">0.1%</span></div>
+                      <div class="cp-row"><span class="d" style="opacity:.25"></span><span>Meta context</span><span class="v">0%</span></div>
+                      <div class="cp-div"></div>
+                      <div class="cp-row"><span>Average cache hit rate</span><span class="v">99%</span></div>
+                      <div class="cp-div"></div>
+                      <div class="grow"><span class="gk">usage · claude-code</span><span class="mono" style="font-size:9px;color:var(--faint)">resets Jul 11</span></div>
+                      <div class="cp-row"><span>5 hours</span><span class="v">100%</span></div>
+                      <div class="cp-bar"><i style="width:100%"></i></div>
+                      <div class="cp-row"><span>Tool calls</span><span class="v">99%</span></div>
+                      <div class="cp-bar"><i style="width:99%"></i></div>
+                    </div>
+                  </div>
+                  <div class="selwrap">
+                    <button class="modelpill" id="combopill" title="Agent · model · thinking">%bot-xs%<span class="nm" id="pillagent">claude-code</span><span class="psep"></span><span class="nm" id="pillmodel">sonnet-4.5</span><span class="psep"></span>%cpu%<span class="nm" id="pillthink">Max</span>%chevron-down-sm%</button>
+                    <div class="menu selpop" id="selpop">
+                      <div class="gk" style="padding:5px 8px 2px">agent</div>
+                      <button class="mi sel-agent on" data-agent="claude-code"><span>claude-code</span><span class="mk2">✓</span></button>
+                      <button class="mi sel-agent" data-agent="hermes"><span>hermes</span><span class="mk2">✓</span></button>
+                      <button class="mi sel-agent" data-agent="codex"><span>codex</span><span class="mk2">✓</span></button>
+                      <div class="cp-div"></div>
+                      <div class="gk" style="padding:5px 8px 2px">model</div>
+                      <div id="modellist" style="display:flex;flex-direction:column"></div>
+                      <div class="cp-div"></div>
+                      <div class="gk" style="padding:5px 8px 2px">thinking</div>
+                      <div style="display:flex;align-items:center;gap:10px;padding:6px 10px 8px">
+                        <input type="range" id="thinkrange" min="0" max="3" value="3" style="flex:1">
+                        <span class="mono" id="thinklabel" style="font-size:10px;color:var(--text);width:28px;text-align:right">Max</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button class="send">%arrow-up%</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rz-y" data-rz="bpanel"></div>
+          <div class="bpanel" id="bpanel">
+            <div class="bp-tabs">
+              <div class="bp-tablist" id="bptabs">
+                <button class="bp-tab on" data-bp="terminal">Terminal</button>
+                <button class="bp-tab" data-bp="output">Output</button>
+                <button class="bp-tab" data-bp="debug">Debug</button>
+              </div>
+              <div class="bp-right">
+                <button class="icobtn" title="Clear">%trash%</button>
+                <button class="icobtn" data-x="bottom" title="Close panel">%chevron-down%</button>
+              </div>
+            </div>
+            <div class="bp-body">
+              <div class="ln g">$ cargo test -p control-plane auth::</div>
+              <div class="ln d">   Compiling control-plane v0.3.1</div>
+              <div class="ln g">    Finished test [unoptimized + debuginfo]</div>
+              <div class="ln d">running 6 tests ...... ok</div>
+              <div class="ln a">warning: unused import: `std::env` → auth.rs:3</div>
+              <div class="ln g">test result: ok. 6 passed; 0 failed</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rz-x" data-rz="rsidebar"></div>
+        <!-- Right sidebar -->
+        <aside class="rsidebar" id="rsidebar">
+          <div class="rs-tabbar" id="rstabs">
+            <button class="rs-tab on" data-rsv="overview" title="Overview">%layout-grid%</button>
+            <button class="rs-tab" data-rsv="outline" title="Outline">%list%</button>
+            <button class="rs-tab" data-rsv="settings" title="Settings">%settings-2%</button>
+            <button class="rs-tab" data-rsv="browser" title="Browser">%globe%</button>
+            <button class="rs-tab" data-rsv="diff" title="Diff">%git-compare%</button>
+            <button class="rs-tab" data-rsv="git" title="Git">%git-branch%</button>
+            <button class="rs-tab" data-rsv="ai" title="AI">%sparkles%</button>
+          </div>
+          <div class="rsv on" data-rsv="overview">
+          <div class="rs-sec">
+            <div class="kv"><span class="k">AGENT</span><span class="v" id="rsagent">claude-code</span></div>
+            <div class="kv"><span class="k">NODE</span><span class="v" id="rsnode">local · 127.0.0.1</span></div>
+            <div class="kv"><span class="k">MODEL</span><span class="v" id="rsmodel">sonnet-4.5</span></div>
+            <div class="kv"><span class="k">STARTED</span><span class="v" id="rsstarted">14:32:07</span></div>
+            <div class="kv"><span class="k">PROJECT</span><span class="v" id="rsproj">olympus-ui</span></div>
+          </div>
+          <div class="rs-sec">
+            <div class="stats">
+              <div class="stat"><span class="v">8,421</span><span class="l">TOKENS</span></div>
+              <div class="stat"><span class="v">$0.04</span><span class="l">COST</span></div>
+            </div>
+          </div>
+          <div class="arts">
+            <div class="art-head"><span class="l">ARTIFACTS</span><span class="l">2</span></div>
+            <div class="art">%file%<span class="nm">auth.rs</span><span class="tag" style="color:var(--green);background:var(--green-wash)">+14 −9</span></div>
+            <div class="art">%file%<span class="nm">auth_test.rs</span><span class="tag" style="color:var(--silver);background:var(--silver-wash)">new</span></div>
+          </div>
+          </div>
+          <div class="rsv" data-rsv="outline">
+            <div class="rs-sec" style="gap:4px">
+              <div class="gk" style="margin-bottom:4px">transcript</div>
+              <div class="ovl-it">The auth gate needs the loopback-origin check…</div>
+              <div class="ovl-it" style="padding-left:18px">↳ plan · reorder gate, allowlist, 403</div>
+              <div class="ovl-it" style="padding-left:18px">↳ patch · auth.rs</div>
+              <div class="ovl-it">Yes — add the regression test…</div>
+              <div class="ovl-it" style="padding-left:18px">↳ test · 43/43 pass · PR #142</div>
+            </div>
+          </div>
+          <div class="rsv" data-rsv="settings">
+            <div class="rs-sec">
+              <div class="gk">session settings</div>
+              <div class="grow"><span style="font-size:12px">Auto-approve tools</span><span class="gsw on" data-sw=""><i></i></span></div>
+              <div class="grow"><span style="font-size:12px">Extended thinking</span><span class="gsw" data-sw=""><i></i></span></div>
+              <div class="grow"><span style="font-size:12px">Notify on finish</span><span class="gsw on" data-sw=""><i></i></span></div>
+            </div>
+            <div class="rs-sec">
+              <div class="kv"><span class="k">CONTEXT</span><span class="v">64k / 200k</span></div>
+              <div class="kv"><span class="k">MAX SLOTS</span><span class="v">2</span></div>
+            </div>
+          </div>
+          <div class="rsv" data-rsv="browser">
+            <div class="rs-sec">
+              <div style="display:flex;align-items:center;gap:7px;padding:4px 9px;background:var(--elev);border:1px solid var(--border);border-radius:999px;font-family:var(--mono);font-size:10px;color:var(--dim)">%globe%<span>localhost:5173</span></div>
+              <div style="height:200px;border:1px solid var(--border);border-radius:4px;background:repeating-linear-gradient(45deg,var(--elev),var(--elev) 8px,var(--chrome) 8px,var(--chrome) 16px);display:flex;align-items:center;justify-content:center"><span class="mono" style="font-size:10px;color:var(--faint)">app preview</span></div>
+            </div>
+          </div>
+          <div class="rsv" data-rsv="diff">
+            <div class="rs-sec" style="gap:6px">
+              <div class="kv"><span class="k">auth.rs</span><span class="v" style="color:var(--green)">+14 −9</span></div>
+              <div style="background:var(--elev);border:1px solid var(--border);border-radius:4px;padding:8px 10px">
+                <div class="diffln">@@ -41,9 +41,14 @@</div>
+                <div class="diffln add">+ if !origin_allowed(req) {</div>
+                <div class="diffln add">+     return Err(Deny::Origin);</div>
+                <div class="diffln add">+ }</div>
+                <div class="diffln">  if !token_eq(req.token(),</div>
+                <div class="diffln del">-     &amp;token) {</div>
+                <div class="diffln add">+     &amp;self.install_token) {</div>
+              </div>
+              <div class="kv"><span class="k">auth_test.rs</span><span class="v" style="color:var(--silver)">new</span></div>
+            </div>
+          </div>
+          <div class="rsv" data-rsv="git">
+            <div class="rs-sec">
+              <div class="kv"><span class="k">BRANCH</span><span class="v">fix/auth-gate-order</span></div>
+              <div class="kv"><span class="k">PR</span><span class="v">#142 · open</span></div>
+              <div class="kv"><span class="k">AHEAD</span><span class="v">2 commits</span></div>
+            </div>
+            <div class="rs-sec">
+              <div class="gk">changed files</div>
+              <div class="art">%file%<span class="nm">auth.rs</span><span class="tag" style="color:var(--green);background:var(--green-wash)">M</span></div>
+              <div class="art">%file%<span class="nm">auth_test.rs</span><span class="tag" style="color:var(--silver);background:var(--silver-wash)">A</span></div>
+              <div class="dr-actions" style="margin-top:4px"><button class="btn pri">Commit</button><button class="btn">Stash</button></div>
+            </div>
+          </div>
+          <div class="rsv" data-rsv="ai">
+            <div class="rs-sec">
+              <div class="gk">summary</div>
+              <div style="font-size:12px;line-height:1.6;color:var(--dim)">Security fix in <span class="mono" style="font-size:11px;color:var(--text)">auth.rs</span>: origin check now fails closed before the token compare, returning 403. Regression test added; suite green (43/43). PR #142 awaiting review.</div>
+              <div class="dr-actions"><button class="btn">Regenerate</button></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+      </section>
+
+      <section class="view" data-view="vaults">
+        <div class="dtabs" id="dtabs">
+          <div class="dtab on" data-doc="redb-compaction.md">%file-sm%<span>redb-compaction.md</span></div>
+          <div class="dtab" data-doc="acp-wire-spike.md">%file-sm%<span>acp-wire-spike.md</span></div>
+          <div class="dtab" data-doc="graph">%workflow%<span>Graph</span></div>
+          <button class="icobtn" id="vnew" style="align-self:center" title="New doc">%plus%</button>
+        </div>
+        <div class="gv-wrap"><div class="gv-body">
+          <div class="grow" style="max-width:680px;margin-bottom:12px" id="veditbar"><span class="gk" id="vnotename">redb-compaction.md</span><span style="display:flex;gap:6px"><button class="btn" id="vedit">Edit</button><button class="btn" id="vrename">Rename</button><button class="btn" id="vdelete">Delete</button></span></div>
+          <textarea id="vsrc" class="mono" style="display:none;width:100%;max-width:680px;height:420px;background:var(--elev);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);font-size:12px;line-height:1.7;padding:12px 14px;outline:none;resize:vertical"></textarea>
+          <div class="md" id="mdbody"></div></div>
+        <aside class="rsidebar" style="width:250px">
+          <div class="rs-sec">
+            <div class="gk" style="margin-bottom:2px">vault agent</div>
+            <div class="kv"><span class="k">AGENT</span><span class="v">claude-code</span></div>
+            <div class="kv"><span class="k">MODEL</span><span class="v">sonnet-4.5</span></div>
+            <div class="kv"><span class="k">SCOPE</span><span class="v">engineering</span></div>
+          </div>
+          <div class="rs-sec">
+            <div class="gk">recent activity</div>
+            <div class="mono" style="font-size:10.5px;color:var(--dim);display:flex;flex-direction:column;gap:5px"><span>14:20 · updated redb-compaction.md</span><span>13:44 · linked acp-wire-spike.md</span><span>Yesterday · created zstd-tuning.md</span></div>
+          </div>
+          <div class="rs-sec">
+            <div class="gk">related notes</div>
+            <div class="art">%file%<span class="nm">event-log-design.md</span></div>
+            <div class="art">%file%<span class="nm">zstd-tuning.md</span></div>
+          </div>
+          <div style="margin-top:auto;padding:10px">
+            <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--elev);border:1px solid var(--border-strong);border-radius:6px;color:var(--faint);font-size:12px">%sparkles%<span>Ask about this vault…</span></div>
+          </div>
+        </aside></div>
+      </section>
+
+      <section class="view" data-view="projects">
+        <div class="gv-head"><span class="gv-title">Projects</span><span class="gv-sub">· board · default</span><div class="gv-actions"><button class="btn" id="pjconf">Add column</button><button class="btn pri" id="pjnew">New card</button></div></div>
+        <div class="gv-wrap"><div class="gv-body"><div id="board" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:start">
+          <div class="col" data-col="backlog"><div class="col-h"><span>backlog</span><span class="colct">2</span></div><div class="col-b"><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">Wire /api/nodes to heartbeat</div><div class="grow"><span class="gk">unassigned</span><span class="gtag">todo</span></div></div><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">Payment Go — balance module</div><div class="grow"><span class="gk">unassigned</span><span class="gtag">todo</span></div></div></div></div>
+          <div class="col" data-col="active"><div class="col-h"><span>active</span><span class="colct">2</span></div><div class="col-b"><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">Refactor auth gate order</div><div class="grow"><span class="gk">claude-code</span><span class="gtag ok">run</span></div></div><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">Redb compaction + zstd</div><div class="grow"><span class="gk">hermes</span><span class="gtag ok">run</span></div></div></div></div>
+          <div class="col" data-col="review"><div class="col-h"><span>review</span><span class="colct">1</span></div><div class="col-b"><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">WS reconnect backoff jitter</div><div class="grow"><span class="gk">codex</span><span class="gtag warn">review</span></div></div></div></div>
+          <div class="col" data-col="done"><div class="col-h"><span>done</span><span class="colct">2</span></div><div class="col-b"><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">Tantivy index rebuild path</div><div class="grow"><span class="gk">hermes</span><span class="gtag">done</span></div></div><div class="kcard"><div style="font-size:12.5px;margin-bottom:6px">ACP wire spike capture</div><div class="grow"><span class="gk">codex</span><span class="gtag">done</span></div></div></div></div>
+        </div></div>
+        <aside class="drawer" id="pjdrawer">
+          <div class="dr-head"><span class="dr-title" id="pjdt">Card</span><button class="icobtn" data-dr="pjdrawer" title="Close">%chevron-right%</button></div>
+          <div class="dr-body">
+            <div class="kv"><span class="k">STATUS</span><span class="v" id="pjst">run</span></div>
+            <div class="kv"><span class="k">AGENT</span><span class="v" id="pjag">claude-code</span></div>
+            <div class="kv"><span class="k">BOARD</span><span class="v">default</span></div>
+            <div class="kv"><span class="k">UPDATED</span><span class="v">14:32</span></div>
+            <div><div class="gk" style="margin-bottom:6px">description</div><div style="font-size:12px;line-height:1.6;color:var(--dim)">Reorder the auth gate so origin fails closed before the token compare; add a loopback allowlist and a regression test.</div></div>
+            <div><div class="gk" style="margin-bottom:6px">activity</div><div class="mono" style="font-size:10.5px;color:var(--faint);display:flex;flex-direction:column;gap:4px"><span>14:32 · claimed by claude-code</span><span>13:58 · moved to active</span><span>13:41 · created</span></div></div>
+            <div class="dr-actions"><button class="btn pri">Complete</button><button class="btn">Block</button><button class="btn">Reassign</button><button class="btn">Archive</button></div>
+          </div>
+        </aside>
+        </div>
+      </section>
+
+      <section class="view" data-view="workflow">
+        <div class="gv-head"><span class="gv-title">Workflow</span><span class="gv-sub">· runs</span></div>
+        <div class="gv-wrap"><div class="gv-body">
+          <div class="gcard" style="margin-bottom:12px"><div class="grow" style="margin-bottom:4px"><span class="gtitle" style="font-size:13px">Code review loop</span><span class="gtag ok">running</span></div><div style="font-size:12px;color:var(--dim);margin-bottom:14px">Coder → reviewer → validator → merge · run_cr_1042</div><div style="display:flex;align-items:center"><div class="step done"><div class="gk">01</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Coder</div><div class="gk">done</div></div><div style="width:18px;height:1px;background:var(--border-strong)"></div><div class="step done"><div class="gk">02</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Reviewer</div><div class="gk">done</div></div><div style="width:18px;height:1px;background:var(--border-strong)"></div><div class="step run"><div class="gk">03</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Validator</div><div class="gk">running</div></div><div style="width:18px;height:1px;background:var(--border-strong)"></div><div class="step pend"><div class="gk">04</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Merge</div><div class="gk">pending</div></div></div></div>
+          <div class="gcard"><div class="grow" style="margin-bottom:4px"><span class="gtitle" style="font-size:13px">Incident triage</span><span class="gtag">done</span></div><div style="font-size:12px;color:var(--dim);margin-bottom:14px">Detect → classify → escalate → handoff · run_it_0417</div><div style="display:flex;align-items:center"><div class="step done"><div class="gk">01</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Detect</div><div class="gk">done</div></div><div style="width:18px;height:1px;background:var(--border-strong)"></div><div class="step done"><div class="gk">02</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Classify</div><div class="gk">done</div></div><div style="width:18px;height:1px;background:var(--border-strong)"></div><div class="step done"><div class="gk">03</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Escalate</div><div class="gk">done</div></div><div style="width:18px;height:1px;background:var(--border-strong)"></div><div class="step done"><div class="gk">04</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px">Handoff</div><div class="gk">done</div></div></div></div>
+        </div>
+        <aside class="drawer" id="wfdrawer">
+          <div class="dr-head"><span class="dr-title" id="wfdt">Step</span><button class="icobtn" data-dr="wfdrawer" title="Close">%chevron-right%</button></div>
+          <div class="dr-body">
+            <div class="kv"><span class="k">AGENT</span><span class="v">validator-1</span></div>
+            <div class="kv"><span class="k">STARTED</span><span class="v">14:29:41</span></div>
+            <div class="kv"><span class="k">DURATION</span><span class="v">2m 18s</span></div>
+            <div class="kv"><span class="k">RUN</span><span class="v">run_cr_1042</span></div>
+            <div><div class="gk" style="margin-bottom:6px">log</div><div class="mono" style="font-size:10.5px;line-height:1.6;color:var(--dim);white-space:pre-wrap">$ cargo test --workspace
+   Compiling control-plane v0.3.1
+running 42 tests ........ ok
+checking diff coverage … 87%</div></div>
+            <div class="dr-actions"><button class="btn pri">Retry step</button><button class="btn">Skip</button><button class="btn">Cancel run</button></div>
+          </div>
+        </aside>
+        </div>
+      </section>
+
+      <section class="view" data-view="plugins">
+        <div class="gv-head"><span class="gv-title">Plugins</span><span class="gv-sub">· enable tools &amp; inspector tabs</span></div>
+        <div class="gv-body"><div class="plv on" data-plv="installed"><div class="ggrid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr))">
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Terminal</div><div style="font-size:11px;color:var(--faint);margin-top:2px">Live command output well.</div></div><div class="gsw on" data-sw=""><i></i></div></div></div>
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Diff viewer</div><div style="font-size:11px;color:var(--faint);margin-top:2px">Inline unified diffs in the inspector.</div></div><div class="gsw on" data-sw=""><i></i></div></div></div>
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Browser preview</div><div style="font-size:11px;color:var(--faint);margin-top:2px">Render localhost in a docked tab.</div></div><div class="gsw" data-sw=""><i></i></div></div></div>
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Git</div><div style="font-size:11px;color:var(--faint);margin-top:2px">Branch, diff, and commit surface.</div></div><div class="gsw on" data-sw=""><i></i></div></div></div>
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">AI outline</div><div style="font-size:11px;color:var(--faint);margin-top:2px">Summarize the active session.</div></div><div class="gsw on" data-sw=""><i></i></div></div></div>
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Fleet map</div><div style="font-size:11px;color:var(--faint);margin-top:2px">Node topology visualization.</div></div><div class="gsw" data-sw=""><i></i></div></div></div>
+        </div></div>
+        <div class="plv" data-plv="market"><div class="ggrid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr))">
+          <div class="gcard"><div class="grow" style="margin-bottom:8px"><span class="gtitle" style="font-size:13px">Sentry bridge</span><span class="gk">v1.2</span></div><div style="font-size:11px;color:var(--faint);margin-bottom:12px">Pipe agent exceptions into a Sentry project.</div><div class="grow"><span class="gk">4.2k installs</span><button class="btn pri">Install</button></div></div>
+          <div class="gcard"><div class="grow" style="margin-bottom:8px"><span class="gtitle" style="font-size:13px">Postgres inspector</span><span class="gk">v0.9</span></div><div style="font-size:11px;color:var(--faint);margin-bottom:12px">Query and browse a database in a docked tab.</div><div class="grow"><span class="gk">1.8k installs</span><button class="btn pri">Install</button></div></div>
+          <div class="gcard"><div class="grow" style="margin-bottom:8px"><span class="gtitle" style="font-size:13px">Slack notify</span><span class="gk">v2.0</span></div><div style="font-size:11px;color:var(--faint);margin-bottom:12px">Post session events to a Slack channel.</div><div class="grow"><span class="gk">3.1k installs</span><button class="btn pri">Install</button></div></div>
+          <div class="gcard"><div class="grow" style="margin-bottom:8px"><span class="gtitle" style="font-size:13px">Cost guard</span><span class="gk">v1.0</span></div><div style="font-size:11px;color:var(--faint);margin-bottom:12px">Pause agents when spend crosses a threshold.</div><div class="grow"><span class="gk">940 installs</span><button class="btn pri">Install</button></div></div>
+        </div></div>
+        <div class="plv" data-plv="updates"><div style="max-width:560px;display:flex;flex-direction:column;gap:8px">
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Diff viewer</div><div style="font-size:11px;color:var(--faint);margin-top:2px">1.4.0 → 1.5.0 · adds side-by-side mode</div></div><button class="btn">Update</button></div></div>
+          <div class="gcard"><div class="grow"><div><div class="gtitle" style="font-size:13px">Git</div><div style="font-size:11px;color:var(--faint);margin-top:2px">2.0.1 → 2.0.2 · fixes stale branch list</div></div><button class="btn">Update</button></div></div>
+        </div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="fleet">
+        <div class="gv-head"><span class="gv-title">Fleet</span><span class="gv-sub">· nodes</span><div class="gv-actions"><button class="btn pri" id="flnew2">Add node</button></div></div>
+        <div class="gv-wrap"><div class="gv-body"><div class="ggrid" id="flgrid" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr))">
+          <div class="gcard click" data-node="local"><div class="grow" style="margin-bottom:10px"><span class="gtitle" style="font-size:13px;font-family:var(--mono)">local</span><span class="gtag ok">online</span></div><div class="grow" style="font-size:12px;color:var(--dim);margin-bottom:6px"><span>slots</span><span class="slotv">2 / 4</span></div><div class="gbar"><i style="width:50%"></i></div><div class="grow" style="font-size:11px;color:var(--faint);margin-top:9px"><span>heartbeat</span><span class="hbv">18s ago</span></div></div>
+          <div class="gcard click" data-node="gpu-box"><div class="grow" style="margin-bottom:10px"><span class="gtitle" style="font-size:13px;font-family:var(--mono)">gpu-box</span><span class="gtag warn">draining</span></div><div class="grow" style="font-size:12px;color:var(--dim);margin-bottom:6px"><span>slots</span><span class="slotv">5 / 6</span></div><div class="gbar"><i style="width:83%;background:var(--amber)"></i></div><div class="grow" style="font-size:11px;color:var(--faint);margin-top:9px"><span>heartbeat</span><span class="hbv">2m ago</span></div></div>
+          <div class="gcard click" data-node="edge-mini"><div class="grow" style="margin-bottom:10px"><span class="gtitle" style="font-size:13px;font-family:var(--mono)">edge-mini</span><span class="gtag err">offline</span></div><div class="grow" style="font-size:12px;color:var(--dim);margin-bottom:6px"><span>slots</span><span class="slotv">0 / 2</span></div><div class="gbar"><i style="width:0%"></i></div><div class="grow" style="font-size:11px;color:var(--faint);margin-top:9px"><span>heartbeat</span><span class="hbv">90m ago</span></div></div>
+        </div></div>
+        <aside class="drawer" id="fldrawer">
+          <div class="dr-head"><span class="dr-title" id="fldt">Node</span><button class="icobtn" data-dr="fldrawer" title="Close">%chevron-right%</button></div>
+          <div class="dr-body">
+            <div class="kv"><span class="k">STATUS</span><span class="v" id="flst">online</span></div>
+            <div class="kv"><span class="k">BIND</span><span class="v" id="flbind">127.0.0.1:8787</span></div>
+            <div class="kv"><span class="k">HEARTBEAT</span><span class="v" id="flhb">18s ago</span></div>
+            <div class="grow"><span class="k mono" style="font-size:10px;letter-spacing:.5px;color:var(--faint)">SLOTS</span><span style="display:flex;align-items:center;gap:8px"><button class="btn" id="flsm" style="padding:2px 8px">−</button><span class="v mono" id="flslots" style="font-size:12px">2 / 4</span><button class="btn" id="flsp" style="padding:2px 8px">+</button></span></div>
+            <div id="flenvoy" style="display:none"><div class="gk" style="margin-bottom:6px">envoy setup · run on the node</div>
+              <div class="cmdline" id="flcmd">curl -sSL https://get.olympus.dev/envoy | sh</div>
+              <div class="dr-actions" style="margin-top:8px"><button class="btn" id="flcopy">Copy command</button></div>
+              <div class="mono" style="font-size:10px;color:var(--faint);margin-top:8px" id="flwait">waiting for envoy handshake…</div>
+            </div>
+            <div id="flenvoyinfo"><div class="gk" style="margin-bottom:6px">envoy</div>
+              <div class="kv"><span class="k">VERSION</span><span class="v" id="flver">v0.3.1</span></div>
+              <div class="kv" style="margin-top:6px"><span class="k">ADAPTER</span><span class="v" id="flad">hermes-acp</span></div>
+              <div class="kv" style="margin-top:6px"><span class="k">TOKEN</span><span class="v">••••••••4f2a</span></div>
+            </div>
+            <div><div class="gk" style="margin-bottom:6px">agents on node</div><div class="mono" id="flagents" style="font-size:11px;color:var(--dim);display:flex;flex-direction:column;gap:4px"><span>claude-code · running</span><span>codex · idle</span></div></div>
+            <div class="dr-actions"><button class="btn" id="fldrain">Drain</button><button class="btn" id="flrestart">Restart envoy</button><button class="btn" id="flremove">Remove</button></div>
+          </div>
+        </aside>
+        </div>
+      </section>
+
+      <section class="view" data-view="settings">
+        <div class="gv-head"><span class="gv-title">Settings</span></div>
+        <div class="gv-body"><div style="max-width:560px">
+          <div class="stv on" data-stv="appearance">
+            <div class="gcard"><div class="gk" style="margin-bottom:12px">appearance</div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Theme</span><span style="display:flex;gap:5px"><span class="gtag ok" style="color:var(--silver);background:var(--silver-wash);border-color:var(--silver-line)">Obsidian</span><span class="gtag">Daybreak</span></span></div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Accent</span><span style="width:18px;height:18px;border-radius:4px;background:var(--silver);outline:2px solid var(--silver-line);outline-offset:2px"></span></div>
+              <div class="grow"><span style="font-size:13px">Compact density</span><span class="gsw" data-sw=""><i></i></span></div>
+            </div>
+            <div class="gcard"><div class="gk" style="margin-bottom:12px">account</div><div class="grow"><span style="font-size:13px">Organization</span><span class="mono" style="font-size:12px;color:var(--text)">Acme</span></div></div>
+          </div>
+          <div class="stv" data-stv="runtime">
+            <div class="gcard"><div class="gk" style="margin-bottom:12px">runtime</div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Adapter</span><span class="gtag">hermes-acp</span></div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Bind</span><span class="mono" style="font-size:12px;color:var(--text)">127.0.0.1:8787</span></div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Runtime token</span><span style="display:flex;align-items:center;gap:8px"><span class="mono" style="font-size:12px;color:var(--faint)">••••••••4f2a</span><button class="btn">Rotate</button></span></div>
+              <div class="grow"><span style="font-size:13px">Auto-restart on crash</span><span class="gsw on" data-sw=""><i></i></span></div>
+            </div>
+          </div>
+          <div class="stv" data-stv="agents">
+            <div class="gcard"><div class="gk" style="margin-bottom:12px">model routing</div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Default</span><span class="gtag">sonnet-4.5</span></div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Review</span><span class="gtag">gpt55</span></div>
+              <div class="grow"><span style="font-size:13px">Background</span><span class="gtag">haiku-4</span></div>
+            </div>
+            <div class="gcard"><div class="gk" style="margin-bottom:12px">defaults</div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Max slots per agent</span><span class="mono" style="font-size:12px;color:var(--text)">2</span></div>
+              <div class="grow"><span style="font-size:13px">Allow subagents</span><span class="gsw on" data-sw=""><i></i></span></div>
+            </div>
+          </div>
+          <div class="stv" data-stv="usage">
+            <div class="gcard"><div class="gk" style="margin-bottom:12px">limits</div>
+              <div class="grow" style="margin-bottom:8px"><span style="font-size:13px">Monthly spend limit</span><span class="mono" style="font-size:12px;color:var(--text)">$50.00</span></div>
+              <div class="gbar" style="margin-bottom:14px"><i style="width:55%"></i></div>
+              <div class="grow" style="margin-bottom:12px"><span style="font-size:13px">Alert at</span><span class="gtag">80%</span></div>
+              <div class="grow"><span style="font-size:13px">Pause agents at limit</span><span class="gsw on" data-sw=""><i></i></span></div>
+            </div>
+          </div>
+        </div></div>
+      </section>
+
+      <section class="view" data-view="agents">
+        <div class="gv-head"><span class="gv-title">Agents</span><span class="gv-sub">· configured per node</span><div class="gv-actions"><button class="icobtn" title="Add agent">%plus%</button></div></div>
+        <div class="gv-body"><div style="max-width:680px;display:flex;flex-direction:column;gap:20px">
+          <div>
+            <div class="nodehead"><span style="width:7px;height:7px;border-radius:999px;background:var(--green)"></span><span class="mono" style="font-size:12px;font-weight:600">local</span><span class="gk">127.0.0.1 · 2 agents</span></div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div class="agrow">%bot%<span class="nm">claude-code</span><span class="gtag">acp</span><span class="sp"></span><span class="gk">sonnet-4.5</span><span class="gtag ok">running</span></div>
+              <div class="agrow">%bot%<span class="nm">codex</span><span class="gtag">cli</span><span class="sp"></span><span class="gk">gpt55</span><span class="gtag">idle</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="nodehead"><span style="width:7px;height:7px;border-radius:999px;background:var(--amber)"></span><span class="mono" style="font-size:12px;font-weight:600">gpu-box</span><span class="gk">10.0.4.2 · 2 agents</span></div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div class="agrow">%bot%<span class="nm">hermes</span><span class="gtag">acp</span><span class="sp"></span><span class="gk">hermes-70b</span><span class="gtag warn">draining</span></div>
+              <div class="agrow">%bot%<span class="nm">default</span><span class="gtag">cli</span><span class="sp"></span><span class="gk">gpt55</span><span class="gtag">idle</span></div>
+            </div>
+          </div>
+          <div style="opacity:.6">
+            <div class="nodehead"><span style="width:7px;height:7px;border-radius:999px;background:var(--red)"></span><span class="mono" style="font-size:12px;font-weight:600">edge-mini</span><span class="gk">10.0.4.7 · 1 agent</span></div>
+            <div class="agrow">%bot%<span class="nm">default</span><span class="gtag">cli</span><span class="sp"></span><span class="gk">haiku-4</span><span class="gtag err">unreachable</span></div>
+          </div>
+        </div></div>
+      </section>
+
+      <section class="view" data-view="usage">
+        <div class="gv-head"><span class="gv-title">Usage</span><span class="gv-sub">· tokens &amp; cost</span></div>
+        <div class="gv-body"><div style="max-width:680px;display:flex;flex-direction:column;gap:14px">
+          <div class="stats" style="gap:10px">
+            <div class="stat"><span class="v">412.6k</span><span class="l">TOKENS TODAY</span></div>
+            <div class="stat"><span class="v">$27.48</span><span class="l">SPEND · JUL</span></div>
+            <div class="stat"><span class="v">3</span><span class="l">ACTIVE SESSIONS</span></div>
+          </div>
+          <div class="gk">by model</div>
+          <div class="ubar-row"><div class="grow"><span class="mono" style="font-size:12px">sonnet-4.5</span><span class="gk">182.4k tok · $14.02</span></div><div class="gbar"><i style="width:64%"></i></div></div>
+          <div class="ubar-row"><div class="grow"><span class="mono" style="font-size:12px">gpt55</span><span class="gk">96.1k tok · $9.11</span></div><div class="gbar"><i style="width:34%"></i></div></div>
+          <div class="ubar-row"><div class="grow"><span class="mono" style="font-size:12px">haiku-4</span><span class="gk">134.1k tok · $4.35</span></div><div class="gbar"><i style="width:47%"></i></div></div>
+          <div class="gk">subscription</div>
+          <div class="ubar-row"><div class="grow"><span style="font-size:12.5px">Monthly limit</span><span class="gk">$27.48 / $50.00 · resets Jul 31</span></div><div class="gbar"><i style="width:55%"></i></div></div>
+        </div></div>
+      </section>
+
+      <!-- CONCEPT: Workbench (IDE model) -->
+      <section class="view" data-view="workbench">
+        <div class="dtabs" id="wbtabs">
+          <div class="dtab on" data-wb="auth.rs">%file-sm%<span>auth.rs</span><span class="mono" style="font-size:9px;color:var(--green)">M</span></div>
+          <div class="dtab" data-wb="auth_test.rs">%file-sm%<span>auth_test.rs</span><span class="mono" style="font-size:9px;color:var(--silver)">A</span></div>
+          <div class="dtab" data-wb="agent">%bot%<span>Refactor auth</span><span class="spin" id="wbspin" style="width:7px;height:7px"></span></div>
+          <button class="icobtn" style="align-self:center" title="New tab">%plus%</button>
+        </div>
+        <div class="gv-wrap">
+          <div class="gv-body" style="padding:0;display:flex;flex-direction:column">
+            <div style="flex:1;overflow-y:auto;padding:14px 18px">
+              <div class="wbf on" data-wbf="auth.rs">
+              <div class="grow" style="margin-bottom:10px;max-width:760px"><span class="gk">crates/control-plane/src/auth.rs · staged changes</span><span class="gtag ok" id="wbst-auth">agent editing</span></div>
+              <div style="background:var(--elev);border:1px solid var(--border);border-radius:4px;padding:10px 12px;max-width:760px">
+                <div class="diffln">@@ -41,9 +41,14 @@ pub fn gate(req: &amp;Request) -&gt; Result&lt;(), Deny&gt; {</div>
+                <div class="diffln add">+    // fail closed on origin BEFORE token compare</div>
+                <div class="diffln add">+    if !origin_allowed(req) {</div>
+                <div class="diffln add">+        return Err(Deny::Origin);</div>
+                <div class="diffln add">+    }</div>
+                <div class="diffln">     if !token_eq(req.token(), &amp;self.install_token) {</div>
+                <div class="diffln">         return Err(Deny::Token);</div>
+                <div class="diffln">     }</div>
+                <div class="diffln del">-    if req.origin_is_loopback() { /* too late */ }</div>
+              </div>
+              <div class="dr-actions" style="margin-top:10px"><button class="btn pri wb-approve" data-file="auth.rs">Approve file</button><button class="btn wb-reject" data-file="auth.rs">Reject hunk</button><button class="btn">Open in editor</button></div>
+              </div>
+              <div class="wbf" data-wbf="auth_test.rs">
+              <div class="grow" style="margin-bottom:10px;max-width:760px"><span class="gk">crates/control-plane/src/auth_test.rs · new file</span><span class="gtag" style="color:var(--silver)" id="wbst-test">pending review</span></div>
+              <div style="background:var(--elev);border:1px solid var(--border);border-radius:4px;padding:10px 12px;max-width:760px">
+                <div class="diffln add">+#[test]</div>
+                <div class="diffln add">+fn remote_origin_valid_token_denied() {</div>
+                <div class="diffln add">+    let req = req_with(Origin::remote(), token_valid());</div>
+                <div class="diffln add">+    assert_eq!(gate(&amp;req), Err(Deny::Origin));</div>
+                <div class="diffln add">+}</div>
+              </div>
+              <div class="dr-actions" style="margin-top:10px"><button class="btn pri wb-approve" data-file="auth_test.rs">Approve file</button><button class="btn wb-reject" data-file="auth_test.rs">Reject file</button></div>
+              </div>
+              <div class="wbf" data-wbf="agent" style="max-width:680px">
+                <div class="gk" style="margin-bottom:10px">session · refactor auth · compact transcript</div>
+                <div class="bp-body" style="background:var(--elev);border:1px solid var(--border);border-radius:4px;padding:10px 12px;gap:4px">
+                  <div class="ln d">[14:32] user› reorder auth gate, add origin allowlist</div>
+                  <div class="ln d">[14:33] agent› plan · 3 steps · fail closed on origin first</div>
+                  <div class="ln d">[14:34] tool› patch auth.rs ✓ (+14 −9)</div>
+                  <div class="ln d">[14:36] user› add the regression test, run the suite</div>
+                  <div class="ln d">[14:37] tool› patch auth_test.rs ✓ · cargo test 43/43 ok</div>
+                  <div class="ln g" id="wbagentln">[14:37] agent› PR #142 updated. ▍</div>
+                </div>
+              </div>
+              <div class="wbf" data-wbf="empty" style="max-width:680px">
+                <div class="gk" style="margin-bottom:8px" id="wbemptyname">gate.rs</div>
+                <div style="font-size:12.5px;color:var(--faint)">No pending changes in this file.</div>
+              </div>
+            </div>
+            <div style="flex-shrink:0;height:120px;border-top:1px solid var(--border);display:flex;flex-direction:column">
+              <div class="bp-tabs"><div class="bp-tablist" id="wbterm"><button class="bp-tab on" data-wbt="term">Terminal</button><button class="bp-tab" data-wbt="prob">Problems</button></div></div>
+              <div class="bp-body wbt on" data-wbtp="term"><div class="ln g">$ cargo test -p control-plane auth::</div><div class="ln d">running 7 tests ....... ok</div><div class="ln g">test result: ok. 7 passed; 0 failed</div></div>
+              <div class="bp-body wbt" data-wbtp="prob" style="flex-direction:column"><div class="ln a">warning: unused import: `std::env` → auth.rs:3</div><div class="ln d">1 warning · 0 errors</div></div>
+            </div>
+          </div>
+          <aside class="rsidebar" style="width:260px">
+            <div class="rs-sec">
+              <div class="gk" style="margin-bottom:2px">agent · refactor auth</div>
+              <div class="kv"><span class="k">AGENT</span><span class="v">claude-code</span></div>
+              <div class="kv"><span class="k">STATE</span><span class="v" style="color:var(--green)" id="wbstate">editing auth.rs</span></div>
+              <div class="kv"><span class="k">SCOPE</span><span class="v">crates/control-plane · rw</span></div>
+            </div>
+            <div class="rs-sec" style="gap:4px">
+              <div class="gk" style="margin-bottom:4px">plan</div>
+              <div class="todo done"><span class="bx"></span><span>Reorder origin check</span></div>
+              <div class="todo done"><span class="bx"></span><span>Return 403 on origin failure</span></div>
+              <div class="todo"><span class="bx"></span><span>Regression test · remote origin</span></div>
+            </div>
+            <div class="rs-sec">
+              <div class="gk">staged changes</div>
+              <div class="art">%file%<span class="nm">auth.rs</span><span class="tag" id="wbart-auth" style="color:var(--green);background:var(--green-wash)">+14 −9</span></div>
+              <div class="art">%file%<span class="nm">auth_test.rs</span><span class="tag" id="wbart-test" style="color:var(--silver);background:var(--silver-wash)">new</span></div>
+              <div class="dr-actions" style="margin-top:4px"><button class="btn pri" id="wbapproveall">Approve all</button><button class="btn" id="wbstop">Stop agent</button></div>
+            </div>
+            <div style="margin-top:auto;padding:10px">
+              <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--elev);border:1px solid var(--border-strong);border-radius:6px;color:var(--faint);font-size:12px">%sparkles%<input id="wbmsg" style="flex:1;background:none;border:none;outline:none;color:var(--text);font-size:12px;font-family:var(--sans)" placeholder="Message the agent…"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- CONCEPT: Console (terminal-native) -->
+      <section class="view" data-view="console">
+        <div class="gv-head"><span class="gv-title">Console</span><span class="gv-sub">· fleet ps layout</span><div class="gv-actions"><button class="icobtn" title="Split pane">%layout-grid%</button></div></div>
+        <div style="flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg)">
+          <div style="flex:1;min-height:0;display:flex">
+            <div style="flex:1.3;min-width:0;border-right:1px solid var(--border);display:flex;flex-direction:column">
+              <div class="bp-body" style="flex:1" id="conout">
+                <div class="ln g">$ ol ps --watch</div>
+                <div class="ln d">ID    STATUS    NODE      MODEL       TOK/S   AGE</div>
+                <div class="ln"><span class="g">42</span><span class="d">    </span><span class="g">running</span><span class="d">   local     sonnet-4.5  38.2    22m · refactor auth</span></div>
+                <div class="ln d">41    idle      local     gpt55       —       1h  · document fleet api</div>
+                <div class="ln"><span class="d">40    </span><span class="a">blocked</span><span class="d">   gpu-box   hermes-70b  —       2h  · vault schema · awaiting approval</span></div>
+                <div class="ln d">39    done      local     sonnet-4.5  —       3h  · patch sessiondb fork</div>
+                <div class="ln g">$ ol attach 42</div>
+                <div class="ln d">[14:36] user› add the regression test and run the full suite</div>
+                <div class="ln d">[14:37] tool› patch auth_test.rs ✓</div>
+                <div class="ln d">[14:37] tool› cargo test → 43/43 ok</div>
+                <div class="ln g">[14:37] agent› PR #142 updated. ▍</div>
+              </div>
+              <div style="flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--border)">
+                <span class="mono" style="font-size:11.5px;color:var(--silver)">ol›</span>
+                <input id="conin" class="mono" style="flex:1;background:none;border:none;outline:none;color:var(--text);font-size:11.5px" placeholder="type a command — try `help`">
+                <span class="kbd">⏎</span>
+              </div>
+            </div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+              <div class="bp-body" style="flex:1;border-bottom:1px solid var(--border)">
+                <div class="ln g">$ ol trace 42</div>
+                <div class="ln d">✓ patch · auth.rs            +14 −9   1.2s</div>
+                <div class="ln d">✓ patch · auth_test.rs       new      0.8s</div>
+                <div class="ln d">✓ bash  · cargo test          43/43    41s</div>
+                <div class="ln d">◌ bash  · gh pr update         …        —</div>
+              </div>
+              <div class="bp-body" style="flex:1">
+                <div class="ln g">$ ol logs 40 --follow</div>
+                <div class="ln a">[13:20] approval required · write outside sandbox:</div>
+                <div class="ln a">        vaults/engineering/schema.sql</div>
+                <div class="ln d">[13:20] run `ol approve 40` or `ol deny 40`</div>
+              </div>
+            </div>
+          </div>
+          <div style="flex-shrink:0;height:24px;display:flex;align-items:center;gap:10px;padding:0 12px;border-top:1px solid var(--border);background:var(--chrome)" id="conwins">
+            <span class="mono conwin on" data-clay="ps" style="font-size:10px;color:var(--silver);cursor:pointer">[1] fleet ps</span>
+            <span class="mono conwin" data-clay="tail" style="font-size:10px;color:var(--faint);cursor:pointer">[2] session tail</span>
+            <span class="mono conwin" data-clay="diff" style="font-size:10px;color:var(--faint);cursor:pointer">[3] diff pager</span>
+            <span class="mono conwin" data-clay="usage" style="font-size:10px;color:var(--faint);cursor:pointer">[4] usage table</span>
+            <span class="sp" style="flex:1"></span>
+            <span class="mono" style="font-size:10px;color:var(--faint)">runtime live · binding locked</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- CONCEPT: Ledger (artifact-first archive) -->
+      <section class="view" data-view="ledger">
+        <div class="gv-head"><span class="gv-title">Ledger</span><span class="gv-sub">· append-only record of outcomes</span><div class="gv-actions"><span class="gtag">type: all</span><span class="gtag">project: all</span></div></div>
+        <div class="gv-wrap">
+          <div class="gv-body">
+            <div style="max-width:680px;position:relative;padding-left:26px">
+              <div style="position:absolute;left:8px;top:6px;bottom:6px;width:1px;background:var(--border)"></div>
+              <div class="gk" style="margin-bottom:10px">today</div>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="gcard click ledger-row" data-type="patch" data-lg="p142" style="position:relative"><span style="position:absolute;left:-22px;top:16px;width:7px;height:7px;border-radius:99px;background:var(--green);outline:3px solid var(--bg)"></span>
+                  <div class="grow" style="margin-bottom:6px"><span class="gtitle" style="font-size:13px">patch · auth gate reorder</span><span class="gtag ok">merged</span></div>
+                  <div style="font-size:11.5px;color:var(--dim);margin-bottom:8px">Origin check now fails closed before the token compare; 403 on origin failure. Regression test added.</div>
+                  <div class="mono" style="font-size:9.5px;color:var(--faint)">claude-code · sonnet-4.5 · local · olympus-ui@4f2a19c · PR #142 · 14:37</div>
+                </div>
+                <div class="gcard click ledger-row" data-type="approval" data-lg="appr40" style="position:relative"><span style="position:absolute;left:-22px;top:16px;width:7px;height:7px;border-radius:99px;background:var(--silver);outline:3px solid var(--bg)"></span>
+                  <div class="grow" style="margin-bottom:6px"><span class="gtitle" style="font-size:13px">approval · vault schema write</span><span class="gtag warn">pending</span></div>
+                  <div style="font-size:11.5px;color:var(--dim);margin-bottom:8px">Session 40 requests write outside sandbox: vaults/engineering/schema.sql.</div>
+                  <div class="mono" style="font-size:9.5px;color:var(--faint)">hermes · hermes-70b · gpu-box · awaiting operator · 13:20</div>
+                </div>
+                <div class="gcard click ledger-row" data-type="report" data-lg="redb" style="position:relative"><span style="position:absolute;left:-22px;top:16px;width:7px;height:7px;border-radius:99px;background:var(--silver);outline:3px solid var(--bg)"></span>
+                  <div class="grow" style="margin-bottom:6px"><span class="gtitle" style="font-size:13px">report · redb compaction results</span><span class="gtag">stored</span></div>
+                  <div style="font-size:11.5px;color:var(--dim);margin-bottom:8px">Cold segments 4.0× smaller at zstd-12; replay tax +22 ms. Full table in note.</div>
+                  <div class="mono" style="font-size:9.5px;color:var(--faint)">default · gpt55 · local · vault: engineering · 11:04</div>
+                </div>
+              </div>
+              <div class="gk" style="margin:16px 0 10px">yesterday</div>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="gcard click ledger-row" data-type="build" data-lg="build" style="position:relative;opacity:.8"><span style="position:absolute;left:-22px;top:16px;width:7px;height:7px;border-radius:99px;background:var(--faint);outline:3px solid var(--bg)"></span>
+                  <div class="grow" style="margin-bottom:6px"><span class="gtitle" style="font-size:13px">build · control-plane v0.3.1</span><span class="gtag">stored</span></div>
+                  <div class="mono" style="font-size:9.5px;color:var(--faint)">workflow run_cr_1041 · validator-1 · local · Jun 30</div>
+                </div>
+                <div class="gcard click ledger-row" data-type="failed" data-lg="fuzz" style="position:relative;opacity:.8"><span style="position:absolute;left:-22px;top:16px;width:7px;height:7px;border-radius:99px;background:var(--red);outline:3px solid var(--bg)"></span>
+                  <div class="grow" style="margin-bottom:6px"><span class="gtitle" style="font-size:13px">failed run · ws reconnect fuzz</span><span class="gtag err">failed</span></div>
+                  <div class="mono" style="font-size:9.5px;color:var(--faint)">codex · gpt55 · gpu-box · timeout after 12m · resumable</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <aside class="drawer on" id="lgdrawer" style="width:290px">
+            <div class="dr-head"><span class="dr-title" id="lgdt">patch · auth gate reorder</span><button class="icobtn" data-dr="lgdrawer" title="Close">%chevron-right%</button></div>
+            <div class="dr-body">
+              <div><div class="gk" style="margin-bottom:6px">provenance</div>
+                <div class="kv"><span class="k">PRODUCED BY</span><span class="v" id="lgprod">claude-code</span></div>
+                <div class="kv" style="margin-top:6px"><span class="k">SESSION</span><span class="v" id="lgsess">#42 · refactor auth</span></div>
+                <div class="kv" style="margin-top:6px"><span class="k">MODEL</span><span class="v" id="lgmodel">sonnet-4.5</span></div>
+                <div class="kv" style="margin-top:6px"><span class="k">NODE</span><span class="v" id="lgnode">local · 127.0.0.1</span></div>
+                <div class="kv" style="margin-top:6px"><span class="k">REPO</span><span class="v" id="lgrepo">olympus-ui@4f2a19c</span></div>
+                <div class="kv" style="margin-top:6px"><span class="k">STORED AT</span><span class="v" id="lgstored">artifacts/p142.patch</span></div>
+              </div>
+              <div><div class="gk" style="margin-bottom:6px">contents</div><div id="lgfiles" style="display:flex;flex-direction:column;gap:6px">
+                <div class="art">%file%<span class="nm">auth.rs</span><span class="tag" style="color:var(--green);background:var(--green-wash)">+14 −9</span></div>
+                <div class="art">%file%<span class="nm">auth_test.rs</span><span class="tag" style="color:var(--silver);background:var(--silver-wash)">new</span></div>
+              </div></div>
+              <div class="dr-actions" id="lgacts"><button class="btn pri">Open replay</button><button class="btn">Fork session</button><button class="btn">Pin to collection</button></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- CONCEPT: Atlas (spatial graph) -->
+      <section class="view" data-view="atlas">
+        <div class="gv-head"><span class="gv-title">Atlas</span><span class="gv-sub">· topology lens</span><div class="gv-actions"><span class="gtag ok">3 running</span><span class="gtag warn">1 blocked</span></div></div>
+        <div class="gv-wrap">
+          <div class="gv-body" style="padding:0;position:relative;overflow:hidden">
+            <svg id="atlassvg" viewBox="0 0 900 560" style="width:100%;height:100%;display:block;cursor:grab">
+              <rect x="70" y="60" width="460" height="330" rx="10" fill="none" stroke="var(--border)" stroke-dasharray="5 5"></rect>
+              <text x="88" y="84" font-family="IBM Plex Mono" font-size="10" fill="var(--faint)" letter-spacing="1">SANDBOX · OLYMPUS-UI</text>
+              <g stroke="var(--border-strong)">
+                <line x1="290" y1="170" x2="180" y2="280"></line>
+                <line x1="290" y1="170" x2="400" y2="280"></line>
+                <line class="prov" x1="180" y1="280" x2="180" y2="340" stroke="var(--green)" stroke-dasharray="4 3"></line>
+                <line class="prov" x1="400" y1="280" x2="640" y2="200"></line>
+                <line class="prov" x1="180" y1="280" x2="640" y2="200"></line>
+                <line x1="640" y1="200" x2="640" y2="400" stroke="var(--amber)" stroke-dasharray="4 3"></line>
+                <line x1="400" y1="280" x2="700" y2="430"></line>
+              </g>
+              <g class="atlas-node" data-n="project · olympus-ui" style="cursor:pointer"><rect x="230" y="140" width="120" height="56" rx="7" fill="var(--elev)" stroke="var(--border-strong)"></rect><text x="290" y="164" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" font-weight="600" fill="var(--text)">olympus-ui</text><text x="290" y="182" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="var(--faint)">PROJECT · 2 REPOS</text></g>
+              <g class="atlas-node prov" data-n="session · refactor auth" style="cursor:pointer"><rect x="120" y="252" width="120" height="56" rx="7" fill="var(--elev)" stroke="var(--green)"></rect><circle cx="136" cy="272" r="3.5" fill="var(--green)"></circle><text x="188" y="276" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--text)">refactor auth</text><text x="180" y="294" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="var(--faint)">SESSION · RUNNING</text></g>
+              <g class="atlas-node prov" data-n="repo · control-plane" style="cursor:pointer"><rect x="340" y="252" width="120" height="56" rx="7" fill="var(--elev)" stroke="var(--border-strong)"></rect><text x="400" y="276" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--text)">control-plane</text><text x="400" y="294" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="var(--faint)">REPO · fix/auth-gate</text></g>
+              <g class="atlas-node prov" data-n="artifact · p142.patch" style="cursor:pointer"><rect x="130" y="336" width="100" height="40" rx="7" fill="var(--elev)" stroke="var(--border)"></rect><text x="180" y="354" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" fill="var(--dim)">p142.patch</text><text x="180" y="368" text-anchor="middle" font-family="IBM Plex Mono" font-size="8.5" fill="var(--faint)">ARTIFACT</text></g>
+              <g class="atlas-node prov" data-n="node · local" style="cursor:pointer"><rect x="580" y="172" width="120" height="56" rx="7" fill="var(--elev)" stroke="var(--border-strong)"></rect><text x="640" y="196" text-anchor="middle" font-family="IBM Plex Mono" font-size="11.5" fill="var(--text)">local</text><text x="640" y="214" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="var(--faint)">NODE · 2/4 SLOTS</text></g>
+              <g class="atlas-node" data-n="session · vault schema · blocked" style="cursor:pointer"><rect x="580" y="372" width="120" height="56" rx="7" fill="var(--elev)" stroke="var(--amber)"></rect><circle cx="596" cy="392" r="3.5" fill="var(--amber)"></circle><text x="648" y="396" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--text)">vault schema</text><text x="640" y="414" text-anchor="middle" font-family="IBM Plex Mono" font-size="9" fill="var(--faint)">SESSION · BLOCKED</text></g>
+              <g class="atlas-node" data-n="vault · engineering" style="cursor:pointer"><rect x="650" y="442" width="100" height="40" rx="7" fill="var(--elev)" stroke="var(--border)"></rect><text x="700" y="460" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" fill="var(--dim)">engineering</text><text x="700" y="474" text-anchor="middle" font-family="IBM Plex Mono" font-size="8.5" fill="var(--faint)">VAULT</text></g>
+            </svg>
+            <div style="position:absolute;right:12px;bottom:12px;width:110px;height:70px;background:var(--chrome);border:1px solid var(--border);border-radius:4px"><div style="position:absolute;left:20%;top:22%;width:45%;height:48%;border:1px solid var(--border-strong);border-radius:2px"></div></div>
+            <div style="position:absolute;left:12px;bottom:12px" class="mono gk">drag to pan · scroll to zoom · double-click to expand</div>
+          </div>
+          <aside class="drawer" id="atdrawer">
+            <div class="dr-head"><span class="dr-title" id="atdt">Node</span><button class="icobtn" data-dr="atdrawer" title="Close">%chevron-right%</button></div>
+            <div class="dr-body">
+              <div class="kv"><span class="k">TYPE</span><span class="v" id="attp">session</span></div>
+              <div class="kv"><span class="k">EDGES</span><span class="v" id="ated">3 · runs-on, writes-to, produced</span></div>
+              <div class="kv"><span class="k">SANDBOX</span><span class="v" id="atsb">olympus-ui · inside</span></div>
+              <div><div class="gk" style="margin-bottom:6px">blast radius</div><div style="font-size:12px;line-height:1.6;color:var(--dim)" id="atbr">Deleting this node detaches 1 artifact and stops 1 running session. Repo and vault are untouched.</div></div>
+              <div class="dr-actions"><button class="btn pri">Open</button><button class="btn" id="attrace">Trace provenance</button><button class="btn">Delete…</button></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="pal-scrim" id="pal">
+  <div class="pal">
+    <div class="pal-in">%search%<input id="palinput" placeholder="Search sessions, notes, cards, nodes…"><span class="kbd">esc</span></div>
+    <div class="pal-list">
+      <div class="pal-gl">SESSIONS</div>
+      <div class="pal-r sel">%msg-sm%<span>Refactor auth</span><span class="m">olympus-ui · running</span></div>
+      <div class="pal-r">%msg-sm%<span>Generate vault schema</span><span class="m">codex · 13:18</span></div>
+      <div class="pal-gl">NOTES</div>
+      <div class="pal-r">%file-sm%<span>redb-compaction.md</span><span class="m">engineering</span></div>
+      <div class="pal-r">%file-sm%<span>acp-wire-spike.md</span><span class="m">engineering</span></div>
+      <div class="pal-gl">CARDS</div>
+      <div class="pal-r">%kanban%<span>WS reconnect backoff jitter</span><span class="m">review</span></div>
+      <div class="pal-gl">COMMANDS</div>
+      <div class="pal-r">%plus%<span>New session</span><span class="m">⌘N</span></div>
+      <div class="pal-r">%panel-right%<span>Toggle inspector</span><span class="m">⌘\</span></div>
+    </div>
+  </div>
+</div>
+<div class="pal-scrim" id="modal">
+  <div class="pal" style="width:420px">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--border)"><span style="font-size:13px;font-weight:600" id="mtitle">New</span><span class="kbd">esc</span></div>
+    <div id="mbody" style="padding:14px;display:flex;flex-direction:column;gap:11px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:6px;padding:10px 14px;border-top:1px solid var(--border)">
+      <button class="btn" id="mcancel">Cancel</button><button class="btn pri" id="mok">Create</button>
+    </div>
+  </div>
+</div>
+<div class="version">Olympus v0.3.1</div>
+
+<script>
+// Lucide-style stroke icons (14px default)
+const S=(p,w)=>`<svg width="${w||14}" height="${w||14}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const ICONS={
+  'olympus':'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 19 8-12 8 12"/><path d="m8.5 19 3.5-5.5L15.5 19"/></svg>',
+  'panel-left':S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',15),
+  'message-square':S('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>'),
+  'folder':S('<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
+  'folder-sm':S('<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',14),
+  'folder-open':S('<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',14),
+  'book':S('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5z"/><path d="M20 17v5H6.5a2.5 2.5 0 0 1 0-5"/>'),
+  'pin':S('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>',12),
+  'pin-sm':S('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>',10),
+  'bell':S('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
+  'check-sm':S('<path d="M20 6 9 17l-5-5"/>',10),
+  'alert-sm':S('<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>',10),
+  'msg-sm':S('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>',10),
+  'file-sm':S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',11),
+  'kanban':S('<path d="M6 5v11M12 5v6M18 5v14"/><rect x="3" y="3" width="18" height="18" rx="2"/>'),
+  'workflow':S('<rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/>'),
+  'puzzle':S('<path d="M19.4 14a1.6 1.6 0 0 0-1.4-1.6 1.6 1.6 0 0 1 0-3.2A1.6 1.6 0 0 0 19.4 8V6a2 2 0 0 0-2-2h-2a1.6 1.6 0 0 1-1.6-1.4 1.6 1.6 0 0 0-3.2 0A1.6 1.6 0 0 1 9 4H7a2 2 0 0 0-2 2v2a1.6 1.6 0 0 0 1.4 1.6 1.6 1.6 0 0 1 0 3.2A1.6 1.6 0 0 0 5 16v2a2 2 0 0 0 2 2h2a1.6 1.6 0 0 0 1.6-1.4 1.6 1.6 0 0 1 3.2 0A1.6 1.6 0 0 0 17 20h2a2 2 0 0 0 2-2z"/>'),
+  'server':S('<rect x="2" y="3" width="20" height="8" rx="1"/><rect x="2" y="13" width="20" height="8" rx="1"/><path d="M6 7h.01M6 17h.01"/>'),
+  'gear':S('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8 2 2 0 1 1-2.8 2.8 1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5 2 2 0 0 1-4 0 1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3 2 2 0 1 1-2.8-2.8 1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1 2 2 0 0 1 0-4 1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8 2 2 0 1 1 2.8-2.8 1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5 2 2 0 0 1 4 0 1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3 2 2 0 1 1 2.8 2.8 1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1 2 2 0 0 1 0 4 1.6 1.6 0 0 0-1.5 1z"/>'),
+  'search':S('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',13),
+  'chevron-down':S('<path d="m6 9 6 6 6-6"/>',11),
+  'chevron-down-sm':S('<path d="m6 9 6 6 6-6"/>',11),
+  'chevron-right':S('<path d="m9 18 6-6-6-6"/>'),
+  'chevron-right-sm':S('<path d="m9 18 6-6-6-6"/>',11),
+  'chevron-left':S('<path d="m15 18-6-6 6-6"/>'),
+  'chevron-left-sm':S('<path d="m15 18-6-6 6-6"/>',11),
+  'plus':S('<path d="M12 5v14M5 12h14"/>',15),
+  'bot':S('<rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4M9 14h.01M15 14h.01"/>',15),
+  'activity':S('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',15),
+  'panel-bottom':S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/>',15),
+  'panel-right':S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',15),
+  'ellipsis':S('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',15),
+  'paperclip':S('<path d="m21 8-9.5 9.5a3.5 3.5 0 0 1-5-5L14 4a2.5 2.5 0 0 1 3.5 3.5L9 16"/>',15),
+  'git-branch':S('<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
+  'arrow-up':S('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+  'trash':S('<path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',15),
+  'layout-grid':S('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>'),
+  'list':S('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
+  'settings-2':S('<path d="M20 7h-9M14 17H5M17 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 13a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/>'),
+  'globe':S('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/>'),
+  'git-compare':S('<circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v3a3 3 0 0 1-3 3H9M6 15v-3a3 3 0 0 1 3-3h6"/>'),
+  'sparkles':S('<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4z"/>'),
+  'archive':S('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/>',13),
+  'file':S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',14),
+  'copy':S('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',12),
+  'at':S('<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>',13),
+  'hash':S('<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',13),
+  'slash':S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 15 6-6"/>',13),
+  'cpu':S('<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/>',11),
+  'bot-xs':S('<rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4M9 14h.01M15 14h.01"/>',11),
+  'shield':S('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',12),
+  'code':S('<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>'),
+  'terminal':S('<path d="m4 17 6-6-6-6M12 19h8"/>'),
+  'archive-lg':S('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/>'),
+  'map':S('<path d="M14.1 6.1 9.9 3.9a2 2 0 0 0-1.8 0l-4.5 2.2A1 1 0 0 0 3 7v13l6-3 6 3 6-3V4l-6 3z"/><path d="M9 3.9v13M15 6.1v13"/>'),
+  'git-branch-sm':S('<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',12),
+};
+document.body.innerHTML=document.body.innerHTML.replace(/%([a-z0-9-]+)%/g,(m,n)=>ICONS[n]||m);
+
+// Interactions
+document.querySelectorAll('#layouts .chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('#layouts .chip').forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=b.dataset.sec;document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.dataset.view===v));document.querySelectorAll('.sbv').forEach(s=>s.classList.toggle('on',s.dataset.sbv===v));});
+document.querySelectorAll('#bptabs .bp-tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('#bptabs .bp-tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');});
+document.querySelectorAll('#rstabs .rs-tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('#rstabs .rs-tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.rsv').forEach(p=>p.classList.toggle('on',p.dataset.rsv===b.dataset.rsv));});
+document.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{
+  const t=b.dataset.x;
+  if(t==='side'){const sb=document.getElementById('sidebar');sb.classList.toggle('collapsed');const h=document.querySelector('[data-rz=sidebar]');if(h)h.style.display=sb.classList.contains('collapsed')?'none':'';}
+  if(t==='bottom'){document.getElementById('bpanel').classList.toggle('collapsed');}
+  if(t==='right'){document.getElementById('rsidebar').classList.toggle('collapsed');}
+});
+const ta=document.querySelector('.comp-box textarea');
+if(ta)ta.oninput=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,150)+'px';};
+const DOCS={
+ 'redb-compaction.md':`<h1>Redb compaction</h1><p>Sealed segments recompress at <code>zstd level 12</code>; the hot tail stays at level 3. Replay reads through a small LRU of decompressed segments — the live tail is never touched, so compaction is safe as a background pass.</p><h2>Measurements</h2><table><tr><th>segment</th><th>size</th><th>ratio</th><th>replay tax</th></tr><tr><td>0001–0040 (cold)</td><td>184 MB → 46 MB</td><td>4.0×</td><td>+22 ms</td></tr><tr><td>0041–0052 (warm)</td><td>96 MB → 31 MB</td><td>3.1×</td><td>+8 ms</td></tr><tr><td>tail (hot)</td><td>12 MB</td><td>—</td><td>—</td></tr></table><h2>Linked notes</h2><p><a data-note-link="event-log-design.md">event-log-design</a> · <a data-note-link="acp-wire-spike.md">acp-wire-spike</a> · <a data-note-link="grafana-runbook.md">grafana-runbook</a></p>`,
+ 'acp-wire-spike.md':`<h1>ACP wire spike</h1><p>Frame capture of a live <code>session/resume</code> across the ACP transport. Resume replays history, then streams deltas; the fork marker survives the round-trip.</p><h2>Notes</h2><p>Handshake is 3 frames; resume adds one <code>state</code> frame per 4k messages. Backpressure engages above 64 in-flight frames.</p><h2>Linked notes</h2><p><a data-note-link="redb-compaction.md">redb-compaction</a></p>`,
+ 'event-log-design.md':`<h1>Event log design</h1><p>The append-only redb log is the sole source of truth; views are pure projections rebuilt through <code>apply(event)</code>. Never mutate view state outside the apply path.</p><h2>Invariants</h2><p>Monotonic offsets · segments sealed at the view watermark · forks never edit the source session.</p><h2>Linked notes</h2><p><a data-note-link="redb-compaction.md">redb-compaction</a> · <a data-note-link="acp-wire-spike.md">acp-wire-spike</a></p>`,
+ 'grafana-runbook.md':`<h1>Grafana runbook</h1><p>401s on org-scoped datasources: check the panel's datasource UID against the token's org <em>before</em> rotating credentials.</p><h2>Checks</h2><p><code>kubectl get pods -n monitoring</code> · datasource UID map · service-account scope.</p>`,
+ 'graph':`<h1 style="font-size:14px">Graph · engineering</h1><svg viewBox="0 0 620 330" style="width:100%;background:var(--elev);border:1px solid var(--border);border-radius:6px;margin-top:8px"><g stroke="var(--border-strong)"><line x1="310" y1="160" x2="150" y2="80"/><line x1="310" y1="160" x2="480" y2="90"/><line x1="310" y1="160" x2="200" y2="250"/><line x1="310" y1="160" x2="470" y2="240"/><line x1="150" y1="80" x2="200" y2="250"/></g><g font-family="IBM Plex Mono" font-size="10" fill="var(--dim)"><circle cx="310" cy="160" r="22" fill="var(--hover)" stroke="var(--silver)"/><text x="310" y="196" text-anchor="middle">redb-compaction</text><circle cx="150" cy="80" r="14" fill="var(--hover)" stroke="var(--border-strong)"/><text x="150" y="58" text-anchor="middle">event-log-design</text><circle cx="480" cy="90" r="14" fill="var(--hover)" stroke="var(--border-strong)"/><text x="480" y="68" text-anchor="middle">acp-wire-spike</text><circle cx="200" cy="250" r="14" fill="var(--hover)" stroke="var(--border-strong)"/><text x="200" y="282" text-anchor="middle">zstd-tuning</text><circle cx="470" cy="240" r="14" fill="var(--hover)" stroke="var(--border-strong)"/><text x="470" y="272" text-anchor="middle">grafana-runbook</text></g></svg>`
+};
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+function mdInline(s){return s.replace(/\[\[([^\]]+)\]\]/g,'<a data-note-link="$1">$1</a>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');}
+function md2html(md){return md.split(/\n\n+/).map(b=>{b=b.trim();if(!b)return'';
+ if(b.startsWith('# '))return '<h1>'+mdInline(esc(b.slice(2)))+'</h1>';
+ if(b.startsWith('## '))return '<h2>'+mdInline(esc(b.slice(3)))+'</h2>';
+ if(b.startsWith('|')){const rows=b.split('\n').map(r=>r.replace(/^\||\|$/g,'').split('|').map(c=>c.trim()));const h=rows.shift();return '<table><tr>'+h.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')+'</table>';}
+ return '<p>'+mdInline(esc(b))+'</p>';}).join('');}
+const MD={
+ 'redb-compaction.md':'# Redb compaction\n\nSealed segments recompress at `zstd level 12`; the hot tail stays at level 3. Replay reads through a small LRU of decompressed segments — the live tail is never touched, so compaction is safe as a background pass.\n\n## Measurements\n\n| segment | size | ratio | replay tax |\n| 0001–0040 (cold) | 184 MB → 46 MB | 4.0× | +22 ms |\n| 0041–0052 (warm) | 96 MB → 31 MB | 3.1× | +8 ms |\n| tail (hot) | 12 MB | — | — |\n\n## Linked notes\n\n[[event-log-design.md]] · [[acp-wire-spike.md]] · [[grafana-runbook.md]]',
+ 'acp-wire-spike.md':'# ACP wire spike\n\nFrame capture of a live `session/resume` across the ACP transport. Resume replays history, then streams deltas; the fork marker survives the round-trip.\n\n## Notes\n\nHandshake is 3 frames; resume adds one `state` frame per 4k messages. Backpressure engages above 64 in-flight frames.\n\n## Linked notes\n\n[[redb-compaction.md]]',
+ 'event-log-design.md':'# Event log design\n\nThe append-only redb log is the sole source of truth; views are pure projections rebuilt through `apply(event)`. Never mutate view state outside the apply path.\n\n## Invariants\n\nMonotonic offsets · segments sealed at the view watermark · forks never edit the source session.\n\n## Linked notes\n\n[[redb-compaction.md]] · [[acp-wire-spike.md]]',
+ 'grafana-runbook.md':'# Grafana runbook\n\n401s on org-scoped datasources: check the panel datasource UID against the token org **before** rotating credentials.\n\n## Checks\n\n`kubectl get pods -n monitoring` · datasource UID map · service-account scope.'};
+let curNote='redb-compaction.md';
+function renderDoc(n){curNote=n;const b=document.getElementById('mdbody');if(!b)return;
+ const bar=document.getElementById('veditbar'),ta=document.getElementById('vsrc'),eb=document.getElementById('vedit'),db=document.getElementById('vdelete');
+ if(ta){ta.style.display='none';b.style.display='';}
+ if(eb){eb.textContent='Edit';eb.classList.remove('pri');}
+ if(db){db.textContent='Delete';db.style.color='';}
+ if(bar){bar.style.display=n==='graph'?'none':'flex';const vn=document.getElementById('vnotename');if(vn)vn.textContent=n;}
+ b.innerHTML=MD[n]!==undefined?md2html(MD[n]):(DOCS[n]||'');}
+function openDoc(n){const bar=document.getElementById('dtabs');if(!bar)return;let tab=bar.querySelector('[data-doc="'+n+'"]');if(!tab){tab=document.createElement('div');tab.className='dtab';tab.dataset.doc=n;tab.innerHTML=ICONS['file-sm']+'<span>'+n+'</span>';bar.insertBefore(tab,bar.querySelector('.icobtn'));tab.onclick=()=>openDoc(n);}bar.querySelectorAll('.dtab').forEach(x=>x.classList.remove('on'));tab.classList.add('on');renderDoc(n);}
+document.querySelectorAll('#dtabs .dtab').forEach(d=>d.onclick=()=>openDoc(d.dataset.doc));
+document.querySelectorAll('[data-note]').forEach(r=>{r.addEventListener('click',()=>{document.querySelectorAll('[data-note]').forEach(x=>x.classList.remove('on'));r.classList.add('on');openDoc(r.dataset.note);});});
+document.addEventListener('click',e=>{const l=e.target.closest('[data-note-link]');if(l)openDoc(l.dataset.noteLink);});
+renderDoc('redb-compaction.md');
+document.querySelectorAll('[data-sw]').forEach(s=>s.onclick=()=>s.classList.toggle('on'));
+// Session outline (left hover panel) — built from user inputs, before hover bars are appended
+const tr=document.querySelector('.transcript');const olist=document.getElementById('outlinelist');
+document.querySelectorAll('.tcol .msg-user').forEach(m=>{const it=document.createElement('div');it.className='ovl-it';it.textContent=m.textContent.trim();it.onclick=()=>tr.scrollTo({top:Math.max(0,m.offsetTop-30),behavior:'smooth'});olist.appendChild(it);});
+document.getElementById('outlinepin').onclick=()=>document.getElementById('outline').classList.toggle('pinned');
+document.getElementById('ctxpin').onclick=()=>document.getElementById('ctxpanel').classList.toggle('pinned');
+// Message hover actions: copy · fork · timestamp
+document.querySelectorAll('.msg-user,.msg-ai').forEach(m=>{const bar=document.createElement('div');bar.className='msg-acts';const c=document.createElement('button');c.title='Copy';c.innerHTML=ICONS['copy'];c.onclick=e=>{e.stopPropagation();navigator.clipboard&&navigator.clipboard.writeText(m.innerText);};const f=document.createElement('button');f.title='Fork from here';f.innerHTML=ICONS['git-branch-sm'];f.onclick=e=>e.stopPropagation();const ts=document.createElement('span');ts.className='ts';ts.textContent=m.dataset.ts||'14:32';bar.append(c,f,ts);m.appendChild(bar);});
+// Drawers
+const drOpen=id=>document.getElementById(id).classList.add('on');
+document.querySelectorAll('[data-dr]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.dr).classList.remove('on'));
+document.querySelectorAll('[data-view=projects] .kcard').forEach(c=>c.onclick=()=>{document.getElementById('pjdt').textContent=c.firstElementChild.textContent;document.getElementById('pjst').textContent=c.querySelector('.gtag').textContent;document.getElementById('pjag').textContent=c.querySelector('.gk').textContent;drOpen('pjdrawer');});
+document.querySelectorAll('[data-view=workflow] .step').forEach(s=>s.onclick=()=>{document.getElementById('wfdt').textContent=s.children[1].textContent+' · step '+s.querySelector('.gk').textContent;drOpen('wfdrawer');});
+document.querySelectorAll('[data-view=fleet] .gcard').forEach(c=>c.onclick=()=>{document.getElementById('fldt').textContent=c.querySelector('.gtitle').textContent;drOpen('fldrawer');});
+// ── Concept views ─────────────────────────────────────────────
+// Workbench: tabs, tree, approvals, plan, agent chat
+const wbShow=f=>{const known=['auth.rs','auth_test.rs','agent'];
+  document.querySelectorAll('#wbtabs .dtab').forEach(t=>t.classList.toggle('on',t.dataset.wb===f));
+  document.querySelectorAll('.wbf').forEach(p=>p.classList.toggle('on',p.dataset.wbf===(known.includes(f)?f:'empty')));
+  if(!known.includes(f))document.getElementById('wbemptyname').textContent=f;
+  document.querySelectorAll('[data-wbrow]').forEach(r=>r.classList.toggle('on',r.dataset.wbrow===f));};
+document.querySelectorAll('#wbtabs .dtab').forEach(t=>t.onclick=()=>wbShow(t.dataset.wb));
+document.querySelectorAll('[data-wbrow]').forEach(r=>r.addEventListener('click',()=>wbShow(r.dataset.wbrow)));
+document.querySelectorAll('#wbterm .bp-tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('#wbterm .bp-tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');document.querySelectorAll('.wbt').forEach(p=>p.classList.toggle('on',p.dataset.wbtp===t.dataset.wbt));});
+function wbApprove(f){const st=document.getElementById(f==='auth.rs'?'wbst-auth':'wbst-test');st.textContent='approved';st.className='gtag ok';st.style.color='';
+  const art=document.getElementById(f==='auth.rs'?'wbart-auth':'wbart-test');art.textContent='approved';art.style.cssText='color:var(--green);background:var(--green-wash)';}
+document.querySelectorAll('.wb-approve').forEach(b=>b.onclick=()=>{wbApprove(b.dataset.file);b.textContent='Approved ✓';b.disabled=true;b.style.opacity=.6;});
+document.querySelectorAll('.wb-reject').forEach(b=>b.onclick=()=>{const st=document.getElementById(b.dataset.file==='auth.rs'?'wbst-auth':'wbst-test');st.textContent='rejected';st.className='gtag err';st.style.color='';});
+document.getElementById('wbapproveall').onclick=e=>{['auth.rs','auth_test.rs'].forEach(wbApprove);document.querySelectorAll('.wb-approve').forEach(b=>{b.textContent='Approved ✓';b.disabled=true;b.style.opacity=.6;});e.target.textContent='All approved ✓';};
+document.getElementById('wbstop').onclick=e=>{const st=document.getElementById('wbstate');st.textContent='stopped';st.style.color='var(--red)';const sp=document.getElementById('wbspin');if(sp){sp.style.animation='none';sp.style.borderTopColor='var(--border-strong)';}e.target.textContent='Stopped';};
+document.querySelectorAll('[data-view=workbench] .todo').forEach(t=>{t.style.cursor='pointer';t.onclick=()=>t.classList.toggle('done');});
+const wbmsg=document.getElementById('wbmsg');
+wbmsg.addEventListener('keydown',e=>{if(e.key!=='Enter'||!wbmsg.value.trim())return;const ln=document.getElementById('wbagentln');const d=document.createElement('div');d.className='ln d';d.textContent='[now] user› '+wbmsg.value.trim();ln.parentNode.insertBefore(d,ln);wbmsg.value='';const st=document.getElementById('wbstate');st.textContent='responding…';setTimeout(()=>{const r=document.createElement('div');r.className='ln g';r.textContent='[now] agent› On it — queued after the current tool call.';ln.parentNode.insertBefore(r,ln);st.textContent='editing auth.rs';},900);});
+// Console: layouts + command line
+const conout=document.getElementById('conout'),conin=document.getElementById('conin');
+const conP=(cls,txt)=>{const d=document.createElement('div');d.className='ln '+cls;d.textContent=txt;conout.appendChild(d);conout.scrollTop=conout.scrollHeight;};
+const CONL={
+ ps:[['g','$ ol ps --watch'],['d','ID    STATUS    NODE      MODEL       TOK/S   AGE'],['g','42    running   local     sonnet-4.5  38.2    22m · refactor auth'],['d','41    idle      local     gpt55       —       1h  · document fleet api'],['a','40    blocked   gpu-box   hermes-70b  —       2h  · vault schema · awaiting approval'],['d','39    done      local     sonnet-4.5  —       3h  · patch sessiondb fork']],
+ tail:[['g','$ ol attach 42'],['d','[14:36] user› add the regression test and run the full suite'],['d','[14:37] tool› patch auth_test.rs ✓'],['d','[14:37] tool› cargo test → 43/43 ok'],['g','[14:37] agent› PR #142 updated. ▍']],
+ diff:[['g','$ ol show p142.patch'],['d','@@ -41,9 +41,14 @@ pub fn gate(req: &Request)'],['g','+    // fail closed on origin BEFORE token compare'],['g','+    if !origin_allowed(req) {'],['g','+        return Err(Deny::Origin);'],['g','+    }'],['d','     if !token_eq(req.token(), &self.install_token) {']],
+ usage:[['g','$ ol usage --today'],['d','MODEL        TOKENS    COST'],['d','sonnet-4.5   182.4k    $14.02'],['d','gpt55         96.1k    $9.11'],['d','haiku-4      134.1k    $4.35'],['d','total        412.6k    $27.48 / $50.00 (55%)']]};
+const conLay=k=>{conout.innerHTML='';(CONL[k]||[]).forEach(l=>conP(l[0],l[1]));
+ document.querySelectorAll('[data-clay]').forEach(b=>{const on=b.dataset.clay===k;b.classList.toggle('on',on);if(b.classList.contains('conwin'))b.style.color=on?'var(--silver)':'var(--faint)';});};
+document.querySelectorAll('[data-clay]').forEach(b=>b.addEventListener('click',()=>conLay(b.dataset.clay)));
+function conRun(v){
+ if(v==='clear'){conout.innerHTML='';return;}
+ if(v==='help'||v==='ol help'){conP('d','ol ps · ol attach <id> · ol logs <id> --follow · ol trace <id> · ol approve <id> · ol deny <id> · ol usage · clear');return;}
+ if(/^ol ps/.test(v)){CONL.ps.slice(1).forEach(l=>conP(l[0],l[1]));return;}
+ if(/^ol attach/.test(v)){CONL.tail.slice(1).forEach(l=>conP(l[0],l[1]));return;}
+ if(/^ol logs 40/.test(v)){conP('a','[13:20] approval required · write outside sandbox:');conP('a','        vaults/engineering/schema.sql');conP('d','[13:20] run `ol approve 40` or `ol deny 40`');return;}
+ if(/^ol logs/.test(v)){conP('d','streaming… attach for an interactive tail');return;}
+ if(/^ol trace/.test(v)){conP('d','✓ patch · auth.rs            +14 −9   1.2s');conP('d','✓ patch · auth_test.rs       new      0.8s');conP('d','✓ bash  · cargo test          43/43    41s');conP('d','◌ bash  · gh pr update         …        —');return;}
+ if(/^ol approve 40/.test(v)){conP('g','approved · session 40 resuming · write granted: vaults/engineering/schema.sql');lgDecide(true);return;}
+ if(/^ol deny 40/.test(v)){conP('a','denied · session 40 stays blocked · agent notified');lgDecide(false);return;}
+ if(/^ol usage/.test(v)){CONL.usage.slice(1).forEach(l=>conP(l[0],l[1]));return;}
+ conP('a','unknown command: '+v+' — try `help`');}
+conin.addEventListener('keydown',e=>{if(e.key!=='Enter')return;const v=conin.value.trim();if(!v)return;conP('g','$ '+v);conRun(v);conin.value='';});
+document.querySelectorAll('.conrecent').forEach(s=>s.onclick=()=>{conin.value=s.textContent;conin.focus();});
+// Ledger: facets, provenance drawer, approval decisions
+const LG={
+ p142:{prod:'claude-code',sess:'#42 · refactor auth',model:'sonnet-4.5',node:'local · 127.0.0.1',repo:'olympus-ui@4f2a19c',stored:'artifacts/p142.patch',files:[['auth.rs','+14 −9','var(--green)','var(--green-wash)'],['auth_test.rs','new','var(--silver)','var(--silver-wash)']],acts:['Open replay','Fork session','Pin to collection']},
+ appr40:{prod:'hermes',sess:'#40 · vault schema',model:'hermes-70b',node:'gpu-box · 10.0.4.2',repo:'— (vault write)',stored:'pending decision',files:[['schema.sql','write request','var(--amber)','#fcd34d1a']],acts:'decide'},
+ redb:{prod:'default',sess:'#38 · redb compaction',model:'gpt55',node:'local · 127.0.0.1',repo:'vault: engineering',stored:'notes/redb-compaction.md',files:[['redb-compaction.md','report','var(--silver)','var(--silver-wash)']],acts:['Open note','Fork session','Pin to collection']},
+ build:{prod:'validator-1',sess:'workflow run_cr_1041',model:'—',node:'local · 127.0.0.1',repo:'olympus-ui@e91c02d',stored:'builds/cp-0.3.1.tar.zst',files:[['cp-0.3.1.tar.zst','48 MB','var(--silver)','var(--silver-wash)']],acts:['Download','Open run']},
+ fuzz:{prod:'codex',sess:'#37 · ws reconnect fuzz',model:'gpt55',node:'gpu-box · 10.0.4.2',repo:'olympus-ui@e91c02d',stored:'traces/fuzz-37.log',files:[['fuzz-37.log','timeout @12m','var(--red)','#fca5a51a']],acts:['Resume session','Open trace']}};
+function lgDecide(yes){const row=document.querySelector('[data-lg=appr40]');if(!row)return;const tag=row.querySelector('.gtag');tag.textContent=yes?'approved':'denied';tag.className='gtag '+(yes?'ok':'err');if(document.getElementById('lgdt').textContent.indexOf('vault schema')>-1){document.getElementById('lgstored').textContent=yes?'granted · schema.sql written':'denied · no write';document.getElementById('lgacts').innerHTML='<button class="btn" disabled style="opacity:.6">'+(yes?'Approved ✓':'Denied')+'</button>';}}
+function lgOpen(k){const d=LG[k];if(!d)return;const row=document.querySelector('[data-lg="'+k+'"]');
+ document.getElementById('lgdt').textContent=row.querySelector('.gtitle').textContent;
+ document.getElementById('lgprod').textContent=d.prod;document.getElementById('lgsess').textContent=d.sess;
+ document.getElementById('lgmodel').textContent=d.model;document.getElementById('lgnode').textContent=d.node;
+ document.getElementById('lgrepo').textContent=d.repo;document.getElementById('lgstored').textContent=d.stored;
+ document.getElementById('lgfiles').innerHTML=d.files.map(f=>'<div class="art">'+ICONS['file']+'<span class="nm">'+f[0]+'</span><span class="tag" style="color:'+f[2]+';background:'+f[3]+'">'+f[1]+'</span></div>').join('');
+ const acts=document.getElementById('lgacts');
+ if(d.acts==='decide'){acts.innerHTML='<button class="btn pri" id="lgyes">Approve</button><button class="btn" id="lgno">Deny</button><button class="btn">Open session</button>';document.getElementById('lgyes').onclick=()=>lgDecide(true);document.getElementById('lgno').onclick=()=>lgDecide(false);}
+ else acts.innerHTML=d.acts.map((a,i)=>'<button class="btn'+(i?'':' pri')+'">'+a+'</button>').join('');
+ drOpen('lgdrawer');}
+document.querySelectorAll('.ledger-row').forEach(c=>c.onclick=()=>lgOpen(c.dataset.lg));
+document.querySelectorAll('[data-facet]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-facet]').forEach(x=>x.classList.remove('on'));b.classList.add('on');const f=b.dataset.facet;document.querySelectorAll('.ledger-row').forEach(r=>r.classList.toggle('lg-hide',f!=='all'&&r.dataset.type!==f));});
+// Atlas: pan/zoom, selection, lenses
+const ATN={
+ 'project · olympus-ui':{ed:'4 · contains ×2, groups ×2',sb:'defines sandbox boundary',br:'Deleting removes 2 repos from Olympus (files on disk untouched) and archives 4 sessions.'},
+ 'session · refactor auth':{ed:'3 · runs-on local, writes-to control-plane, produced p142.patch',sb:'olympus-ui · inside',br:'Stopping ends 1 running agent. The produced artifact and repo changes persist.'},
+ 'repo · control-plane':{ed:'3 · in olympus-ui, written by #42, runs-on local',sb:'olympus-ui · inside',br:'Detaching leaves 1 session without a workspace; branch fix/auth-gate stays on disk.'},
+ 'artifact · p142.patch':{ed:'1 · produced-by #42',sb:'olympus-ui · inside',br:'Ledger entries are append-only — artifacts can be unpinned but not erased.'},
+ 'node · local':{ed:'4 · hosts 2 agents, 2 sessions',sb:'trusted host · 127.0.0.1',br:'Draining pauses 1 running session and refuses new slots; nothing is deleted.'},
+ 'session · vault schema · blocked':{ed:'2 · runs-on local, requests engineering vault',sb:'olympus-ui · REQUESTING OUTSIDE WRITE',br:'Blocked on approval: write to vaults/engineering/schema.sql crosses the sandbox line.'},
+ 'vault · engineering':{ed:'2 · read-by 2 sessions',sb:'outside all sandboxes · approval required',br:'Vault writes always require explicit operator approval. 142 notes inside.'}};
+document.querySelectorAll('.atlas-node').forEach(n=>n.addEventListener('click',()=>{
+ document.querySelectorAll('.atlas-node').forEach(x=>x.classList.remove('sel'));n.classList.add('sel');
+ const parts=n.dataset.n.split(' · ');const d=ATN[n.dataset.n]||{};
+ document.getElementById('atdt').textContent=parts.slice(1).join(' · ');document.getElementById('attp').textContent=parts[0];
+ document.getElementById('ated').textContent=d.ed||'—';document.getElementById('atsb').textContent=d.sb||'—';document.getElementById('atbr').textContent=d.br||'—';
+ drOpen('atdrawer');}));
+const asvg=document.getElementById('atlassvg');let avb={x:0,y:0,w:900,h:560};
+const setVB=()=>asvg.setAttribute('viewBox',avb.x+' '+avb.y+' '+avb.w+' '+avb.h);
+asvg.addEventListener('wheel',e=>{e.preventDefault();const k=e.deltaY>0?1.1:0.9;const r=asvg.getBoundingClientRect();const mx=avb.x+avb.w*((e.clientX-r.left)/r.width),my=avb.y+avb.h*((e.clientY-r.top)/r.height);avb.w*=k;avb.h*=k;avb.x=mx-(mx-avb.x)*k;avb.y=my-(my-avb.y)*k;setVB();},{passive:false});
+asvg.addEventListener('mousedown',e=>{if(e.target.closest('.atlas-node'))return;e.preventDefault();const sx=e.clientX,sy=e.clientY,o={x:avb.x,y:avb.y};asvg.style.cursor='grabbing';const r=asvg.getBoundingClientRect();
+ const mv=ev=>{avb.x=o.x-(ev.clientX-sx)*avb.w/r.width;avb.y=o.y-(ev.clientY-sy)*avb.h/r.height;setVB();};
+ const up=()=>{asvg.style.cursor='grab';removeEventListener('mousemove',mv);removeEventListener('mouseup',up);};
+ addEventListener('mousemove',mv);addEventListener('mouseup',up);});
+asvg.addEventListener('dblclick',()=>{avb={x:0,y:0,w:900,h:560};setVB();});
+const atLens=k=>{asvg.classList.toggle('lens-activity',k==='activity');asvg.classList.toggle('lens-prov',k==='prov');
+ document.querySelectorAll('[data-lens]').forEach(b=>b.classList.toggle('on',b.dataset.lens===k));
+ const sub=document.querySelector('[data-view=atlas] .gv-sub');if(sub)sub.textContent='· '+(k==='prov'?'provenance lens':k==='activity'?'activity lens':'topology lens');};
+document.querySelectorAll('[data-lens]').forEach(b=>b.onclick=()=>atLens(b.dataset.lens));
+document.getElementById('attrace').onclick=()=>atLens('prov');
+// Left-sidebar goto views (Agents / Usage)
+const showView=v=>document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.dataset.view===v));
+document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-goto]').forEach(x=>x.classList.remove('on'));b.classList.add('on');showView(b.dataset.goto);});
+// Clicking a session (or New Session) returns to the session view
+document.querySelectorAll('[data-sbv=sessions] .srow,[data-sbv=sessions] .newbtn').forEach(r=>r.addEventListener('click',()=>{document.querySelectorAll('[data-goto]').forEach(x=>x.classList.remove('on'));showView('sessions');}));
+// Plugins tabs + settings panes
+document.querySelectorAll('[data-plv-btn]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-plv-btn]').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.plv').forEach(p=>p.classList.toggle('on',p.dataset.plv===b.dataset.plvBtn));});
+document.querySelectorAll('[data-stv-btn]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-stv-btn]').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelectorAll('.stv').forEach(p=>p.classList.toggle('on',p.dataset.stv===b.dataset.stvBtn));});
+// Command palette (⌘K)
+const pal=document.getElementById('pal');const palIn=document.getElementById('palinput');
+const openPal=()=>{pal.classList.add('on');palIn.focus();};
+const tbs=document.querySelector('.tb-search');tbs.style.cursor='pointer';tbs.onclick=openPal;
+addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPal();}if(e.key==='Escape')pal.classList.remove('on');});
+pal.onclick=e=>{if(e.target===pal)pal.classList.remove('on');};
+// Composer + menu
+const pmenu=document.getElementById('plusmenu');
+document.getElementById('plusbtn').onclick=e=>{e.stopPropagation();pmenu.classList.toggle('on');};
+document.addEventListener('click',e=>{if(!e.target.closest('.plusmenu-wrap'))pmenu.classList.remove('on');if(!e.target.closest('.selwrap'))document.getElementById('selpop').classList.remove('on');});
+// Combo pill: agent | model | thinking
+const selpop=document.getElementById('selpop');
+document.getElementById('combopill').onclick=e=>{e.stopPropagation();selpop.classList.toggle('on');};
+document.querySelectorAll('.sel-model').forEach(b=>b.onclick=e=>{e.stopPropagation();document.querySelectorAll('.sel-model').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.getElementById('pillmodel').textContent=b.dataset.model;});
+const tlv=['Off','Low','Med','Max'];const trg=document.getElementById('thinkrange');
+trg.oninput=()=>{document.getElementById('thinklabel').textContent=tlv[trg.value];document.getElementById('pillthink').textContent=tlv[trg.value];};
+trg.onclick=e=>e.stopPropagation();
+document.querySelectorAll('.srow').forEach(r=>{const t=r.querySelector('.title');if(!t)return;r.title=t.textContent+' — hover: agent · latest message peek · summary';const p=document.createElement('button');p.className='arch';p.title='Pin';p.innerHTML=ICONS['pin'];p.onclick=e=>e.stopPropagation();r.appendChild(p);const a=document.createElement('button');a.className='arch';a.title='Archive';a.innerHTML=ICONS['archive'];a.onclick=e=>e.stopPropagation();r.appendChild(a);});
+document.querySelectorAll('[data-rz]').forEach(h=>{h.onmousedown=e=>{e.preventDefault();const t=h.dataset.rz;const el=document.getElementById(t);const sx=e.clientX,sy=e.clientY,r=el.getBoundingClientRect();const mv=ev=>{if(t==='sidebar')el.style.width=Math.max(150,Math.min(380,r.width+ev.clientX-sx))+'px';if(t==='rsidebar'){const vb=document.querySelector('.vp-body').getBoundingClientRect();const maxW=Math.max(180,vb.width-484);el.style.width=Math.max(180,Math.min(maxW,r.width-(ev.clientX-sx)))+'px';}if(t==='bpanel')el.style.height=Math.max(70,Math.min(420,r.height-(ev.clientY-sy)))+'px';};const up=()=>{removeEventListener('mousemove',mv);removeEventListener('mouseup',up);};addEventListener('mousemove',mv);addEventListener('mouseup',up);};});
+// ── Core-view interactivity: modal, sessions, projects, vault, fleet ──
+const modal=document.getElementById('modal'),mbody=document.getElementById('mbody'),mok=document.getElementById('mok');
+let mcb=null;
+function openM(title,body,ok,cb){document.getElementById('mtitle').textContent=title;mbody.innerHTML=body;mok.textContent=ok;mcb=cb;modal.classList.add('on');const f=mbody.querySelector('input,textarea,select');if(f)setTimeout(()=>f.focus(),0);}
+function closeM(){modal.classList.remove('on');mcb=null;}
+document.getElementById('mcancel').onclick=closeM;
+modal.onclick=e=>{if(e.target===modal)closeM();};
+mok.onclick=()=>{if(mcb&&mcb()===false)return;closeM();};
+mbody.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.tagName==='INPUT')mok.click();});
+addEventListener('keydown',e=>{if(e.key==='Escape')closeM();});
+mbody.addEventListener('click',e=>{const s=e.target.closest('.sg');if(!s)return;s.parentNode.querySelectorAll('.sg').forEach(x=>x.classList.remove('on'));s.classList.add('on');const ms=document.getElementById('m_model');if(ms&&s.dataset.agent)ms.innerHTML=AGENTS[s.dataset.agent].map(m=>'<option>'+m+'</option>').join('');});
+// Agents + composer pill
+const AGENTS={'claude-code':['sonnet-4.5','haiku-4'],'hermes':['hermes-70b','hermes-8b'],'codex':['gpt55','gpt55-mini']};
+let curAgent='claude-code';
+function buildModels(sel){const ml=document.getElementById('modellist');ml.innerHTML=AGENTS[curAgent].map((m,i)=>'<button class="mi sel-model'+((sel?m===sel:!i)?' on':'')+'" data-model="'+m+'"><span>'+m+'</span><span class="mk2">✓</span></button>').join('');const on=ml.querySelector('.on');document.getElementById('pillmodel').textContent=on?on.dataset.model:AGENTS[curAgent][0];document.getElementById('rsmodel').textContent=document.getElementById('pillmodel').textContent;}
+document.getElementById('modellist').addEventListener('click',e=>{const b=e.target.closest('.sel-model');if(!b)return;e.stopPropagation();document.querySelectorAll('#modellist .sel-model').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.getElementById('pillmodel').textContent=b.dataset.model;document.getElementById('rsmodel').textContent=b.dataset.model;});
+function setAgent(a,model){curAgent=a;document.getElementById('pillagent').textContent=a;document.querySelectorAll('.sel-agent').forEach(x=>x.classList.toggle('on',x.dataset.agent===a));buildModels(model);document.getElementById('rsagent').textContent=a;}
+document.querySelectorAll('.sel-agent').forEach(b=>b.onclick=e=>{e.stopPropagation();setAgent(b.dataset.agent);});
+buildModels('sonnet-4.5');
+// Sessions: header state, observed (Hermes Studio), fork, new session, send
+const tcolEl=document.querySelector('.tcol');const TCOL0=tcolEl.innerHTML;
+function sessionHeader(t,proj,live){document.getElementById('vptitle').textContent=t;document.getElementById('vpproj').textContent=proj.toUpperCase();const lv=document.getElementById('vplive');lv.querySelector('.lbl').textContent=live?'LIVE':'READ-ONLY';lv.style.borderColor=live?'var(--green-line)':'var(--border-strong)';lv.style.background=live?'var(--green-wash)':'var(--elev)';lv.querySelector('.dot').style.background=live?'var(--green)':'var(--faint)';lv.querySelector('.lbl').style.color=live?'var(--green)':'var(--dim)';}
+const compTa=document.querySelector('.comp-box textarea');
+function restoreManaged(title,agent,proj,node){document.getElementById('obsbanner').style.display='none';compTa.disabled=false;compTa.placeholder='Type a message…';sessionHeader(title,proj||'olympus-ui',true);if(agent)setAgent(agent);document.getElementById('rsnode').textContent=node||'local · 127.0.0.1';document.getElementById('rsproj').textContent=proj||'olympus-ui';}
+function openObserved(t){showView('sessions');sessionHeader(t,'hermes-studio',false);document.getElementById('obsbanner').style.display='flex';compTa.disabled=true;compTa.placeholder='Read-only — fork to continue from Olympus';
+ tcolEl.innerHTML='<div class="msg-user" data-ts="Jun 30">'+t+' — can you take another pass at this?</div><div class="msg-ai"><div class="who">HERMES · TELEGRAM</div><p>Imported transcript from Hermes Studio — 46 messages, telegram channel. This session is <strong>observed</strong>: Olympus mirrors it live but cannot drive it. Fork to continue with any agent.</p></div>';
+ setAgent('hermes');document.getElementById('rsnode').textContent='gpu-box · 10.0.4.2';document.getElementById('rsproj').textContent='hermes-studio';}
+document.querySelectorAll('[data-obs]').forEach(r=>r.addEventListener('click',()=>{document.querySelectorAll('.sbv[data-sbv=sessions] .srow').forEach(x=>x.classList.remove('on'));r.classList.add('on');openObserved(r.dataset.obs);}));
+document.querySelectorAll('[data-sbv=sessions] .srow').forEach(r=>{if(r.dataset.obs)return;r.addEventListener('click',()=>{const t=r.querySelector('.title');document.querySelectorAll('.sbv[data-sbv=sessions] .srow').forEach(x=>x.classList.remove('on'));r.classList.add('on');restoreManaged(t?t.textContent:'Refactor auth','claude-code');tcolEl.innerHTML=r._tcol||TCOL0;});});
+function addSessionRow(t,agent,live){const sec=document.querySelectorAll('[data-sbv=sessions] .sec')[1].querySelector('.sec-content');const r=document.createElement('div');r.className='srow';r.innerHTML='<span class="spin"></span><div class="info"><span class="title"></span><div class="meta"><span>'+agent+'</span><span>·</span><span>now</span></div></div>';r.querySelector('.title').textContent=t;sec.insertBefore(r,sec.firstChild);
+ const ct=document.querySelectorAll('[data-sbv=sessions] .sec')[1].querySelector('.ct');ct.textContent=+ct.textContent+1;
+ r.addEventListener('click',()=>{document.querySelectorAll('.sbv[data-sbv=sessions] .srow').forEach(x=>x.classList.remove('on'));r.classList.add('on');restoreManaged(t,agent);tcolEl.innerHTML=r._tcol||'';});
+ return r;}
+function startSession(t,ag,mdl,proj,node){showView('sessions');restoreManaged(t,ag,proj,node);buildModels(mdl);
+ document.getElementById('rsstarted').textContent=new Date().toTimeString().slice(0,8);
+ tcolEl.innerHTML='<div class="msg-ai"><div class="who">'+ag.toUpperCase()+'</div><p>Session started on <code>'+node.split(' ')[0]+'</code> with <code>'+mdl+'</code>. Describe the task to begin.</p></div>';
+ const row=addSessionRow(t,ag);row._tcol=tcolEl.innerHTML;document.querySelectorAll('.sbv[data-sbv=sessions] .srow').forEach(x=>x.classList.remove('on'));row.classList.add('on');}
+function newSessionModal(){openM('New session',
+ '<div class="fld"><span class="lb">Title</span><input id="m_title" placeholder="What should the agent do?"></div>'+
+ '<div class="fld"><span class="lb">Agent</span><div class="seg" id="m_agent"><span class="sg on" data-agent="claude-code">claude-code</span><span class="sg" data-agent="hermes">hermes</span><span class="sg" data-agent="codex">codex</span></div></div>'+
+ '<div class="fld"><span class="lb">Model</span><select id="m_model">'+AGENTS['claude-code'].map(m=>'<option>'+m+'</option>').join('')+'</select></div>'+
+ '<div class="fld"><span class="lb">Project</span><select id="m_proj"><option>olympus-ui</option><option>vault-core</option></select></div>'+
+ '<div class="fld"><span class="lb">Node</span><select id="m_node"><option>local · 127.0.0.1</option><option>gpu-box · 10.0.4.2</option></select></div>',
+ 'Start session',()=>{const t=document.getElementById('m_title').value.trim()||'Untitled session';startSession(t,document.querySelector('#m_agent .sg.on').dataset.agent,document.getElementById('m_model').value,document.getElementById('m_proj').value,document.getElementById('m_node').value);});}
+document.querySelector('[data-sbv=sessions] .newbtn').addEventListener('click',e=>{e.stopPropagation();newSessionModal();});
+document.getElementById('forkbtn').onclick=()=>{const t=document.getElementById('vptitle').textContent+' (fork)';restoreManaged(t,'hermes','olympus-ui','gpu-box · 10.0.4.2');
+ tcolEl.innerHTML='<div class="msg-ai"><div class="who">OLYMPUS</div><p>Forked from Hermes Studio — 46 messages imported, session is now <strong>managed</strong>. The source session stays untouched.</p></div>';
+ const row=addSessionRow(t,'hermes');row._tcol=tcolEl.innerHTML;document.querySelectorAll('.sbv[data-sbv=sessions] .srow').forEach(x=>x.classList.remove('on'));row.classList.add('on');};
+function sendMsg(){const v=compTa.value.trim();if(!v||compTa.disabled)return;const mu=document.createElement('div');mu.className='msg-user';mu.textContent=v;tcolEl.appendChild(mu);compTa.value='';compTa.style.height='auto';tr.scrollTo({top:tr.scrollHeight,behavior:'smooth'});
+ setTimeout(()=>{const ai=document.createElement('div');ai.className='msg-ai';ai.innerHTML='<div class="who">'+curAgent.toUpperCase()+'</div><p>Acknowledged — working on it. Tool calls will stream here.</p>';tcolEl.appendChild(ai);tr.scrollTo({top:tr.scrollHeight,behavior:'smooth'});const on=document.querySelector('.sbv[data-sbv=sessions] .srow.on');if(on)on._tcol=tcolEl.innerHTML;},800);}
+document.querySelector('.send').onclick=sendMsg;
+compTa.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
+// Projects: kanban dnd, new card, add column, drawer actions
+let dragCard=null,pjSel=null;
+function colCount(){document.querySelectorAll('#board .col').forEach(c=>c.querySelector('.colct').textContent=c.querySelectorAll('.kcard').length);}
+function wireCard(c){c.draggable=true;
+ c.addEventListener('dragstart',()=>{c.classList.add('dragging');dragCard=c;});
+ c.addEventListener('dragend',()=>{c.classList.remove('dragging');dragCard=null;colCount();});
+ c.onclick=()=>{pjSel=c;document.getElementById('pjdt').textContent=c.firstElementChild.textContent;document.getElementById('pjst').textContent=c.querySelector('.gtag').textContent;document.getElementById('pjag').textContent=c.querySelector('.gk').textContent;drOpen('pjdrawer');};}
+function wireCol(col){const b=col.querySelector('.col-b');
+ b.addEventListener('dragover',e=>{e.preventDefault();b.classList.add('dropover');});
+ b.addEventListener('dragleave',()=>b.classList.remove('dropover'));
+ b.addEventListener('drop',e=>{e.preventDefault();b.classList.remove('dropover');if(dragCard){b.appendChild(dragCard);colCount();}});}
+document.querySelectorAll('#board .kcard').forEach(wireCard);
+document.querySelectorAll('#board .col').forEach(wireCol);
+function newCardModal(){openM('New card',
+ '<div class="fld"><span class="lb">Title</span><input id="m_ct" placeholder="Describe the task"></div>'+
+ '<div class="fld"><span class="lb">Column</span><select id="m_cc">'+[...document.querySelectorAll('#board .col')].map(c=>'<option>'+c.dataset.col+'</option>').join('')+'</select></div>'+
+ '<div class="fld"><span class="lb">Agent</span><select id="m_ca"><option>unassigned</option><option>claude-code</option><option>hermes</option><option>codex</option></select></div>',
+ 'Create',()=>{const t=document.getElementById('m_ct').value.trim();if(!t)return false;
+  const col=document.querySelector('#board .col[data-col="'+document.getElementById('m_cc').value+'"] .col-b');
+  const d=document.createElement('div');d.className='kcard';d.innerHTML='<div style="font-size:12.5px;margin-bottom:6px"></div><div class="grow"><span class="gk">'+document.getElementById('m_ca').value+'</span><span class="gtag">todo</span></div>';d.firstElementChild.textContent=t;wireCard(d);col.appendChild(d);colCount();});}
+document.getElementById('pjnew').onclick=newCardModal;
+document.querySelector('[data-sbv=projects] .newbtn').onclick=newCardModal;
+document.getElementById('pjconf').onclick=()=>openM('Add column','<div class="fld"><span class="lb">Column name</span><input id="m_col" placeholder="e.g. blocked"></div>','Add column',()=>{const n=document.getElementById('m_col').value.trim().toLowerCase();if(!n||document.querySelector('#board .col[data-col="'+n+'"]'))return false;const col=document.createElement('div');col.className='col';col.dataset.col=n;col.innerHTML='<div class="col-h"><span>'+n+'</span><span class="colct">0</span></div><div class="col-b"></div>';document.getElementById('board').appendChild(col);wireCol(col);});
+const pjbtns=document.querySelectorAll('#pjdrawer .dr-actions .btn');
+pjbtns[0].onclick=()=>{if(!pjSel)return;const done=document.querySelector('#board .col[data-col=done] .col-b');if(done)done.appendChild(pjSel);const t=pjSel.querySelector('.gtag');t.textContent='done';t.className='gtag';colCount();document.getElementById('pjst').textContent='done';};
+pjbtns[1].onclick=()=>{if(!pjSel)return;const t=pjSel.querySelector('.gtag');t.textContent='blocked';t.className='gtag warn';document.getElementById('pjst').textContent='blocked';};
+pjbtns[2].onclick=()=>{if(!pjSel)return;const ags=['unassigned','claude-code','hermes','codex'];const g=pjSel.querySelector('.gk');g.textContent=ags[(ags.indexOf(g.textContent)+1)%ags.length];document.getElementById('pjag').textContent=g.textContent;};
+pjbtns[3].onclick=()=>{if(!pjSel)return;pjSel.remove();pjSel=null;colCount();document.getElementById('pjdrawer').classList.remove('on');};
+// Vault: edit / new / rename / delete md notes
+document.getElementById('vedit').onclick=()=>{const ta=document.getElementById('vsrc'),b=document.getElementById('mdbody'),btn=document.getElementById('vedit');
+ if(curNote==='graph')return;
+ if(ta.style.display==='none'){if(MD[curNote]===undefined)MD[curNote]='# '+curNote.replace(/\.md$/,'')+'\n\nWrite…';ta.value=MD[curNote];ta.style.display='block';b.style.display='none';btn.textContent='Save';btn.classList.add('pri');}
+ else{MD[curNote]=ta.value;renderDoc(curNote);}};
+function addNoteRow(n){const sc=document.querySelector('[data-sbv=vaults] .sec-content');const r=document.createElement('div');r.className='srow';r.dataset.note=n;r.innerHTML='<span class="sic" style="color:var(--faint)">'+ICONS['file-sm']+'</span><div class="info"><span class="title"></span><div class="meta"><span>now</span></div></div>';r.querySelector('.title').textContent=n;
+ r.addEventListener('click',()=>{document.querySelectorAll('[data-note]').forEach(x=>x.classList.remove('on'));r.classList.add('on');openDoc(n);});sc.appendChild(r);return r;}
+document.getElementById('vnew').onclick=()=>openM('New note','<div class="fld"><span class="lb">File name</span><input id="m_vn" placeholder="my-note.md"></div>','Create',()=>{let n=document.getElementById('m_vn').value.trim();if(!n)return false;if(!/\.md$/.test(n))n+='.md';if(MD[n]!==undefined)return false;MD[n]='# '+n.replace(/\.md$/,'')+'\n\nWrite…';addNoteRow(n);openDoc(n);setTimeout(()=>document.getElementById('vedit').click(),0);});
+document.getElementById('vrename').onclick=()=>{if(curNote==='graph')return;openM('Rename note','<div class="fld"><span class="lb">New name</span><input id="m_vr"></div>','Rename',()=>{let n=document.getElementById('m_vr').value.trim();if(!n)return false;if(!/\.md$/.test(n))n+='.md';if(n===curNote||MD[n]!==undefined)return n===curNote?undefined:false;
+ MD[n]=MD[curNote]||'';delete MD[curNote];
+ const row=document.querySelector('[data-note="'+curNote+'"]');if(row){row.dataset.note=n;row.querySelector('.title').textContent=n;}
+ const tab=document.querySelector('#dtabs [data-doc="'+curNote+'"]');if(tab){tab.dataset.doc=n;tab.querySelector('span').textContent=n;tab.onclick=()=>openDoc(n);}
+ openDoc(n);});setTimeout(()=>{const i=document.getElementById('m_vr');if(i)i.value=curNote;},0);};
+document.getElementById('vdelete').onclick=e=>{if(curNote==='graph')return;
+ if(e.target.textContent!=='Confirm delete'){e.target.textContent='Confirm delete';e.target.style.color='var(--red)';return;}
+ delete MD[curNote];const row=document.querySelector('[data-note="'+curNote+'"]');if(row)row.remove();const tab=document.querySelector('#dtabs [data-doc="'+curNote+'"]');if(tab)tab.remove();openDoc('redb-compaction.md');};
+// Fleet: node data, envoy setup, drain/restart/remove, slots
+const NODES={
+ 'local':{st:'online',cls:'ok',bind:'127.0.0.1:8787',slots:[2,4],hb:'18s ago',ver:'v0.3.1',ad:'hermes-acp',agents:['claude-code · running','codex · idle']},
+ 'gpu-box':{st:'draining',cls:'warn',bind:'10.0.4.2:8787',slots:[5,6],hb:'2m ago',ver:'v0.3.0',ad:'hermes-acp',agents:['hermes · draining','default · idle']},
+ 'edge-mini':{st:'offline',cls:'err',bind:'10.0.4.7:8787',slots:[0,2],hb:'90m ago',ver:'—',ad:'—',agents:['default · unreachable']}};
+let flSel=null;
+function flCard(n){return document.querySelector('#flgrid [data-node="'+n+'"]');}
+function flOpen(n){const d=NODES[n];if(!d)return;flSel=n;
+ document.getElementById('fldt').textContent=n;
+ const st=document.getElementById('flst');st.textContent=d.st;st.style.color=d.cls==='ok'?'var(--green)':d.cls==='warn'?'var(--amber)':'var(--red)';
+ document.getElementById('flbind').textContent=d.bind;document.getElementById('flhb').textContent=d.hb;
+ document.getElementById('flslots').textContent=d.slots[0]+' / '+d.slots[1];
+ document.getElementById('flver').textContent=d.ver;document.getElementById('flad').textContent=d.ad;
+ document.getElementById('flagents').innerHTML=d.agents.map(a=>'<span>'+a+'</span>').join('');
+ const pend=d.st==='awaiting envoy';
+ document.getElementById('flenvoy').style.display=pend?'block':'none';
+ document.getElementById('flenvoyinfo').style.display=pend?'none':'block';
+ document.getElementById('flcmd').textContent='curl -sSL https://get.olympus.dev/envoy | sh -s -- --node '+n+' --bind '+d.bind+' --token ol_rt_••••4f2a';
+ document.getElementById('fldrain').textContent=d.st==='draining'?'Undrain':'Drain';
+ const rm=document.getElementById('flremove');rm.textContent='Remove';rm.style.color='';
+ drOpen('fldrawer');}
+function flUpdateCard(n){const d=NODES[n],c=flCard(n);if(!c)return;const tag=c.querySelector('.gtag');tag.textContent=d.st;tag.className='gtag '+d.cls;c.querySelector('.slotv').textContent=d.slots[0]+' / '+d.slots[1];const bar=c.querySelector('.gbar>i');bar.style.width=Math.round(100*d.slots[0]/Math.max(1,d.slots[1]))+'%';bar.style.background=d.cls==='warn'?'var(--amber)':'var(--silver)';c.querySelector('.hbv').textContent=d.hb;}
+document.getElementById('flgrid').addEventListener('click',e=>{const c=e.target.closest('[data-node]');if(c)flOpen(c.dataset.node);});
+document.getElementById('flsp').onclick=()=>{const d=NODES[flSel];if(!d)return;d.slots[1]++;document.getElementById('flslots').textContent=d.slots[0]+' / '+d.slots[1];flUpdateCard(flSel);};
+document.getElementById('flsm').onclick=()=>{const d=NODES[flSel];if(!d||d.slots[1]<=Math.max(1,d.slots[0]))return;d.slots[1]--;document.getElementById('flslots').textContent=d.slots[0]+' / '+d.slots[1];flUpdateCard(flSel);};
+document.getElementById('fldrain').onclick=()=>{const d=NODES[flSel];if(!d)return;if(d.st==='draining'){d.st='online';d.cls='ok';}else if(d.st==='online'){d.st='draining';d.cls='warn';}flUpdateCard(flSel);flOpen(flSel);};
+document.getElementById('flrestart').onclick=()=>{const d=NODES[flSel];if(!d)return;d.hb='just now';if(d.st==='offline'){d.st='online';d.cls='ok';d.ver='v0.3.1';d.ad='hermes-acp';d.agents=['default · idle'];}flUpdateCard(flSel);flOpen(flSel);};
+document.getElementById('flremove').onclick=e=>{if(e.target.textContent!=='Confirm remove'){e.target.textContent='Confirm remove';e.target.style.color='var(--red)';return;}
+ const c=flCard(flSel);if(c)c.remove();
+ const row=[...document.querySelectorAll('#flrows .srow')].find(r=>r.querySelector('.title').textContent===flSel);if(row)row.remove();
+ delete NODES[flSel];document.getElementById('flct').textContent=Object.keys(NODES).length;flSel=null;
+ document.getElementById('fldrawer').classList.remove('on');e.target.textContent='Remove';e.target.style.color='';};
+document.getElementById('flcopy').onclick=e=>{navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('flcmd').textContent);e.target.textContent='Copied ✓';setTimeout(()=>e.target.textContent='Copy command',1500);};
+function addNodeModal(){openM('Add node',
+ '<div class="fld"><span class="lb">Name</span><input id="m_nn" placeholder="gpu-2"></div>'+
+ '<div class="fld"><span class="lb">Bind address</span><input id="m_nb" value="10.0.4.9:8787"></div>'+
+ '<div class="fld"><span class="lb">Adapter</span><select id="m_na"><option>hermes-acp</option><option>claude-code</option><option>codex-cli</option></select></div>'+
+ '<div class="fld"><span class="lb">Slots</span><input id="m_ns" type="number" value="4" min="1"></div>'+
+ '<div class="mono" style="font-size:10px;color:var(--faint);line-height:1.6">Adding a node generates an envoy install command to run on the host. The node comes online when the envoy handshakes.</div>',
+ 'Add node',()=>{const n=document.getElementById('m_nn').value.trim();if(!n||NODES[n])return false;
+  const bind=document.getElementById('m_nb').value.trim()||'0.0.0.0:8787';
+  NODES[n]={st:'awaiting envoy',cls:'warn',bind,slots:[0,parseInt(document.getElementById('m_ns').value)||4],hb:'—',ver:'—',ad:document.getElementById('m_na').value,agents:['none yet']};
+  const card=document.createElement('div');card.className='gcard click';card.dataset.node=n;
+  card.innerHTML='<div class="grow" style="margin-bottom:10px"><span class="gtitle" style="font-size:13px;font-family:var(--mono)"></span><span class="gtag warn">awaiting envoy</span></div><div class="grow" style="font-size:12px;color:var(--dim);margin-bottom:6px"><span>slots</span><span class="slotv">0 / '+NODES[n].slots[1]+'</span></div><div class="gbar"><i style="width:0%"></i></div><div class="grow" style="font-size:11px;color:var(--faint);margin-top:9px"><span>heartbeat</span><span class="hbv">—</span></div>';
+  card.querySelector('.gtitle').textContent=n;document.getElementById('flgrid').appendChild(card);
+  const row=document.createElement('div');row.className='srow';row.innerHTML='<span class="dot" style="background:var(--amber)"></span><div class="info"><span class="title"></span><div class="meta"><span>—</span></div></div>';row.querySelector('.title').textContent=n;document.getElementById('flrows').appendChild(row);
+  document.getElementById('flct').textContent=Object.keys(NODES).length;
+  flOpen(n);
+  setTimeout(()=>{const d=NODES[n];if(!d)return;d.st='online';d.cls='ok';d.hb='just now';d.ver='v0.3.1';d.agents=['default · idle'];flUpdateCard(n);row.querySelector('.dot').style.background='var(--green)';row.querySelector('.meta span').textContent='now';if(flSel===n)flOpen(n);},5000);});}
+document.getElementById('flnew').onclick=addNodeModal;
+document.getElementById('flnew2').onclick=addNodeModal;
+</script>
+
+
+</body></html>

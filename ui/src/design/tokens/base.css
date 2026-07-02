@@ -1,0 +1,40 @@
+/* Olympus — Base layer.
+   Global resets + element defaults that consumers get for free by linking
+   styles.css. Everything here reads from tokens (colors/type/motion). */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  line-height: var(--lh-normal);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--selection); color: var(--text); }
+
+/* Custom scrollbars — thin, square, theme-aware */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: var(--radius-sm); }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+
+/* Single global keyboard focus ring — zero specificity so it never collides */
+:where(button, a, select, textarea, input, summary, [role="button"], [tabindex]):focus-visible {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+/* Mono numerics: tabular by default so data columns align */
+code, kbd, pre, samp { font-family: var(--font-mono); }
+
+a { color: var(--accent-ink); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3, h4 { font-weight: var(--fw-semibold); line-height: var(--lh-snug); }

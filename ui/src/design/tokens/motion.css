@@ -1,0 +1,41 @@
+/* Olympus — Motion.
+   Confirmatory, never decorative. Interaction transitions are sub-perceptual
+   (≤150ms). Looping animations (live-dot pulse, spinner, skeleton shimmer)
+   own their rhythm. Reduced-motion collapses everything to a static end-state.
+
+   RULE: interaction transitions use --dur-* + --ease-*. Max 150ms. */
+
+:root {
+  --dur-fast: 80ms;    /* @kind other */  /* immediate: row/message hover */
+  --dur:      120ms;   /* @kind other */  /* base: nav, borders, pills, controls */
+  --dur-slow: 150ms;   /* @kind other */  /* buttons, cards, panels, dialogs */
+
+  --ease:        cubic-bezier(0.2, 0, 0, 1);      /* @kind other */  /* standard */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);   /* @kind other */  /* enter / expand */
+  --ease-in-out: ease-in-out;                     /* @kind other */  /* looping */
+
+  /* Characteristic loop durations (referenced by keyframe animations) */
+  --loop-pulse:   1.6s;   /* @kind other */  /* live-dot pulse */
+  --loop-spin:    0.8s;   /* @kind other */  /* spinners */
+  --loop-shimmer: 1.3s;   /* @kind other */  /* skeleton shimmer */
+  --loop-blink:   1.5s;   /* @kind other */  /* streaming tag blink */
+}
+
+@keyframes olympus-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes olympus-spin   { to { transform: rotate(360deg); } }
+@keyframes olympus-shimmer{ 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes olympus-blink  { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes olympus-bounce { 0%, 80%, 100% { opacity: 0.3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,147 @@
+/* Olympus — Color system.
+   "Instrument" palette, matched to the shipped app (groundtruth): a NEUTRAL
+   near-black cockpit — no blue undertone — monochrome-forward, driven by ONE
+   swappable signal accent. The default accent is SILVER (#C9C9C9): actions,
+   selection, and focus read as polished metal, not a hue. Depth comes from
+   layered surfaces + hairline borders; overlays get soft dark shadows.
+   Status colors are soft pastels (green/amber/red) held apart from the accent
+   so status never reads as brand.
+
+   Dark ("obsidian") is the default and the design target. A light ("daybreak")
+   theme is provided as a first-class secondary via [data-theme="light"].
+
+   RULE: components reference var(--token). Never hardcode a hex in a component. */
+
+:root,
+:root[data-theme="obsidian"] {
+  /* ── Surfaces (neutral near-black) ── */
+  --bg:            #0A0A0B;   /* app canvas / deepest ground (viewport) */
+  --bg-elev:       #131315;   /* chrome: topbar, sidebars, panels */
+  --bg-elev-2:     #1B1B1D;   /* cards, inputs, wells, secondary elevation */
+  --bg-hover:      #232326;   /* row / control hover */
+  --bg-active:     #2A2A2E;   /* pressed / selected wash */
+
+  /* ── Borders (hairline; carry the elevation) ── */
+  --border:        #262629;   /* default dividers + card edges */
+  --border-strong: #3A3A3E;   /* emphasized: focus edges, active borders, popovers */
+  --border-faint:  #1D1D1F;   /* barely-there internal rules */
+
+  /* ── Text ── */
+  --text:          #E6E6E6;   /* primary — headings, body, values */
+  --text-dim:      #999A9C;   /* secondary — meta, descriptions, labels */
+  --text-faint:    #5E5E60;   /* tertiary — timestamps, hints, disabled copy */
+
+  /* ── Signal accent (SILVER — the single brand "color") ──
+     Swap these 5 lines to re-brand the whole system. Curated alternates
+     live in readme.md → Visual Foundations → Accent. */
+  --accent:        #C9C9C9;   /* primary action / selection / links / focus ring */
+  --accent-bright: #D8D8D8;   /* hover */
+  --accent-press:  #B5B5B5;   /* pressed */
+  --on-accent:     #0B0B0B;   /* text/glyph on a solid accent fill */
+  --accent-ink:    #C9C9C9;   /* accent text on dark surfaces (links, active nav) */
+
+  /* Accent alpha-derived (theme-correct tints; never hardcode rgba) */
+  --accent-subtle: rgba(201, 201, 201, 0.05);  /* whisper fill (badges on dark) */
+  --accent-wash:   rgba(201, 201, 201, 0.10);  /* selected-row / soft fill */
+  --accent-wash-2: rgba(201, 201, 201, 0.16);  /* stronger fill / hover tint */
+  --accent-line:   rgba(201, 201, 201, 0.25);  /* decorative accent border */
+  --accent-glow:   rgba(201, 201, 201, 0.45);  /* live-dot pulse / focus glow */
+
+  /* ── Semantic (status) — soft pastels, held apart from accent ── */
+  --ok:            #86EFAC;   /* success / running / healthy / live */
+  --ok-ink:        #86EFAC;
+  --ok-wash:       rgba(134, 239, 172, 0.15);
+  --ok-line:       rgba(134, 239, 172, 0.25);
+
+  --warn:          #FCD34D;   /* warning / draining / needs-attention */
+  --warn-ink:      #FCD34D;
+  --warn-wash:     rgba(252, 211, 77, 0.10);
+  --warn-line:     rgba(252, 211, 77, 0.25);
+
+  --err:           #FCA5A5;   /* error / blocked / failed / stop / offline */
+  --err-ink:       #FCA5A5;
+  --err-wash:      rgba(252, 165, 165, 0.10);
+  --err-line:      rgba(252, 165, 165, 0.25);
+
+  /* ── Source hues (channel identity in the session list) ──
+     Distinct dots/labels per origin channel. Low-chroma pastels so they read
+     as wayfinding, not decoration. */
+  --src-olympus:   #C9C9C9;
+  --src-cli:       #999A9C;
+  --src-telegram:  #7DD3FC;
+  --src-discord:   #A5B4FC;
+  --src-webui:     #5EEAD4;
+  --src-cron:      #FCD34D;
+  --src-subagent:  #D8B4FE;
+  --src-api:       #A8A29E;
+  --src-acp:       #86EFAC;
+
+  /* ── Utility ── */
+  --overlay:       rgba(0, 0, 0, 0.55);        /* dialog / palette scrim */
+  --hover-veil:    rgba(255, 255, 255, 0.02);  /* faint row wash */
+  --scrollbar:     #3A3A3E;
+  --scrollbar-hover: #4A4A4F;
+  --track:         #232326;                    /* progress/slot track */
+  --selection:     rgba(201, 201, 201, 0.25);  /* ::selection */
+}
+
+/* ── Light theme ("daybreak") — first-class secondary, neutral grays ── */
+:root[data-theme="light"] {
+  --bg:            #F6F6F7;
+  --bg-elev:       #FFFFFF;
+  --bg-elev-2:     #EFEFF0;
+  --bg-hover:      #E7E7E9;
+  --bg-active:     #DDDDE0;
+
+  --border:        #E2E2E5;
+  --border-strong: #C8C8CD;
+  --border-faint:  #ECECEE;
+
+  --text:          #171719;
+  --text-dim:      #5D5D60;
+  --text-faint:    #98989C;
+
+  --accent:        #2A2A2E;   /* silver inverts to near-black ink */
+  --accent-bright: #414146;
+  --accent-press:  #1B1B1D;
+  --on-accent:     #FFFFFF;
+  --accent-ink:    #2A2A2E;
+
+  --accent-subtle: rgba(42, 42, 46, 0.04);
+  --accent-wash:   rgba(42, 42, 46, 0.07);
+  --accent-wash-2: rgba(42, 42, 46, 0.12);
+  --accent-line:   rgba(42, 42, 46, 0.22);
+  --accent-glow:   rgba(42, 42, 46, 0.35);
+
+  --ok:            #15803D;
+  --ok-ink:        #15803D;
+  --ok-wash:       rgba(21, 128, 61, 0.10);
+  --ok-line:       rgba(21, 128, 61, 0.25);
+
+  --warn:          #A16207;
+  --warn-ink:      #A16207;
+  --warn-wash:     rgba(161, 98, 7, 0.10);
+  --warn-line:     rgba(161, 98, 7, 0.25);
+
+  --err:           #B91C1C;
+  --err-ink:       #B91C1C;
+  --err-wash:      rgba(185, 28, 28, 0.08);
+  --err-line:      rgba(185, 28, 28, 0.25);
+
+  --src-olympus:   #2A2A2E;
+  --src-cli:       #6B6B6F;
+  --src-telegram:  #0369A1;
+  --src-discord:   #4F46E5;
+  --src-webui:     #0F766E;
+  --src-cron:      #A16207;
+  --src-subagent:  #7E22CE;
+  --src-api:       #78716C;
+  --src-acp:       #15803D;
+
+  --overlay:       rgba(23, 23, 25, 0.35);
+  --hover-veil:    rgba(0, 0, 0, 0.025);
+  --scrollbar:     #C8C8CD;
+  --scrollbar-hover: #A8A8AD;
+  --track:         #E7E7E9;
+  --selection:     rgba(42, 42, 46, 0.18);
+}

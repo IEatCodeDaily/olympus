@@ -1,0 +1,48 @@
+/* Olympus — Typography.
+   Two families, one voice (matched to the shipped app):
+     --font-display : IBM Plex Sans (600) — brand, page titles, big numerics
+     --font-sans    : IBM Plex Sans — all UI + body
+     --font-mono    : IBM Plex Mono — data, meta, timestamps, code, badges
+
+   The scale is DENSE. UI default is 14px body / 12–12.5px controls, and mono
+   micro-labels go down to 9–10px (uppercase, letter-spaced — the signature
+   editorial-terminal move). Hierarchy is carried by size + weight, not color. */
+
+:root {
+  --font-display: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
+  --font-sans:    "IBM Plex Sans", -apple-system, system-ui, sans-serif;
+  --font-mono:    "IBM Plex Mono", ui-monospace, monospace;
+
+  /* ── Size scale (role-named) ── */
+  --fs-9:    9px;    /* micro mono: kbd hints, tiny meta, row counts */
+  --fs-10:   10px;   /* mono labels: section headers, badges, source pills */
+  --fs-11:   11px;   /* small mono data: artifact names, log meta */
+  --fs-12:   12px;   /* meta + controls: nav items, timestamps, key-values */
+  --fs-13:   13px;   /* inputs, composer text, dense body */
+  --fs-14:   14px;   /* UI default: body, message content */
+  --fs-15:   15px;   /* comfortable body prose */
+  --fs-16:   16px;   /* card titles, list-item headings */
+  --fs-18:   18px;   /* section headers, panel titles, doc H1 */
+  --fs-22:   22px;   /* page title (H1) */
+  --fs-28:   28px;   /* display / big numerics / hero metric */
+  --fs-40:   40px;   /* jumbo display (marketing/empty hero) */
+
+  /* ── Weights ── */
+  --fw-regular:  400;   /* @kind other */  /* body prose, descriptions */
+  --fw-medium:   500;   /* @kind other */  /* nav, row titles, interactive labels */
+  --fw-semibold: 600;   /* @kind other */  /* page titles, card titles, headings, brand */
+  --fw-bold:     700;   /* @kind other */  /* badges, status pills, mono tags */
+
+  /* ── Line-heights ── */
+  --lh-tight:  1.15;   /* @kind other */  /* display + large titles */
+  --lh-snug:   1.35;   /* @kind other */  /* headings, card titles, controls */
+  --lh-normal: 1.5;    /* @kind other */  /* dense UI text */
+  --lh-relaxed:1.65;   /* @kind other */  /* body prose / message content */
+
+  /* ── Tracking (letter-spacing) ── */
+  --tracking-tight:  -0.02em;  /* display / page titles: compact + editorial */
+  --tracking-snug:   -0.01em;  /* medium headings, brand wordmark */
+  --tracking-normal:  0;       /* body */
+  --tracking-caps:    0.05em;  /* THE tracking for uppercase mono labels/badges (~.5px) */
+  --tracking-caps-wide: 0.1em; /* eyebrow / kicker section markers only */
+}
