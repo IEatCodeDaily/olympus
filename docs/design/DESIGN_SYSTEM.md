@@ -7,6 +7,40 @@
 
 ---
 
+> ## ⚠️ STATUS — this spec is ahead of the code (reconciliation pending)
+>
+> **As of 2026-07-03, `ui/src/index.css` was redesigned (commit `b9a1b0e`,
+> "feat(ui): redesign to reference design system") and no longer matches §2–§8
+> below.** Treat those sections as the **design *target/intent*, not the current
+> code.** For live class/token names, **read `ui/src/index.css` and
+> `ui/src/components/shell.tsx` directly** until this doc is reconciled.
+>
+> What actually diverged in the shipped CSS:
+> - **Accent is silver, not cyan.** `--silver` / `--on-silver` / `--silver-wash`
+>   replace the whole `--accent*` family.
+> - **One `:root`, no `[data-theme]` blocks.** The three themes
+>   (`midnight` / `daylight` / `amber-crt`) documented in §1–§2 are **not in code
+>   right now** — there is a single dark palette.
+> - **No `--font-*`, `--space-*`, `--tracking-*`, `--radius-*`, `--dur-*` scales.**
+>   The entire tokenized type/space/tracking/radius/motion scale (§3–§6, built up
+>   over the 2026-07-01/02 changelog runs) was dropped; sizes/spacing are raw
+>   literals again in the new file.
+> - **Primitive class names changed:** e.g. `.page-header`→`.gv-head`,
+>   `.stat-pill`→`.stat`, `.empty-state-message`→`.empty-state-msg`. `shell.tsx`
+>   still emits the OLD class names, so `PageHeader`/`EmptyState`/`StatPill`/
+>   `Badge` currently render **unstyled** against the new CSS — a real break for
+>   view workers, flagged as the top design debt below.
+>
+> **Why this doc wasn't rewritten in this run:** a UI refactor is in flight and
+> **uncommitted** (TanStack Query + Zustand, `router.ts`, `AppShell.tsx`,
+> `FleetView.tsx`; old view files deleted) and `cd ui && bun run typecheck` is
+> **currently red** (`ChatView.tsx` imports the deleted `../hooks/useChat` /
+> `../hooks/useSessions`). Documenting the new class/token names now — against a
+> moving, non-compiling target — would just create fresh drift. This spec is
+> re-synced to reality **once that refactor lands and typecheck/build are green.**
+
+---
+
 ## Table of Contents
 
 1. [Design Anchor](#1-design-anchor)
@@ -516,6 +550,55 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-03 — Truth reconciliation: flag that the shipped CSS redesign has out-run this spec (doc-only; no code touched)
+
+- **What happened:** commit `b9a1b0e` ("feat(ui): redesign to reference design
+  system", 1896-line `index.css` rewrite) landed a **new visual direction** —
+  **silver accent, a single `:root` (no `[data-theme]` blocks, so no
+  midnight/daylight/amber-crt), and none of the `--font-*` / `--space-*` /
+  `--tracking-*` / `--radius-*` / `--dur-*` scales** that the 2026-07-01/02
+  changelog runs built up. Primitive class names also changed
+  (`.page-header`→`.gv-head`, `.stat-pill`→`.stat`,
+  `.empty-state-message`→`.empty-state-msg`). Net: **§2–§8 of this doc now
+  describe a design system that no longer exists in code.**
+- **Why no token/primitive fix this run:** the working tree is mid-refactor and
+  **uncommitted** (TanStack Query + Zustand, `router.ts`, `AppShell.tsx`,
+  `FleetView.tsx`; `App.tsx` + old view/hook files deleted) and
+  `cd ui && bun run typecheck` is **red** — `ChatView.tsx` imports the deleted
+  `../hooks/useChat` / `../hooks/useSessions`. The design-lead's hard rules are
+  "verify every change with a green typecheck+build" and "never leave main
+  broken." A code/token edit **cannot** be verified while the tree won't
+  compile, and stashing another worker's WIP to force a build would risk their
+  work. The correct move is to **surface the divergence in the open, not
+  silently rewrite 800 lines against a moving, non-compiling target.**
+- **What this run did (safe, isolated, reversible):** added a prominent
+  **⚠️ STATUS banner** at the top of the doc that (a) marks §2–§8 as *intent, not
+  current code*, (b) enumerates exactly what diverged (accent, themes, token
+  scales, class names, the `shell.tsx` unstyled-primitive break), and (c) points
+  view workers to read `index.css` + `shell.tsx` directly until reconciliation.
+  **Doc-only** — no CSS, no primitive, no view code touched; committed on its own
+  path so HEAD's build is unaffected.
+- **Verification:** doc-only change, so the `typecheck`+`build` gate is N/A for
+  *this* edit's correctness (Markdown). The red typecheck is **pre-existing WIP**,
+  not introduced here — deliberately left untouched. Fully reversible (one banner
+  + this entry).
+- **Top design debts now visible (in priority order):**
+  1. **`shell.tsx` ↔ `index.css` class-name break.** `PageHeader` / `EmptyState`
+     / `StatPill` / `Badge` emit the OLD class names (`.page-header`,
+     `.empty-state-message`, `.stat-pill`, `.badge-*`) which the new CSS **does
+     not define** → these primitives render unstyled. Fix once the refactor
+     compiles: either re-add the classes to the new CSS **or** update `shell.tsx`
+     to the new names — a design-system decision the design-lead owns.
+  2. **Regression of the token scales.** The new CSS dropped `--font-*`,
+     `--space-*`, `--tracking-*`, `--radius-*`, `--dur-*` back to raw literals.
+     Re-introducing a token scale on top of the silver redesign is the big
+     system-level rebuild once the tree is green.
+  3. **Theme system regressed to one palette.** Multi-theme (`[data-theme]`) needs
+     re-deciding under the silver direction — is it silver-only, or silver +
+     daylight + amber-crt re-derived?
+  4. **Full §2–§8 reconciliation** of this doc to the shipped system, deferred
+     until the in-flight refactor lands and typecheck/build are green.
 
 ### 2026-07-02 — Transcript content gutter becomes a density-flexing constant (`--space-content-x`; fixes latent compact bug)
 
