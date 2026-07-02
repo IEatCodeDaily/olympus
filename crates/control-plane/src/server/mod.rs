@@ -35,7 +35,7 @@ use crate::log::Log;
 use crate::search::SearchIndex;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
-use dto::{CardDto, MessageDto, SearchHitDto, SessionDto, SetupDto};
+use dto::{CardDto, MessageDto, RegistryEntryDto, SearchHitDto, SessionDto, SetupDto};
 use ws::ServerFrame;
 
 /// Import progress, surfaced on `/api/health`.
@@ -103,6 +103,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/cards/{id}/reassign", post(reassign_card))
         .route("/api/events", get(tail_events))
         .route("/api/setup", get(get_setup).put(put_setup))
+        .route("/api/registry", get(list_registry).put(put_registry_entry))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -393,6 +394,89 @@ async fn put_setup(State(state): State<AppState>, Json(body): Json<PutSetupBody>
         let mut views = state.views.write().await;
         views.apply(&event);
         views.setup.get(scope).map(SetupDto::from_row)
+    };
+    match dto {
+        Some(dto) => Json(serde_json::to_value(&dto).unwrap()).into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "apply failed").into_response(),
+    }
+}
+
+/// Query for `GET /api/registry` — filter by kind.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RegistryQuery {
+    /// Filter to one kind: "skill" | "mcp" | "plugin" | "hook". Absent → all.
+    kind: Option<String>,
+}
+
+/// GET /api/registry?kind=mcp — list registry entries (ADR 0006 §9.4).
+async fn list_registry(State(state): State<AppState>, Query(q): Query<RegistryQuery>) -> Response {
+    let views = state.views.read().await;
+    let entries: Vec<RegistryEntryDto> = match q.kind.as_deref() {
+        Some(kind) => views.registry.list_kind(kind),
+        None => views.registry.list(),
+    }
+    .iter()
+    .map(|e| RegistryEntryDto::from_entry(e))
+    .collect();
+    Json(json!({ "entries": entries })).into_response()
+}
+
+/// Body for `PUT /api/registry` — register (or replace) an entry.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PutRegistryBody {
+    kind: String,
+    slug: String,
+    definition: String,
+}
+
+/// PUT /api/registry — register a (kind, slug) → definition entry. PUT semantics
+/// (full replace). Validates kind is one of skill/mcp/plugin/hook.
+async fn put_registry_entry(
+    State(state): State<AppState>,
+    Json(body): Json<PutRegistryBody>,
+) -> Response {
+    let kind = body.kind.trim().to_string();
+    if !matches!(kind.as_str(), "skill" | "mcp" | "plugin" | "hook") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_kind",
+                "message": "kind must be skill | mcp | plugin | hook",
+            })),
+        )
+            .into_response();
+    }
+    let slug = body.slug.trim().to_string();
+    if slug.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "empty_slug", "message": "slug must be non-empty" })),
+        )
+            .into_response();
+    }
+
+    let event = crate::event::Event::EntryRegistered {
+        kind: kind.clone(),
+        slug: slug.clone(),
+        definition: body.definition,
+        registered_at: now_epoch(),
+    };
+    if let Err(e) = state.log.append(&event) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+        )
+            .into_response();
+    }
+    let dto = {
+        let mut views = state.views.write().await;
+        views.apply(&event);
+        views
+            .registry
+            .get(&kind, &slug)
+            .map(RegistryEntryDto::from_entry)
     };
     match dto {
         Some(dto) => Json(serde_json::to_value(&dto).unwrap()).into_response(),

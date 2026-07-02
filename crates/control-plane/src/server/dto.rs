@@ -8,7 +8,7 @@
 use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
-use crate::views::{CardRow, MessageRow, SessionRow, SetupRow};
+use crate::views::{CardRow, MessageRow, RegistryEntry, SessionRow, SetupRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -292,6 +292,28 @@ impl SetupDto {
             plugins: row.plugins.clone(),
             hooks: row.hooks.clone(),
             declared_at: row.declared_at,
+        }
+    }
+}
+
+/// `RegistryEntry` as the UI consumes it (ADR 0006 §9.4).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryEntryDto {
+    pub kind: String,
+    pub slug: String,
+    /// Harness-agnostic definition (JSON string — the UI parses or displays it).
+    pub definition: String,
+    pub registered_at: f64,
+}
+
+impl RegistryEntryDto {
+    pub fn from_entry(row: &RegistryEntry) -> Self {
+        Self {
+            kind: row.kind.clone(),
+            slug: row.slug.clone(),
+            definition: row.definition.clone(),
+            registered_at: row.registered_at,
         }
     }
 }

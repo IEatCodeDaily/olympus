@@ -126,6 +126,23 @@ pub enum Event {
         hooks: Vec<String>,
         declared_at: f64,
     },
+    // ---- Registry events (ADR 0006 §9.4 — slug → definition) ----
+    /// A registry entry was registered (or replaced). The registry is the
+    /// authority: a slug → definition record that the adapter resolves before
+    /// materializing. Syncs across nodes (the portable declaration). Drift
+    /// detection warns when a node has a config not in the registry.
+    ///
+    /// `kind` = "skill" | "mcp" | "plugin" | "hook". `slug` is the immutable
+    /// primary key within (kind, slug). `definition` is the harness-agnostic
+    /// definition (JSON): MCP → `{command,args,env}`; skill → `{dir}` path or
+    /// content ref; plugin → `{kind:install|service, ...}`; hook → harness-
+    /// specific JSON. PUT semantics — full replace of the entry.
+    EntryRegistered {
+        kind: String,
+        slug: String,
+        definition: String, // JSON string (harness-agnostic)
+        registered_at: f64,
+    },
 }
 
 #[cfg(test)]
@@ -161,6 +178,19 @@ mod tests {
             plugins: vec!["lsp-rust".into(), "codegraph".into()],
             hooks: vec!["pre-commit-verify".into()],
             declared_at: 1_782_900_000.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn entry_registered_postcard_roundtrips() {
+        let e = Event::EntryRegistered {
+            kind: "mcp".into(),
+            slug: "gitnexus".into(),
+            definition: r#"{"command":"gitnexus","args":["--stdio"],"env":{}}"#.into(),
+            registered_at: 1_782_900_001.0,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

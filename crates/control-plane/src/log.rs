@@ -127,6 +127,12 @@ enum StoredVariant {
         hooks: Vec<String>,
         declared_at: f64,
     },
+    EntryRegistered {
+        kind: String,
+        slug: String,
+        definition: String,
+        registered_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -299,6 +305,17 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             plugins: plugins.clone(),
             hooks: hooks.clone(),
             declared_at: *declared_at,
+        },
+        Event::EntryRegistered {
+            kind,
+            slug,
+            definition,
+            registered_at,
+        } => StoredVariant::EntryRegistered {
+            kind: kind.clone(),
+            slug: slug.clone(),
+            definition: definition.clone(),
+            registered_at: *registered_at,
         },
     };
     Ok(StoredEvent { variant })
@@ -484,6 +501,17 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             hooks,
             declared_at,
         },
+        StoredVariant::EntryRegistered {
+            kind,
+            slug,
+            definition,
+            registered_at,
+        } => Event::EntryRegistered {
+            kind,
+            slug,
+            definition,
+            registered_at,
+        },
     })
 }
 
@@ -584,6 +612,7 @@ impl Log {
         let is_native = |ev: &Event| -> bool {
             match ev {
                 Event::SetupDeclared { .. }
+                | Event::EntryRegistered { .. }
                 | Event::CardCreated { .. }
                 | Event::CardAssigned { .. }
                 | Event::CardClaimed { .. }
