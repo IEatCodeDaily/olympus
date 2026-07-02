@@ -8,6 +8,7 @@ pub mod adapter;
 pub mod auth;
 pub mod bridge;
 pub mod compress;
+pub mod edit_model;
 pub mod event;
 pub mod import;
 pub mod irc;
