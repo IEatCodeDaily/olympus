@@ -8,7 +8,8 @@
 import React from "react";
 import { Icon, type IconName } from "../../../components/Icon";
 import type { Message, Session } from "../../../types";
-import { fmtTime, tokenFmt, isDiffResult, parseDiff } from "../helpers";
+import { fmtTime, isDiffResult, parseDiff } from "../helpers";
+import { ContextRing } from "./ContextRing";
 
 export type RsTab = "overview" | "outline" | "settings" | "browser" | "diff" | "git" | "ai";
 
@@ -17,7 +18,6 @@ export function RightPanel({
   tab,
   onTabChange,
   session,
-  totalTokens,
   artifacts,
   messages,
 }: {
@@ -25,7 +25,6 @@ export function RightPanel({
   tab: RsTab;
   onTabChange: (t: RsTab) => void;
   session: Session | undefined;
-  totalTokens: number;
   artifacts: Array<{ path: string; status: "new" | "modified" }>;
   messages: Message[];
 }) {
@@ -96,16 +95,7 @@ export function RightPanel({
             </div>
           </div>
           <div className="rs-sec">
-            <div className="stats">
-              <div className="stat">
-                <span className="v">{tokenFmt(totalTokens)}</span>
-                <span className="l">TOKENS</span>
-              </div>
-              <div className="stat">
-                <span className="v">{messages.length}</span>
-                <span className="l">MSGS</span>
-              </div>
-            </div>
+            <ContextRing session={session} messages={messages} />
           </div>
           {artifacts.length > 0 && (
             <div className="arts">
@@ -162,12 +152,6 @@ export function RightPanel({
             </div>
           </div>
           <div className="rs-sec">
-            <div className="kv">
-              <span className="k">CONTEXT</span>
-              <span className="v">
-                {tokenFmt(session?.inputTokens)} / {tokenFmt(session?.inputTokens ? session.inputTokens * 4 : null)}
-              </span>
-            </div>
             <div className="kv">
               <span className="k">SOURCE</span>
               <span className="v">{session?.source ?? "—"}</span>

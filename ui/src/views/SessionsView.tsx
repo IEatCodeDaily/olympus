@@ -191,8 +191,6 @@ function SessionChatLayout({
     return Array.from(seen.entries()).map(([path, status]) => ({ path, status }));
   }, [messages]);
 
-  const totalTokens = (session?.inputTokens ?? 0) + (session?.outputTokens ?? 0);
-
   return (
     <div
       className="view on chat-view"
@@ -279,7 +277,6 @@ function SessionChatLayout({
               tab={rsTab}
               onTabChange={onRsTabChange}
               session={session}
-              totalTokens={totalTokens}
               artifacts={artifacts}
               messages={messages}
             />

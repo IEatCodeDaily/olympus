@@ -73,12 +73,13 @@ export interface ModelInfo {
   provider: string | null;
 }
 
-/** A drivable Hermes agent (profile) with its configured provider + model. */
+/** A drivable agent with its configured provider + model/version. */
 export interface AgentInfo {
-  /** Profile id passed to `hermes -p <id> acp` ("default" = root profile). */
+  /** Agent id passed to POST /api/sessions { agent }. */
   id: string;
   provider: string | null;
   model: string | null;
+  kind: "hermes" | "claude-code" | "codex";
   /** True for the implicit root profile the server runs as by default. */
   isDefault: boolean;
 }

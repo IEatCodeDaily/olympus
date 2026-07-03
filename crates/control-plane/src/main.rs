@@ -119,28 +119,43 @@ async fn main() -> Result<()> {
             std::sync::Arc::new(
                 |spec: &olympus_control_plane::server::bridge_mgr::RuntimeSpec|
                  -> std::sync::Arc<dyn olympus_control_plane::bridge::AgentRuntime> {
-                    let mut config =
-                        olympus_control_plane::bridge::hermes::HermesRuntimeConfig::default();
-                    // Route the chosen agent (Hermes profile) to the child via the
-                    // standard `-p <profile>` flag; absent → server default profile.
-                    if let Some(agent) = &spec.agent {
-                        if !agent.is_empty() {
-                            config.command =
-                                vec!["hermes".into(), "-p".into(), agent.clone(), "acp".into()];
-                        }
-                    }
-                    // Run the agent in its scoped session space, not the host cwd.
-                    if let Some(cwd) = &spec.cwd {
-                        if !cwd.is_empty() {
-                            config.cwd = cwd.clone();
-                        }
-                    }
-                    // Pass resolved MCP servers + env from the setup adapter
-                    // (ADR 0006 §9.3) to the Hermes runtime config.
-                    config.mcp_servers = spec.mcp_servers.clone();
-                    for (k, v) in &spec.env {
-                        config.env.push((k.clone(), v.clone()));
-                    }
+                    let cwd = spec
+                        .cwd
+                        .as_deref()
+                        .filter(|c| !c.is_empty())
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            std::env::current_dir()
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_else(|_| ".".into())
+                        });
+                    let env = spec.env.clone();
+                    // Route the chosen agent to the correct ACP adapter: Hermes
+                    // profiles use `hermes acp`, while local CLI harnesses
+                    // (Claude Code / Codex) use the pinned Zed ACP adapters.
+                    let command =
+                        olympus_control_plane::bridge::hermes::acp_command_for_agent(
+                            spec.agent.as_deref(),
+                        );
+                    // Select the ACP wire framing: Hermes uses newline-delimited
+                    // JSON (the transport hermes acp actually uses), while
+                    // Claude Code and Codex use Content-Length framing per the
+                    // ACP specification.
+                    let framing =
+                        olympus_control_plane::bridge::hermes::acp_framing_for_agent(
+                            spec.agent.as_deref(),
+                        );
+                    let config =
+                        olympus_control_plane::bridge::hermes::HermesRuntimeConfig {
+                            command,
+                            cwd,
+                            session_source: Some("olympus".into()),
+                            event_buffer: 256,
+                            start_timeout_secs: 30,
+                            mcp_servers: spec.mcp_servers.clone(),
+                            env,
+                            framing,
+                        };
                     olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(config)
                 },
             ),

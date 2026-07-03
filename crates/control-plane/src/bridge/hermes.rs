@@ -29,13 +29,57 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use futures::stream::Stream;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 use tracing::debug;
 
 use super::{AgentCommand, AgentEvent, AgentRuntime};
-use crate::bridge::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest};
+use crate::adapter::AgentKind;
+use crate::bridge::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest, Frame};
+
+const CLAUDE_CODE_ACP_PACKAGE: &str = "@zed-industries/claude-code-acp@0.16.2";
+const CODEX_ACP_PACKAGE: &str = "@zed-industries/codex-acp@0.16.0";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpFraming {
+    NewlineJson,
+    ContentLength,
+}
+
+/// Select the ACP adapter command for a session's agent string.
+///
+/// Hermes profiles still run through `hermes acp` (with `-p <profile>` when a
+/// profile is explicitly selected). Claude Code and Codex run through pinned Zed
+/// ACP adapters via `npx -y`, so the control plane does not depend on mutable
+/// globally-installed adapter binaries.
+pub fn acp_command_for_agent(agent: Option<&str>) -> Vec<String> {
+    let agent = agent.unwrap_or_default();
+    match AgentKind::from_agent_str(agent) {
+        AgentKind::Hermes => {
+            if agent.is_empty() {
+                vec!["hermes".into(), "acp".into()]
+            } else {
+                vec![
+                    "hermes".into(),
+                    "-p".into(),
+                    agent.to_string(),
+                    "acp".into(),
+                ]
+            }
+        }
+        AgentKind::ClaudeCode => vec!["npx".into(), "-y".into(), CLAUDE_CODE_ACP_PACKAGE.into()],
+        AgentKind::Codex => vec!["npx".into(), "-y".into(), CODEX_ACP_PACKAGE.into()],
+    }
+}
+
+pub fn acp_framing_for_agent(_agent: Option<&str>) -> AcpFraming {
+    // All current ACP adapters (hermes acp, claude-code-acp, codex-acp) use
+    // newline-delimited JSON on the wire, regardless of what the ACP spec
+    // says about Content-Length framing. If a future adapter requires CL
+    // framing, switch on AgentKind here.
+    AcpFraming::NewlineJson
+}
 
 // ---------------------------------------------------------------------------
 // Newline-delimited JSON-RPC codec (the transport `hermes acp` actually uses)
@@ -161,6 +205,51 @@ pub fn map_message_to_event(msg: &AcpMessage) -> Option<AgentEvent> {
     }
 }
 
+async fn handle_incoming_message(
+    msg: &AcpMessage,
+    tx: &tokio::sync::broadcast::Sender<AgentEvent>,
+    session_id_shared: &Arc<Mutex<Option<String>>>,
+) {
+    if let AcpMessage::Response(resp) = msg {
+        if let Some(sid) = resp.result.get("sessionId").and_then(|v| v.as_str()) {
+            *session_id_shared.lock().await = Some(sid.to_string());
+            debug!(target: "olympus.bridge.hermes", session_id = %sid, "captured session id");
+        }
+    }
+    if let Some(event) = map_message_to_event(msg) {
+        let _ = tx.send(event);
+    }
+}
+
+async fn read_content_length_message(
+    reader: &mut BufReader<ChildStdout>,
+) -> Result<Option<AcpMessage>> {
+    let mut content_length = None;
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line).await?;
+        if read == 0 {
+            return Ok(None);
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+
+    let Some(len) = content_length else {
+        return Ok(None);
+    };
+    let mut body = vec![0; len];
+    reader.read_exact(&mut body).await?;
+    Ok(Some(Frame::decode(&body)?))
+}
+
 // ---------------------------------------------------------------------------
 // HermesAgentRuntime
 // ---------------------------------------------------------------------------
@@ -202,6 +291,8 @@ pub struct HermesRuntimeConfig {
     /// Extra environment variables for the child process (from the setup
     /// adapter, e.g. HERMES_SKILLS_PATH). Default empty.
     pub env: Vec<(String, String)>,
+    /// ACP frame encoding used by the child process.
+    pub framing: AcpFraming,
 }
 
 impl Default for HermesRuntimeConfig {
@@ -216,6 +307,7 @@ impl Default for HermesRuntimeConfig {
             start_timeout_secs: 30,
             mcp_servers: Vec::new(),
             env: Vec::new(),
+            framing: AcpFraming::NewlineJson,
         }
     }
 }
@@ -257,9 +349,12 @@ impl HermesAgentRuntime {
         AcpId::from(self.next_id.fetch_add(1, Ordering::SeqCst))
     }
 
-    /// Write a raw JSON-RPC message to the child's stdin (newline-delimited).
+    /// Write a raw JSON-RPC message to the child's stdin.
     async fn write_message(&self, msg: &AcpMessage) -> Result<()> {
-        let bytes = NlFrame::encode(msg)?;
+        let bytes = match self.config.framing {
+            AcpFraming::NewlineJson => NlFrame::encode(msg)?,
+            AcpFraming::ContentLength => Frame::encode(msg)?,
+        };
         let mut state = self.state.lock().await;
         let stdin = state
             .stdin
@@ -270,7 +365,7 @@ impl HermesAgentRuntime {
         Ok(())
     }
 
-    /// Spawn the stdout reader task that parses JSON-RPC lines, captures the
+    /// Spawn the stdout reader task that parses JSON-RPC frames, captures the
     /// session id from `session/new`/`session/resume` responses, and pushes
     /// [`AgentEvent`]s into the channel. Holds only the pieces it needs (tx +
     /// the shared session-id cell), so it does not pin the whole runtime alive.
@@ -278,29 +373,35 @@ impl HermesAgentRuntime {
         stdout: ChildStdout,
         tx: tokio::sync::broadcast::Sender<AgentEvent>,
         session_id_shared: Arc<Mutex<Option<String>>>,
+        framing: AcpFraming,
     ) {
         tokio::spawn(async move {
             let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                debug!(target: "olympus.bridge.hermes", line = %line, "ACP recv");
-                let Some(msg) = NlFrame::decode_line(line.as_bytes()) else {
-                    continue;
-                };
-                // Capture session id from session/new|resume responses.
-                if let AcpMessage::Response(resp) = &msg {
-                    if let Some(sid) = resp.result.get("sessionId").and_then(|v| v.as_str()) {
-                        *session_id_shared.lock().await = Some(sid.to_string());
-                        debug!(target: "olympus.bridge.hermes", session_id = %sid, "captured session id");
+            match framing {
+                AcpFraming::NewlineJson => {
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        debug!(target: "olympus.bridge.hermes", line = %line, "ACP recv");
+                        let Some(msg) = NlFrame::decode_line(line.as_bytes()) else {
+                            continue;
+                        };
+                        handle_incoming_message(&msg, &tx, &session_id_shared).await;
                     }
                 }
-                if let Some(event) = map_message_to_event(&msg) {
-                    // broadcast::send is synchronous; Err means no receivers
-                    // are subscribed (the drain task may have ended). That's
-                    // fine — we keep reading so a later turn's subscriber sees
-                    // its events. We do NOT break on Err (that would stop the
-                    // reader and kill all future turns).
-                    let _ = tx.send(event);
+                AcpFraming::ContentLength => {
+                    let mut reader = reader;
+                    loop {
+                        match read_content_length_message(&mut reader).await {
+                            Ok(Some(msg)) => {
+                                handle_incoming_message(&msg, &tx, &session_id_shared).await
+                            }
+                            Ok(None) => break,
+                            Err(err) => {
+                                debug!(target: "olympus.bridge.hermes", error = %err, "ACP content-length read failed");
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             debug!(target: "olympus.bridge.hermes", "ACP stdout reader closed");
@@ -370,6 +471,7 @@ impl AgentRuntime for HermesAgentRuntime {
             stdout,
             self.event_tx.clone(),
             Arc::clone(&self.session_id_shared),
+            self.config.framing,
         );
 
         // --- ACP handshake: initialize ---
@@ -424,6 +526,9 @@ impl AgentRuntime for HermesAgentRuntime {
         if let Some(source) = &self.config.session_source {
             cmd.env("HERMES_ACP_SESSION_SOURCE", source);
         }
+        for (k, v) in &self.config.env {
+            cmd.env(k, v);
+        }
 
         let mut child = cmd
             .spawn()
@@ -446,6 +551,7 @@ impl AgentRuntime for HermesAgentRuntime {
             stdout,
             self.event_tx.clone(),
             Arc::clone(&self.session_id_shared),
+            self.config.framing,
         );
 
         let init_req = build_initialize_request(self.alloc_id());
@@ -638,6 +744,27 @@ mod tests {
         let msg = AcpMessage::Request(req);
         let event = map_message_to_event(&msg);
         assert!(event.is_none());
+    }
+
+    #[test]
+    fn acp_command_for_agent_keeps_hermes_default_and_profiles() {
+        assert_eq!(acp_command_for_agent(None), vec!["hermes", "acp"]);
+        assert_eq!(
+            acp_command_for_agent(Some("gpt55")),
+            vec!["hermes", "-p", "gpt55", "acp"]
+        );
+    }
+
+    #[test]
+    fn acp_command_for_agent_selects_pinned_cli_adapters() {
+        assert_eq!(
+            acp_command_for_agent(Some("claude-code")),
+            vec!["npx", "-y", "@zed-industries/claude-code-acp@0.16.2"]
+        );
+        assert_eq!(
+            acp_command_for_agent(Some("codex")),
+            vec!["npx", "-y", "@zed-industries/codex-acp@0.16.0"]
+        );
     }
 
     // ---- helpers ----

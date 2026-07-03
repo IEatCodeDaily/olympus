@@ -180,6 +180,10 @@ export function useLiveSync() {
           qc.invalidateQueries({ queryKey: qk.session(frame.sessionId) });
           break;
         }
+        case "cards.changed": {
+          qc.invalidateQueries({ queryKey: ["cards"] });
+          break;
+        }
         default:
           break;
       }

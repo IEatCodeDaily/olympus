@@ -21,9 +21,10 @@ import { useHealth } from "./hooks/queries";
 import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
 import { SessionsView } from "./views/SessionsView";
-import { FleetView } from "./views/fleet/FleetView";
+import FleetView from "./views/FleetView";
 import { VaultsView } from "./views/VaultsView";
-import { ProjectsView, SettingsView } from "./views/PlaceholderViews";
+import { ProjectsView } from "./views/ProjectsView";
+import { SettingsView } from "./views/PlaceholderViews";
 
 // ── Helpers ────────────────────────────────────────
 
@@ -66,7 +67,7 @@ export function AppShell() {
 
         {/* Fleet View owns its own sidebar + viewport layout */}
         {surface === "fleet" && (
-          <FleetView nodeId={nodeId} />
+          <FleetView />
         )}
 
         {/* Other surfaces keep the shell-level sidebar + viewport split */}
