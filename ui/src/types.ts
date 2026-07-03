@@ -245,6 +245,8 @@ export interface SessionListParams {
   archived?: boolean;
   /** true → Olympus-managed sessions only; false → imported history only. */
   managed?: boolean;
+  /** Filter to sessions running on a specific node by nodeId. */
+  node?: string;
   q?: string;
   sort?: SessionSort;
   cursor?: string;

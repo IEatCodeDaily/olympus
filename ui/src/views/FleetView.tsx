@@ -1,40 +1,37 @@
-// FleetView — fleet + agents operator view (roadmap U4).
+// FleetView — fleet operator surface (card N1).
 //
-// Renders two sub-views behind a tab strip:
-//   • Fleet  — responsive grid of node cards; clicking one slides in a detail
-//              drawer (status / bind / slots / heartbeat / version, agents on
-//              node, sessions, and Drain/Restart/Remove actions).
-//   • Agents — agents grouped by node, each row showing icon, name, type tag
-//              (acp/cli), model, and status.
+// Grid of node .ol-card (nodeId, hostname, status dot, slots .ol-bar, version,
+// local badge, last-heartbeat-ago). Click a node → drill-in panel listing that
+// node's running sessions (filtered /api/sessions?node=<id>) + slot detail.
+// "Add node" affordance opens a help popover (registration is UDS-side).
 //
-// Data: the real /api/nodes contract lands with backend Epic L. Until then we
-// synthesize the single "local" node from the health probe + configured agents
-// and show an honest "no other nodes registered" empty state. When the fleet
-// endpoint ships, swap `useFleetNodes()` for the real hook.
+// Data: real /api/nodes (UDS node registry — auto-refreshes every 10s).
+// Design: .ol-* primitives only. No raw hex.
+
 import { useState } from "react";
 import { Icon } from "../components/Icon";
-import { useAgents, useNodes } from "../hooks/queries";
+import { useNodes, useSessions } from "../hooks/queries";
 import { relativeTime } from "../lib/format";
-import type { AgentInfo, NodeInfo, NodeStatus } from "../types";
-
-// ── Local fleet model ──────────────────────────────
-// FleetNode maps the backend NodeInfo to the display fields the drawer needs.
-type FleetNode = NodeInfo;
-
-type SubView = "fleet" | "agents";
+import type { NodeInfo, NodeStatus, Session } from "../types";
 
 // ── Helpers ────────────────────────────────────────
 
-function statusTagClass(status: NodeStatus): string {
-  if (status === "online") return "gtag ok";
-  if (status === "draining") return "gtag warn";
-  return "gtag err";
+function statusDotClass(status: NodeStatus): string {
+  if (status === "online") return "ol-dot ol-dot-live";
+  if (status === "draining") return "ol-dot ol-dot-warn";
+  return "ol-dot ol-dot-err";
 }
 
-function statusDotColor(status: NodeStatus): string {
-  if (status === "online") return "var(--green)";
-  if (status === "draining") return "var(--amber)";
-  return "var(--red)";
+function statusBadgeClass(status: NodeStatus): string {
+  if (status === "online") return "ol-badge ol-badge-ok";
+  if (status === "draining") return "ol-badge ol-badge-warn";
+  return "ol-badge ol-badge-err";
+}
+
+function slotBarClass(pct: number): string {
+  if (pct >= 90) return "ol-bar-fill err";
+  if (pct >= 70) return "ol-bar-fill warn";
+  return "ol-bar-fill";
 }
 
 function slotPct(used: number, total: number): number {
@@ -42,251 +39,393 @@ function slotPct(used: number, total: number): number {
   return Math.max(0, Math.min(100, (used / total) * 100));
 }
 
-/** "acp" for the root ACP profile, "cli" for the rest — matches the reference tag set. */
-function agentTypeTag(agent: AgentInfo): string {
-  return agent.isDefault ? "acp" : "cli";
-}
-
-/** Heartbeat label with second precision (the 10s nodes poll makes this meaningful). */
 function heartbeatLabel(epochSecAgo: number): string {
   if (epochSecAgo < 60) return `${epochSecAgo}s ago`;
   return relativeTime(Math.floor(Date.now() / 1000) - epochSecAgo);
 }
 
-// ── Sub-components ─────────────────────────────────
-
-function TabStrip({
-  sub,
-  onChange,
-}: {
-  sub: SubView;
-  onChange: (s: SubView) => void;
-}) {
-  return (
-    <div className="nodes-toolbar" role="tablist" aria-label="Fleet sub-view">
-      <div className="nodes-filter-group">
-        {(["fleet", "agents"] as const).map((key) => (
-          <button
-            key={key}
-            role="tab"
-            aria-selected={sub === key}
-            type="button"
-            className={`nodes-filter ${sub === key ? "active" : ""}`}
-            onClick={() => onChange(key)}
-          >
-            {key === "fleet" ? "Fleet" : "Agents"}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+function sessionAge(ts: number): string {
+  const diff = Date.now() / 1000 - ts;
+  if (diff < 60) return "now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
 }
+
+// ── Sub-components ─────────────────────────────────
 
 function NodeCard({
   node,
   selected,
   onClick,
 }: {
-  node: FleetNode;
+  node: NodeInfo;
   selected: boolean;
   onClick: () => void;
 }) {
   const pct = slotPct(node.slotsUsed, node.slotsTotal);
+
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      className={`gcard click ${selected ? "selected" : ""}`}
-      style={selected ? { borderColor: "var(--border-strong)" } : undefined}
+    <button
+      type="button"
+      data-node-id={node.nodeId}
+      className={[
+        "ol-card ol-card-interactive",
+        selected ? "ol-card-selected" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      }}
+      style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}
     >
-      <div className="grow" style={{ marginBottom: 10 }}>
-        <span className="gtitle" style={{ fontSize: 13, fontFamily: "var(--mono)" }}>
+      {/* Header: status dot + nodeId + local badge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+        <span className={statusDotClass(node.status)} />
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--fs-12)",
+            fontWeight: "var(--fw-semibold)",
+            color: "var(--text)",
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
           {node.nodeId}
         </span>
-        <span className={statusTagClass(node.status)}>{node.status}</span>
-      </div>
-      <div className="grow" style={{ fontSize: 12, color: "var(--dim)", marginBottom: 6 }}>
-        <span>slots</span>
-        <span>
-          {node.slotsUsed} / {node.slotsTotal}
-        </span>
-      </div>
-      <div className="gbar">
-        <i style={{ width: `${pct}%` }} />
-      </div>
-      <div className="grow" style={{ fontSize: 11, color: "var(--faint)", marginTop: 9 }}>
-        <span>heartbeat</span>
-        <span>{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
-      </div>
-    </div>
-  );
-}
-
-function EmptyState({ title, message }: { title: string; message: string }) {
-  return (
-    <div className="empty-state">
-      <Icon name="server" size={28} />
-      <div className="empty-state-title">{title}</div>
-      <div className="empty-state-msg">{message}</div>
-    </div>
-  );
-}
-
-function Drawer({
-  node,
-  agents,
-  onClose,
-}: {
-  node: FleetNode;
-  agents: AgentInfo[];
-  onClose: () => void;
-}) {
-  return (
-    <aside className="drawer on" role="dialog" aria-label={`Node ${node.nodeId}`}>
-      <div className="dr-head">
-        <span className="dr-title">{node.nodeId}</span>
-        <button
-          type="button"
-          className="icobtn"
-          title="Close"
-          aria-label="Close drawer"
-          onClick={onClose}
-        >
-          <Icon name="chevron-right" size={14} />
-        </button>
-      </div>
-      <div className="dr-body">
-        <div className="kv">
-          <span className="k">STATUS</span>
-          <span className="v">
-            <span className={statusTagClass(node.status)}>{node.status}</span>
+        {node.local && (
+          <span className="ol-badge ol-badge-accent" style={{ flexShrink: 0 }}>
+            LOCAL
           </span>
-        </div>
-        <div className="kv">
-          <span className="k">HOST</span>
-          <span className="v">{node.hostname}</span>
-        </div>
-        <div className="kv">
-          <span className="k">SLOTS</span>
-          <span className="v">
+        )}
+      </div>
+
+      {/* Hostname */}
+      <div
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "var(--fs-11)",
+          color: "var(--text-dim)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {node.hostname}
+      </div>
+
+      {/* Slots bar */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--fs-10)",
+            color: "var(--text-faint)",
+            textTransform: "uppercase",
+            letterSpacing: "var(--tracking-caps)",
+          }}
+        >
+          <span>SLOTS</span>
+          <span>
             {node.slotsUsed} / {node.slotsTotal}
           </span>
         </div>
-        <div className="kv">
-          <span className="k">HEARTBEAT</span>
-          <span className="v">{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
+        <div className="ol-bar ol-bar-sm">
+          <div className={slotBarClass(pct)} style={{ width: `${pct}%` }} />
         </div>
-        <div className="kv">
-          <span className="k">VERSION</span>
-          <span className="v">{node.version}</span>
-        </div>
+      </div>
 
-        <div>
-          <div className="gk" style={{ marginBottom: 6 }}>
-            agents on node
-          </div>
-          {agents.length > 0 ? (
-            <div
-              className="mono"
+      {/* Footer: version + heartbeat */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontFamily: "var(--font-mono)",
+          fontSize: "var(--fs-10)",
+          color: "var(--text-faint)",
+        }}
+      >
+        <span>{node.version}</span>
+        <span>{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
+      </div>
+    </button>
+  );
+}
+
+function SessionRow({ session }: { session: Session }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        padding: "6px 0",
+        borderBottom: "var(--border-w) solid var(--border)",
+      }}
+    >
+      <span
+        className={session.liveness === "active" ? "ol-dot ol-dot-live" : "ol-dot"}
+      />
+      <span
+        style={{
+          flex: 1,
+          fontSize: "var(--fs-12)",
+          color: "var(--text)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {session.title ?? "Untitled session"}
+      </span>
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "var(--fs-10)",
+          color: "var(--text-faint)",
+          flexShrink: 0,
+        }}
+      >
+        {sessionAge(session.lastActivity)}
+      </span>
+    </div>
+  );
+}
+
+function NodePanel({
+  node,
+  onClose,
+}: {
+  node: NodeInfo;
+  onClose: () => void;
+}) {
+  const pct = slotPct(node.slotsUsed, node.slotsTotal);
+
+  const sessionsQ = useSessions({ node: node.nodeId, limit: 20 });
+  const sessions: Session[] = sessionsQ.data?.sessions ?? [];
+
+  return (
+    <aside
+      className="ol-card"
+      style={{
+        width: 300,
+        flexShrink: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+        alignSelf: "flex-start",
+        position: "sticky",
+        top: 0,
+      }}
+      aria-label={`Node ${node.nodeId} detail`}
+    >
+      {/* Panel header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--fs-12)",
+            fontWeight: "var(--fw-semibold)",
+            color: "var(--text)",
+          }}
+        >
+          {node.nodeId}
+        </span>
+        <button
+          type="button"
+          className="ol-btn ol-btn-ghost ol-btn-sm"
+          onClick={onClose}
+          aria-label="Close panel"
+          title="Close"
+        >
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+
+      {/* Status + badges */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <span className={statusBadgeClass(node.status)}>{node.status}</span>
+        {node.local && <span className="ol-badge ol-badge-accent">LOCAL</span>}
+      </div>
+
+      {/* KV rows */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {[
+          ["HOST", node.hostname],
+          ["VERSION", node.version],
+          ["HEARTBEAT", heartbeatLabel(node.lastHeartbeatAgoSecs)],
+        ].map(([k, v]) => (
+          <div
+            key={k}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          >
+            <span
               style={{
-                fontSize: 11,
-                color: "var(--dim)",
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
+                fontFamily: "var(--font-mono)",
+                fontSize: "var(--fs-10)",
+                textTransform: "uppercase",
+                letterSpacing: "var(--tracking-caps)",
+                color: "var(--text-faint)",
               }}
             >
-              {agents.map((a) => (
-                <span key={a.id}>
-                  {a.id} · {a.model ?? "—"}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <div className="mono" style={{ fontSize: 11, color: "var(--faint)" }}>
-              none configured
-            </div>
-          )}
-        </div>
-
-        <div>
-          <div className="gk" style={{ marginBottom: 6 }}>
-            sessions
+              {k}
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "var(--fs-11)",
+                color: "var(--text-dim)",
+              }}
+            >
+              {v}
+            </span>
           </div>
-          <div className="mono" style={{ fontSize: 11, color: "var(--faint)" }}>
-            No live sessions pinned to this node.
-          </div>
-        </div>
+        ))}
+      </div>
 
-        <div className="dr-actions">
-          <button type="button" className="btn" disabled={node.local}>
-            Drain
-          </button>
-          <button type="button" className="btn">
-            Restart
-          </button>
-          <button type="button" className="btn" disabled={node.local} title={node.local ? "Local node cannot be removed" : undefined}>
-            Remove
-          </button>
+      {/* Slot detail */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "var(--fs-10)",
+              textTransform: "uppercase",
+              letterSpacing: "var(--tracking-caps)",
+              color: "var(--text-faint)",
+            }}
+          >
+            SLOTS
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "var(--fs-11)",
+              color: "var(--text-dim)",
+            }}
+          >
+            {node.slotsUsed} / {node.slotsTotal} used
+          </span>
         </div>
+        <div className="ol-bar">
+          <div className={slotBarClass(pct)} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+
+      {/* Sessions on this node */}
+      <div>
+        <div
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--fs-10)",
+            textTransform: "uppercase",
+            letterSpacing: "var(--tracking-caps)",
+            color: "var(--text-faint)",
+            marginBottom: 8,
+          }}
+        >
+          RUNNING SESSIONS
+        </div>
+        {sessionsQ.isLoading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="ol-skel" style={{ height: 14 }} />
+            ))}
+          </div>
+        ) : sessions.length === 0 ? (
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "var(--fs-11)",
+              color: "var(--text-faint)",
+            }}
+          >
+            No sessions on this node.
+          </div>
+        ) : (
+          <div>
+            {sessions.map((s) => (
+              <SessionRow key={s.id} session={s} />
+            ))}
+          </div>
+        )}
       </div>
     </aside>
   );
 }
 
-function AgentRow({ agent }: { agent: AgentInfo }) {
+function AddNodePopover({ onClose }: { onClose: () => void }) {
   return (
-    <div className="agrow">
-      <Icon name="bot" size={14} />
-      <span className="nm">{agent.id}</span>
-      <span className="gtag">{agentTypeTag(agent)}</span>
-      <span className="sp" />
-      <span className="gk">{agent.model ?? "—"}</span>
-      <span className="gtag">configured</span>
+    <div
+      className="ol-card"
+      style={{ maxWidth: 360 }}
+      role="dialog"
+      aria-label="Add node"
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+        <span style={{ fontSize: "var(--fs-13)", fontWeight: "var(--fw-semibold)", color: "var(--text)" }}>
+          Adding a fleet node
+        </span>
+        <button
+          type="button"
+          className="ol-btn ol-btn-ghost ol-btn-sm"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+      <p style={{ fontSize: "var(--fs-12)", color: "var(--text-dim)", lineHeight: "var(--lh-relaxed)", marginBottom: 10 }}>
+        Node registration is UDS-side. On the remote machine, run the Olympus
+        envoy pointed at this control plane&apos;s socket:
+      </p>
+      <pre
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "var(--fs-11)",
+          color: "var(--text)",
+          background: "var(--bg)",
+          border: "var(--border-w) solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: "8px 10px",
+          overflowX: "auto",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {"olympus-envoy --control ~/.olympus/control.sock"}
+      </pre>
+      <p style={{ fontSize: "var(--fs-11)", color: "var(--text-faint)", marginTop: 8 }}>
+        Once connected it auto-registers and appears in this grid.
+      </p>
     </div>
   );
 }
 
-function NodeSection({
-  node,
-  agents,
-}: {
-  node: FleetNode;
-  agents: AgentInfo[];
-}) {
+function FleetEmptyState() {
   return (
-    <div style={node.status === "offline" ? { opacity: 0.6 } : undefined}>
-      <div className="nodehead">
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: 999,
-            background: statusDotColor(node.status),
-          }}
-        />
-        <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
-          {node.nodeId}
-        </span>
-        <span className="gk">
-          {node.hostname} · {agents.length} agent{agents.length === 1 ? "" : "s"}
-        </span>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        padding: "48px 0",
+        color: "var(--text-faint)",
+      }}
+      data-testid="fleet-empty"
+    >
+      <Icon name="server" size={28} />
+      <div style={{ fontSize: "var(--fs-13)", color: "var(--text-dim)" }}>
+        Single-node fleet
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {agents.length > 0 ? (
-          agents.map((a) => <AgentRow key={a.id} agent={a} />)
-        ) : (
-          <div className="mono" style={{ fontSize: 11, color: "var(--faint)" }}>
-            no agents configured
-          </div>
-        )}
+      <div style={{ fontSize: "var(--fs-12)", color: "var(--text-faint)", maxWidth: 320, textAlign: "center" }}>
+        No other nodes registered. Additional envoys appear here once they connect via UDS.
       </div>
     </div>
   );
@@ -295,92 +434,108 @@ function NodeSection({
 // ── Main ───────────────────────────────────────────
 
 export default function FleetView() {
-  const [sub, setSub] = useState<SubView>("fleet");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showAddNode, setShowAddNode] = useState(false);
 
   const nodesQ = useNodes();
-  const agentsQ = useAgents();
 
-  const agents = agentsQ.data?.agents ?? [];
+  const nodes: NodeInfo[] = nodesQ.data?.nodes ?? [];
 
-  // Nodes come directly from the backend now — the local node auto-registers
-  // at boot; remote envoys register via UDS. No more synthesis.
-  const nodes: FleetNode[] = nodesQ.data?.nodes ?? [];
-
-  const selectedNode =
-    nodes.find((n) => n.nodeId === selectedId) ?? (selectedId ? null : nodes[0] ?? null);
+  const selectedNode = selectedId ? nodes.find((n) => n.nodeId === selectedId) ?? null : null;
 
   return (
-    <>
-      <div className="gv-head">
-        <span className="gv-title">{sub === "fleet" ? "Fleet" : "Agents"}</span>
-        <span className="gv-sub">
-          {sub === "fleet" ? "· nodes" : "· configured per node"}
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }} data-testid="fleet-view">
+      {/* View header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "0 var(--panel-pad) var(--panel-pad)",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: "var(--fs-16)", fontWeight: "var(--fw-semibold)", color: "var(--text)" }}>
+          Fleet
         </span>
-        <div className="gv-actions">
-          {sub === "agents" && (
-            <button type="button" className="icobtn" title="Add agent" aria-label="Add agent">
-              <Icon name="plus" size={14} />
-            </button>
+        <span style={{ fontSize: "var(--fs-12)", color: "var(--text-faint)" }}>
+          · nodes
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6, position: "relative" }}>
+          <button
+            type="button"
+            className="ol-btn ol-btn-secondary ol-btn-sm"
+            onClick={() => setShowAddNode((v) => !v)}
+            aria-expanded={showAddNode}
+            aria-label="Add node"
+          >
+            <Icon name="plus" size={12} />
+            Add node
+          </button>
+          {showAddNode && (
+            <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 20 }}>
+              <AddNodePopover onClose={() => setShowAddNode(false)} />
+            </div>
           )}
         </div>
       </div>
 
-      <div className="gv-body">
-        <TabStrip sub={sub} onChange={setSub} />
+      {/* Loading skeletons */}
+      {nodesQ.isLoading && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))",
+            gap: 12,
+            padding: "0 var(--panel-pad)",
+          }}
+        >
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="ol-card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="ol-skel" style={{ height: 14, width: "60%" }} />
+              <div className="ol-skel" style={{ height: 11, width: "80%" }} />
+              <div className="ol-bar ol-bar-sm" />
+              <div className="ol-skel" style={{ height: 10, width: "50%" }} />
+            </div>
+          ))}
+        </div>
+      )}
 
-        {sub === "fleet" ? (
-          <div className="gv-wrap">
+      {/* Content */}
+      {!nodesQ.isLoading && (
+        <div style={{ display: "flex", gap: 16, padding: "0 var(--panel-pad)", flex: 1, minHeight: 0, overflow: "auto" }}>
+          {/* Node grid */}
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div
-              className="ggrid"
-              style={{ gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))" }}
+              data-testid="fleet-grid"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))",
+                gap: 12,
+                alignContent: "start",
+              }}
             >
               {nodes.map((node) => (
                 <NodeCard
                   key={node.nodeId}
                   node={node}
                   selected={selectedNode?.nodeId === node.nodeId}
-                  onClick={() => setSelectedId(node.nodeId)}
+                  onClick={() =>
+                    setSelectedId((cur) => (cur === node.nodeId ? null : node.nodeId))
+                  }
                 />
               ))}
             </div>
 
-            {nodes.length <= 1 && (
-              <div style={{ marginTop: 16 }}>
-                <EmptyState
-                  title="Single-node fleet"
-                  message="No other nodes registered. Additional envoys appear here once they connect via UDS."
-                />
-              </div>
-            )}
-
-            {selectedNode && (
-              <Drawer
-                node={selectedNode}
-                agents={selectedNode.local ? agents : []}
-                onClose={() => setSelectedId(null)}
-              />
-            )}
+            {nodes.length <= 1 && <FleetEmptyState />}
           </div>
-        ) : (
-          <div style={{ maxWidth: 680, display: "flex", flexDirection: "column", gap: 20 }}>
-            {nodes.map((node) => (
-              <NodeSection
-                key={node.nodeId}
-                node={node}
-                agents={node.local ? agents : []}
-              />
-            ))}
 
-            {nodes.length <= 1 && (
-              <EmptyState
-                title="No other nodes registered"
-                message="Agents above run on the local node. Remote nodes and their agents appear here once fleet orchestration (Epic L) is live."
-              />
-            )}
-          </div>
-        )}
-      </div>
-    </>
+          {/* Drill-in panel */}
+          {selectedNode && (
+            <NodePanel node={selectedNode} onClose={() => setSelectedId(null)} />
+          )}
+        </div>
+      )}
+    </div>
   );
 }

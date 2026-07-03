@@ -38,6 +38,7 @@ export function useSessions(params?: {
   archived?: boolean;
   sort?: string;
   limit?: number;
+  node?: string;
 }) {
   return useQuery({
     queryKey: qk.sessions(params),
@@ -47,6 +48,7 @@ export function useSessions(params?: {
         archived: params?.archived,
         sort: params?.sort as "lastActivity" | "startedAt" | "messageCount" | undefined,
         limit: params?.limit,
+        node: params?.node,
       }),
     refetchInterval: 10_000,
     staleTime: 5_000,
