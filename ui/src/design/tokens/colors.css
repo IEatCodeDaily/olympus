@@ -29,7 +29,7 @@
   /* ── Text ── */
   --text:          #E6E6E6;   /* primary — headings, body, values */
   --text-dim:      #999A9C;   /* secondary — meta, descriptions, labels */
-  --text-faint:    #5E5E60;   /* tertiary — timestamps, hints, disabled copy */
+  --text-faint:    #7E7E81;   /* tertiary — timestamps, hints, disabled copy (WCAG AA: 4.89:1 on --bg, 4.58:1 on --bg-elev) */
 
   /* ── Signal accent (SILVER — the single brand "color") ──
      Swap these 5 lines to re-brand the whole system. Curated alternates
@@ -99,7 +99,7 @@
 
   --text:          #171719;
   --text-dim:      #5D5D60;
-  --text-faint:    #98989C;
+  --text-faint:    #6E6E72;   /* WCAG AA: 4.70:1 on --bg, 5.08:1 on --bg-elev */
 
   --accent:        #2A2A2E;   /* silver inverts to near-black ink */
   --accent-bright: #414146;

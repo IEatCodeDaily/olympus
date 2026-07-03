@@ -110,7 +110,7 @@ default) and `:root[data-theme="light"]` (daybreak).
 |-------|----------|----------|-------|
 | `--text` | `#E6E6E6` | `#171719` | Primary — headings, body, values |
 | `--text-dim` | `#999A9C` | `#5D5D60` | Secondary — meta, descriptions, labels |
-| `--text-faint` | `#5E5E60` | `#98989C` | Tertiary — timestamps, hints, disabled copy |
+| `--text-faint` | `#7E7E81` | `#6E6E72` | Tertiary — timestamps, hints, disabled copy (WCAG AA ≥4.5:1 on `--bg`) |
 
 ### Signal accent (SILVER — the single brand "color")
 
@@ -478,9 +478,17 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 - Obsidian: `--text` `#E6E6E6` on `--bg` `#0A0A0B` / `--bg-elev` `#131315` passes
   WCAG AA comfortably.
 - Daybreak: `--text` `#171719` on `--bg` `#F6F6F7` passes AA.
-- **Debt:** formal axe/WAVE audit not yet run. `--text-faint` on `--bg` is
-  intentionally low-contrast (tertiary meta) and may fail AAA — flagged for a
-  dedicated contrast pass. Never carry meaning by faint text alone.
+- `--text-faint` (tertiary meta: timestamps, counts, hints, section labels) now
+  clears **WCAG AA (≥4.5:1)** on the canvas and primary chrome in **both** themes
+  — obsidian `#7E7E81` (4.89:1 on `--bg`, 4.58:1 on `--bg-elev`), daybreak
+  `#6E6E72` (4.70:1 on `--bg`, 5.08:1 on `--bg-elev`). On the deepest wells
+  (`--bg-elev-2`) and hover washes it lands ~3.6–4.5:1 — above the 3:1 UI floor.
+  Never carry meaning by faint text alone regardless.
+- Status inks on their washes all pass: obsidian ok/warn/err ≥8.9:1; daybreak
+  ≥4.0:1 (err 5.3:1) — ok/warn sit just under 4.5:1 on their own washes but are
+  used for pill/badge chrome and short labels, not body copy.
+- **Remaining a11y debt:** a full automated axe/WAVE sweep across every live
+  surface (beyond the token-level ratios computed here) is still outstanding.
 
 ### 9.4 Semantic HTML
 
@@ -525,6 +533,56 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 ---
 
 ## 11. Changelog
+
+### 2026-07-03 — Raise `--text-faint` to WCAG AA in both themes — closes the tertiary-text contrast debt (was debt #3)
+
+- **The debt this closes (the standing "formal contrast audit" item, #3 on the
+  last two runs' lists):** the tertiary text token `--text-faint` — which paints
+  **timestamps, row counts, section labels (`PINNED`/`RECENT`), search
+  placeholder, ⌘K hint, and empty-state copy** across the whole cockpit — failed
+  WCAG AA in **both** themes. Obsidian `#5E5E60` = **3.06:1** on `--bg` (2.87 on
+  `--bg-elev`, 2.42 on `--bg-hover`); daybreak `#98989C` = **2.66:1** on `--bg`.
+  This is *informational* text (relative times, counts), not pure decoration, so
+  sub-4.5:1 is a real legibility gap, not an intentional de-emphasis.
+- **How it was found:** computed WCAG contrast ratios for every text token
+  against `--bg` / `--bg-elev` / `--bg-elev-2` / `--bg-hover` and every status
+  ink against its own wash-over-canvas, in both theme blocks. `--text` /
+  `--text-dim` / `--accent` and all status inks already pass; `--text-faint` was
+  the lone failure in each theme.
+- **Fix (token layer only — `design/tokens/colors.css`, clean at HEAD):**
+  - obsidian `--text-faint`: `#5E5E60` → **`#7E7E81`** (4.89:1 on `--bg`,
+    4.58:1 on `--bg-elev`).
+  - daybreak `--text-faint`: `#98989C` → **`#6E6E72`** (4.70:1 on `--bg`,
+    5.08:1 on `--bg-elev`).
+  Both stay clearly the **faintest tier** — visibly below `--text-dim`
+  (obsidian dim 7.03:1, daybreak dim 6.08:1) — so hierarchy is preserved; the
+  tokens just clear the AA floor. Value-only change: no geometry, no new tokens,
+  no class or component touched.
+- **Verified:** `cd ui && bun run typecheck` (exit 0) and `bun run build`
+  (exit 0, CSS 61.47 kB — byte-identical size, color-only diff). Screenshotted
+  the live app in **both** themes: obsidian empty-state hint + search/⌘K hint,
+  and daybreak session sidebar (timestamps `1m`/`4m`/`7h`, `PINNED`/`RECENT`
+  labels + counts) all render clearly legible with the faint tier intact and no
+  layout shift. Fully reversible (two hex values).
+- **Why not debt #2 (tokenize `.ctx-*`/`.kcard`/`.step` raw geometry) this run:**
+  those rules are still **uncommitted** in `index.css` (the ContextRing view
+  worker's in-flight change, alongside AppShell/RightPanel edits). Committing a
+  tokenization pass over them would sweep unrelated feature work into a design
+  commit. It stays blocked until `index.css` is clean at HEAD — unchanged from
+  the prior run's note.
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Off-scale raw `Npx` in newly-landed view CSS** (`.ctx-*` ContextRing:
+     `border-radius: 2px`, `height: 3px`, `transition: width 0.3s` — the last
+     also violates §6's 150ms cap — plus `.kcard`/`.step` `padding: 9px 11px`,
+     `.ctx-mini-track width: 48px`). Tokenize once `index.css` is clean at HEAD.
+  2. **Adoption gap.** The `.ol-*` primitive library exists but live views
+     (`AppShell`, `FleetView`, `ChatView`, `ProjectsView`, `ContextRing`) still
+     lean on bespoke `index.css` classes — a view-worker task to *spec + spot-fix*.
+  3. **Full automated axe/WAVE sweep** across every live surface (this run
+     closed the token-level ratios; a per-surface DOM audit — focus order, ARIA,
+     component-state contrast — is the remaining a11y work).
+  4. **`.ol-*` visual QA in-browser** in both themes — primitives built to spec
+     but not all screenshot-verified against the live views.
 
 ### 2026-07-03 — Harden the `Badge` primitive: case-insensitive lookup + full status vocabulary — closes an information-carrying-color gap
 
