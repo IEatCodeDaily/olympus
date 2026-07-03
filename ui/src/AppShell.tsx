@@ -25,8 +25,7 @@ import { useTheme } from "./theme";
 import type { Session } from "./types";
 import { SessionsWorkbench, SessionEmptyPane } from "./views/SessionsWorkbench";
 import FleetView from "./views/FleetView";
-import { VaultsView, VaultSidebar } from "./views/VaultsView";
-import { ProjectsView, SettingsView } from "./views/PlaceholderViews";
+import { VaultsView, ProjectsView, SettingsView } from "./views/PlaceholderViews";
 
 // ── Nav definition ─────────────────────────────────
 // The 5 surfaces, in nav order. Matches the plan's table exactly.
@@ -80,7 +79,7 @@ export function AppShell() {
         )}
         {!sidebarCollapsed && surface === "vaults" && (
           <SecondarySidebar width={sidebarWidth}>
-            <VaultSidebar />
+            <PlaceholderSidebar surface={surface} />
           </SecondarySidebar>
         )}
         {!sidebarCollapsed && (surface === "projects" || surface === "settings") && (
