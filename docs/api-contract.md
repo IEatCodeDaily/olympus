@@ -85,6 +85,14 @@ export interface ModelInfo {
   displayName: string;
 }
 
+export interface AgentInfo {
+  id: string;                 // "default", Hermes profile name, "claude-code", "codex"
+  provider: string | null;    // e.g. "anthropic", "claude-code", "openai-codex"
+  model: string | null;       // configured model for Hermes; CLI version for CLI harnesses
+  kind: "hermes" | "claude-code" | "codex";
+  isDefault: boolean;         // true only for the implicit root Hermes profile
+}
+
 export interface VaultSummary {
   id: string;        // slug generated from the vault name
   name: string;
@@ -136,6 +144,9 @@ GET /api/search
 
 GET /api/models
   → 200 { "models": ModelInfo[] }   # from Hermes config/CLI
+
+GET /api/agents
+  → 200 { "agents": AgentInfo[] }    # Hermes profiles + discovered local CLI harnesses
 
 GET /api/health
   → 200 { "status":"ok", "importState": "idle"|"running"|"done",

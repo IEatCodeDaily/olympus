@@ -8,20 +8,32 @@
 //! base_url) with a line scanner rather than pulling in a YAML dependency —
 //! the block shape is stable and this avoids the deprecated serde_yaml.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use serde::Serialize;
 
-/// One drivable agent (Hermes profile) as the UI consumes it.
+const CLAUDE_CODE_AGENT_ID: &str = "claude-code";
+const CODEX_AGENT_ID: &str = "codex";
+
+static DISCOVERED_HARNESSES: OnceLock<Vec<AgentInfo>> = OnceLock::new();
+
+/// One drivable agent (Hermes profile or local CLI harness) as the UI consumes it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
-    /// Profile id passed to `hermes -p <id> acp` (or "default" for the root).
+    /// Agent id passed back in `POST /api/sessions { agent }`.
     pub id: String,
     /// Configured provider (e.g. "anthropic", "openai-codex", "zai").
     pub provider: Option<String>,
-    /// Configured default model (e.g. "claude-opus-4-8", "gpt-5.4").
+    /// Configured default model, or the discovered CLI version for CLI harnesses.
     pub model: Option<String>,
+    /// Agent harness kind: "hermes", "claude-code", or "codex".
+    pub kind: String,
     /// Whether this is the implicit root profile the server runs as by default.
     pub is_default: bool,
 }
@@ -83,15 +95,112 @@ fn agent_from_config(id: &str, path: &PathBuf, is_default: bool) -> AgentInfo {
         id: id.to_string(),
         provider,
         model,
+        kind: "hermes".to_string(),
         is_default,
     }
 }
 
+fn is_executable(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn which_in_path(binary: &str, path_env: &str) -> Option<PathBuf> {
+    std::env::split_paths(path_env)
+        .map(|dir| dir.join(binary))
+        .find(|path| is_executable(path))
+}
+
+fn command_version_with_timeout(binary: &Path, timeout: Duration) -> Option<String> {
+    let mut child = std::process::Command::new(binary)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child.wait_with_output().ok()?;
+                let text = if output.stdout.is_empty() {
+                    String::from_utf8_lossy(&output.stderr).to_string()
+                } else {
+                    String::from_utf8_lossy(&output.stdout).to_string()
+                };
+                return text
+                    .lines()
+                    .next()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
+    let mut out = Vec::new();
+    if let Some(claude) = which_in_path("claude", path_env) {
+        out.push(AgentInfo {
+            id: CLAUDE_CODE_AGENT_ID.to_string(),
+            provider: Some(CLAUDE_CODE_AGENT_ID.to_string()),
+            model: command_version_with_timeout(&claude, Duration::from_secs(2)),
+            kind: CLAUDE_CODE_AGENT_ID.to_string(),
+            is_default: false,
+        });
+    }
+    if let Some(codex) = which_in_path("codex", path_env) {
+        out.push(AgentInfo {
+            id: CODEX_AGENT_ID.to_string(),
+            provider: Some("openai-codex".to_string()),
+            model: command_version_with_timeout(&codex, Duration::from_secs(2)),
+            kind: CODEX_AGENT_ID.to_string(),
+            is_default: false,
+        });
+    }
+    out
+}
+
+fn cached_cli_harnesses() -> Vec<AgentInfo> {
+    DISCOVERED_HARNESSES
+        .get_or_init(|| {
+            std::env::var_os("PATH")
+                .and_then(|p| p.into_string().ok())
+                .map(|path| discover_cli_harnesses(&path))
+                .unwrap_or_default()
+        })
+        .clone()
+}
+
 /// List all drivable agents: the root profile (as `default`) plus every
-/// `~/.hermes/profiles/<name>/`. Sorted with `default` first, then by id.
+/// `~/.hermes/profiles/<name>/`, followed by locally discovered CLI harnesses.
+/// Hermes profiles are sorted with `default` first, then by id. CLI harness
+/// probing is cached for the process lifetime so GET /api/agents is cheap.
 pub fn list_agents() -> Vec<AgentInfo> {
     let Some(home) = hermes_home() else {
-        return Vec::new();
+        return cached_cli_harnesses();
     };
     let mut out = vec![agent_from_config(
         "default",
@@ -116,6 +225,7 @@ pub fn list_agents() -> Vec<AgentInfo> {
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
         out.extend(profiles);
     }
+    out.extend(cached_cli_harnesses());
     out
 }
 
@@ -176,5 +286,51 @@ mod tests {
     fn parse_model_block_missing_block_is_all_none() {
         let (m, p, b) = parse_model_block("providers: {}\nlog_level: info\n");
         assert!(m.is_none() && p.is_none() && b.is_none());
+    }
+
+    #[cfg(unix)]
+    fn write_stub(dir: &Path, name: &str, body: &str) {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_cli_harnesses_finds_stubbed_claude_and_codex() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_stub(
+            tmp.path(),
+            "claude",
+            "#!/bin/sh\necho '2.1.195 (Claude Code)'\n",
+        );
+        write_stub(tmp.path(), "codex", "#!/bin/sh\necho 'codex-cli 0.133.0'\n");
+
+        let agents = discover_cli_harnesses(tmp.path().to_str().unwrap());
+
+        assert!(agents.iter().any(|a| {
+            a.id == "claude-code"
+                && a.provider.as_deref() == Some("claude-code")
+                && a.kind == "claude-code"
+                && a.model.as_deref() == Some("2.1.195 (Claude Code)")
+                && !a.is_default
+        }));
+        assert!(agents.iter().any(|a| {
+            a.id == "codex"
+                && a.provider.as_deref() == Some("openai-codex")
+                && a.kind == "codex"
+                && a.model.as_deref() == Some("codex-cli 0.133.0")
+                && !a.is_default
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_cli_harnesses_ignores_non_executable_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("claude"), "#!/bin/sh\necho nope\n").unwrap();
+        assert!(discover_cli_harnesses(tmp.path().to_str().unwrap()).is_empty());
     }
 }

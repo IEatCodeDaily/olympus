@@ -331,10 +331,12 @@ export const MODELS_LIST: ModelInfo[] = [
 ];
 
 export const AGENTS_LIST: AgentInfo[] = [
-  { id: "default", provider: "anthropic", model: "claude-opus-4-8", isDefault: true },
-  { id: "coding-agent", provider: "openai-codex", model: "gpt-5.4", isDefault: false },
-  { id: "gpt55", provider: "openai-codex", model: "gpt-5.5", isDefault: false },
-  { id: "tester", provider: "anthropic", model: "claude-sonnet-4-6", isDefault: false },
+  { id: "default", provider: "anthropic", model: "claude-opus-4-8", kind: "hermes", isDefault: true },
+  { id: "coding-agent", provider: "openai-codex", model: "gpt-5.4", kind: "hermes", isDefault: false },
+  { id: "gpt55", provider: "openai-codex", model: "gpt-5.5", kind: "hermes", isDefault: false },
+  { id: "tester", provider: "anthropic", model: "claude-sonnet-4-6", kind: "hermes", isDefault: false },
+  { id: "claude-code", provider: "claude-code", model: "2.1.195 (Claude Code)", kind: "claude-code", isDefault: false },
+  { id: "codex", provider: "openai-codex", model: "codex-cli 0.133.0", kind: "codex", isDefault: false },
 ];
 
 export const USAGE_BY_RANGE: Record<UsageRange, UsageResponse> = {

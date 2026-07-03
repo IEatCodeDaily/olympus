@@ -42,9 +42,10 @@ function slotPct(used: number, total: number): number {
   return Math.max(0, Math.min(100, (used / total) * 100));
 }
 
-/** "acp" for the root ACP profile, "cli" for the rest — matches the reference tag set. */
+/** Harness tag shown in the fleet list. */
 function agentTypeTag(agent: AgentInfo): string {
-  return agent.isDefault ? "acp" : "cli";
+  if (agent.kind === "hermes") return agent.isDefault ? "acp" : "hermes";
+  return "cli";
 }
 
 /** Heartbeat label with second precision (the 10s nodes poll makes this meaningful). */

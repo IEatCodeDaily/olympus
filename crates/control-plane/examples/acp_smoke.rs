@@ -23,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
         start_timeout_secs: 30,
         mcp_servers: Vec::new(),
         env: Vec::new(),
+        framing: olympus_control_plane::bridge::hermes::AcpFraming::NewlineJson,
     };
     let rt = HermesAgentRuntime::new_arc(cfg);
 
