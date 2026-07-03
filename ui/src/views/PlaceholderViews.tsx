@@ -5,17 +5,6 @@
 
 import { Icon, type IconName } from "../components/Icon";
 
-export function VaultsView() {
-  return (
-    <PlaceholderSurface
-      icon="book"
-      title="Vaults"
-      kicker="COMING · CARD V-UI"
-      message="Your knowledge base of markdown notes, wikilinks, and vault-scoped agents. The vault backend (V-BE) and view are under construction."
-    />
-  );
-}
-
 export function ProjectsView() {
   return (
     <PlaceholderSurface

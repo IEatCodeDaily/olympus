@@ -315,3 +315,43 @@ export interface PutRegistryBody {
   slug: string;
   definition: string;
 }
+
+// ---- Vaults (ADR 0004 — markdown-first knowledge base) ----
+
+export interface VaultSummary {
+  id: string;
+  name: string;
+  noteCount: number;
+  updatedAt: number;
+}
+
+export interface VaultsResponse {
+  vaults: VaultSummary[];
+}
+
+export type NoteTreeEntryKind = "folder" | "note";
+
+export interface NoteTreeEntry {
+  path: string;
+  title: string;
+  updatedAt: number;
+  kind: NoteTreeEntryKind;
+  children: NoteTreeEntry[];
+}
+
+export interface NotesTreeResponse {
+  notes: NoteTreeEntry[];
+}
+
+export interface NoteDocument {
+  path: string;
+  title: string;
+  markdown: string;
+  frontmatter: Record<string, unknown>;
+  linkedNotes: string[];
+}
+
+export interface PutNoteBody {
+  markdown?: string;
+  newPath?: string;
+}

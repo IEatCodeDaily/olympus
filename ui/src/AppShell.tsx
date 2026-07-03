@@ -22,7 +22,8 @@ import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
 import { SessionsView } from "./views/SessionsView";
 import FleetView from "./views/FleetView";
-import { VaultsView, ProjectsView, SettingsView } from "./views/PlaceholderViews";
+import { VaultsView } from "./views/VaultsView";
+import { ProjectsView, SettingsView } from "./views/PlaceholderViews";
 
 // ── Helpers ────────────────────────────────────────
 
