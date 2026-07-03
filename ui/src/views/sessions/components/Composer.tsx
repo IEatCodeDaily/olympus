@@ -39,6 +39,7 @@ export function Composer({
   sending,
   sessionModel,
   sessionAgent,
+  sessionNode,
 }: {
   text: string;
   onTextChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -47,6 +48,7 @@ export function Composer({
   sending: boolean;
   sessionModel: string | null;
   sessionAgent: string | null;
+  sessionNode: string | null;
 }) {
   const { data: agentsData } = useAgents();
   const { data: modelsData } = useModels();
@@ -59,6 +61,8 @@ export function Composer({
   );
   const agentIcon = providerLogoIcon(lockedAgent?.provider);
   const agentName = lockedAgent?.id ?? sessionAgent ?? "agent";
+  // The main in-process node reports as "local"; show it as "olympus".
+  const nodeLabel = !sessionNode || sessionNode === "local" ? "olympus" : sessionNode;
 
   const [popupOpen, setPopupOpen] = useState(false);
   const [thinking, setThinking] = useState<ThinkingLevel>(loadThinking);
@@ -107,17 +111,19 @@ export function Composer({
         />
         <div className="comp-bar">
           <div className="comp-l">
-            <button type="button" className="modelpill" title="Access mode">
-              <Icon name="shield" size={12} />
-              <span className="nm">Full access</span>
-            </button>
+            {/* Node indicator — where the agent runs */}
+            <span className="noderef" title={`Running on node: ${nodeLabel}`}>
+              <Icon name="server" size={12} />
+              <span className="nm">{nodeLabel}</span>
+            </span>
           </div>
           <div className="comp-r">
-            {/* Locked agent chip — harness is fixed at session creation */}
-            <span className="modelpill locked" title={`Agent locked: ${agentName} (${lockedAgent?.provider ?? "—"})`}>
-              <Icon name={agentIcon} size={13} />
-              <span className="nm">{agentName}</span>
-              <Icon name="round" size={9} />
+            {/* Locked agent — harness fixed at creation; icon only, no name */}
+            <span
+              className="agent-lock"
+              title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
+            >
+              <Icon name={agentIcon} size={16} />
             </span>
 
             {/* Model + thinking picker — editable */}

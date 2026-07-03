@@ -319,6 +319,25 @@ impl BridgeManager {
         Ok(())
     }
 
+    /// Append a SessionUpdated event that sets the session title. Used to derive
+    /// a human title from the first user message when the session has none
+    /// (API/UI-created sessions start title-less and otherwise show "Untitled").
+    /// Returns the event so the caller can apply it to the views + broadcast it.
+    pub fn set_title(&self, session_id: &str, title: &str) -> Result<Event> {
+        let event = Event::SessionUpdated {
+            session_id: session_id.to_string(),
+            title: Some(title.to_string()),
+            model: None,
+            archived: None,
+            message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
+        };
+        self.log.append(&event)?;
+        Ok(event)
+    }
+
     /// Append a user message event to the log for a session, returning the event
     /// so the caller can also apply it to the in-memory views (the log is the
     /// source of truth, but the views serve reads and must stay current).

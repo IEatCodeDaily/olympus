@@ -687,6 +687,27 @@ fn event_timestamp(event: &crate::event::Event) -> f64 {
     }
 }
 
+/// Derive a short human title from the first user message. First non-empty
+/// line, collapsed whitespace, trimmed to ~60 chars on a word boundary. This
+/// is a cheap heuristic (no LLM round-trip) so titles appear instantly instead
+/// of "Untitled". A nicer LLM-summarized title can replace this later.
+fn derive_title(text: &str) -> String {
+    let first_line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let collapsed = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX: usize = 60;
+    if collapsed.chars().count() <= MAX {
+        return collapsed;
+    }
+    // Trim to MAX chars, then back off to the last word boundary for cleanliness.
+    let truncated: String = collapsed.chars().take(MAX).collect();
+    let cut = truncated.rfind(' ').unwrap_or(truncated.len());
+    format!("{}…", truncated[..cut].trim_end())
+}
+
 async fn get_messages(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1473,6 +1494,35 @@ async fn post_message(
             });
         }
         Err(e) => tracing::warn!(error = %e, "failed to append user message"),
+    }
+
+    // Derive a session title from the first user message when the session has
+    // none — otherwise API/UI-created sessions show "Untitled" forever. Cheap
+    // heuristic: first line, trimmed to ~60 chars (no LLM round-trip needed).
+    if next_id == 0 {
+        let needs_title = {
+            let views = state.views.read().await;
+            views
+                .sessions
+                .get(&id)
+                .map(|s| s.title.as_deref().unwrap_or("").trim().is_empty())
+                .unwrap_or(true)
+        };
+        if needs_title {
+            let derived = derive_title(&body.text);
+            if !derived.is_empty() {
+                if let Ok(event) = state.bridge.set_title(&id, &derived) {
+                    {
+                        let mut views = state.views.write().await;
+                        views.apply(&event);
+                    }
+                    let _ = state.deltas.send(ServerFrame::SessionUpdated {
+                        session_id: id.clone(),
+                        changes: serde_json::json!({ "title": derived }),
+                    });
+                }
+            }
+        }
     }
 
     // Mark in-flight up front so liveness shows "active" the instant the POST

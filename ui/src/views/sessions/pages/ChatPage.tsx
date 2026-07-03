@@ -46,10 +46,28 @@ export function ChatPage({
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   const serverMessages = msgData?.messages ?? [];
-  // Bug 7b: merge optimistic message with server messages
-  const messages = optimisticMsg ? [...serverMessages, optimisticMsg] : serverMessages;
+  // Dedupe: once the server echoes the user's message (same role+content), drop
+  // the optimistic copy so we don't show two identical bubbles while the agent
+  // is thinking. (The optimistic id is -1; the real one has a server id.)
+  const echoed =
+    optimisticMsg != null &&
+    serverMessages.some(
+      (m) => m.role === "user" && m.content === optimisticMsg.content,
+    );
+  const messages =
+    optimisticMsg && !echoed ? [...serverMessages, optimisticMsg] : serverMessages;
+
+  // Clear the optimistic copy as soon as the server echo lands.
+  useEffect(() => {
+    if (echoed) setOptimisticMsg(null);
+  }, [echoed]);
 
   const isObserved = session?.managed === false;
+
+  // Show a thinking indicator while the agent is working but hasn't streamed
+  // text yet (thinking) — cleared once streaming text or the final reply lands.
+  const showThinking =
+    (agentStatus === "thinking" || sending) && !streamingText;
 
   // ── WS streaming + status (Bug 7b) ───────────────────────────────
   useEffect(() => {
@@ -190,6 +208,15 @@ export function ChatPage({
                 </ReactMarkdown>
               </div>
             )}
+            {/* Thinking indicator — agent is working, no text streamed yet */}
+            {showThinking && (
+              <div className="msg-ai thinking-row">
+                <span className="thinking-dots" aria-label="thinking">
+                  <i /><i /><i />
+                </span>
+                <span className="thinking-label">thinking…</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -215,6 +242,7 @@ export function ChatPage({
           sending={sending}
           sessionModel={session?.model ?? null}
           sessionAgent={session?.agent ?? null}
+          sessionNode={session?.node ?? null}
         />
       )}
 
