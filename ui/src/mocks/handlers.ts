@@ -43,6 +43,9 @@ export const handlers = [
     if (managedParam === "true") filtered = filtered.filter((s) => s.managed);
     if (managedParam === "false") filtered = filtered.filter((s) => !s.managed);
 
+    const nodeParam = url.searchParams.get("node");
+    if (nodeParam) filtered = filtered.filter((s) => s.node === nodeParam);
+
     if (sourceParam) {
       const sources = sourceParam.split(",");
       filtered = filtered.filter((s) => sources.includes(s.source));
