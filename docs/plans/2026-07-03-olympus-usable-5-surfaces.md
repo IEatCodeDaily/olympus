@@ -327,6 +327,73 @@ of the old `ChatView.tsx` still being served instead of the View/Page rebuild
     Later: the Agents NavItem/Page configures which agents appear in this
     picker. For now, show all agents from `/api/agents`.
 
+### AMENDMENT to bug 2 (agent is LOCKED at creation):
+
+**Bug 2 (revised):** The composer's model configuration is
+`( agent logo | model | thinking level )` — NOT an agent picker.
+- **Agent is locked** once a session is created. The session's bound agent
+  (Hermes profile) is immutable. Show the agent's LOGO (not a picker) — a
+  brand glyph: Hermes, Claude (Anthropic), or ChatGPT/Codex (OpenAI), inferred
+  from the provider field.
+- The only configurable controls in the composer are: **model** (selectable,
+  scoped to the locked agent's available models) and **thinking level**
+  (on/off or low/medium/high — store in localStorage, pass with send).
+- Do NOT show an agent selector inside an open session. Agent selection happens
+  ONLY at session-creation time (bug 10).
+
+### Round 2 bugs (operator-reported after S1 merge):
+
+11. **Composer is inside the bottom panel, not the chatbox** — the composer
+    must be rendered INSIDE the chat column (chatcol), directly below the
+    transcript. The bottom panel is a SEPARATE sibling below the chatcol
+    (transcript + composer). Fix the layout: `chatcol = transcript(flex:1) +
+    composer(fixed height)` then `rz-y` then `bottompanel`. The composer must
+    NEVER appear inside or below the bottom panel.
+
+12. **Bottom panel hide button not working** — the toggle must actually
+    collapse/expand the panel (state already exists; verify the onClick wires
+    to `setBpCollapsed`). ALSO: the bottom panel should show ONLY two tabs:
+    **Logs** (Olympus server logs — streamed or tailed) and **Terminal**
+    (tabbed, session-persistent via tmux or equivalent; user can add/remove
+    terminals). Remove the "Output" and "Debug" tabs. Terminal starts at the
+    session's workdir.
+
+13. **Favicon not using Olympus mark** — create an SVG favicon from the Olympus
+    mountain glyph (`<svg viewBox="0 0 24 24"><path d="m4 19 8-12 8 12"/><path
+    d="m8.5 19 3.5-5.5L15.5 19"/></svg>`), wire it in `index.html` as
+    `<link rel="icon" type="image/svg+xml" href="/olympus.svg">`. Put the same
+    glyph on the **left sidebar toggle button** (replacing the panel-left icon).
+
+14. **Session outline + context show fake data** — replace ALL mock data with
+    **"Coming soon…"** placeholders. Never show fabricated data (todos, git
+    branch, PR) — it confuses users into thinking it's real. When the backend
+    emits this data, wire it; until then, a labelled placeholder.
+
+15. **Agent type icons missing** — show a brand logo per provider:
+    - **Hermes** profiles → Hermes glyph
+    - **Anthropic/Claude** → Claude/Anthropic logo
+    - **OpenAI/Codex/ChatGPT** → OpenAI/ChatGPT logo
+    - **ZAI** → a generic or ZAI glyph
+    In the composer (agent logo | model | thinking), in the session header,
+    and in the Fleet view (each node's bound agent shows its logo).
+
+16. **Light/dark toggle icon is wrong** — use a **sun** icon for "switch to
+    light" and a **moon** icon for "switch to dark" (the universal convention).
+    Currently it uses globe/sparkles icons.
+
+17. **Resize bars not working** — `.rz-x` and `.rz-y` are styled but have NO
+    drag handler. Implement a `useResizable` hook (mousedown → mousemove tracks
+    delta → updates a CSS var or state for the panel width/height). Apply to:
+    left sidebar ↔ viewport (`.rz-x`), viewport ↔ right sidebar (`.rz-x`),
+    chatcol ↔ bottom panel (`.rz-y`). Panels must have sensible min/max.
+
+18. **Send still not working (no chat bubble, no agent status)** — verify the
+    full chain: `createSession()` reads the FLAT response `id` (not
+    `.session.id`); the optimistic message (bug 7b) renders as a visible
+    bubble; `agentStatus` transitions render a "thinking…" indicator. If the
+    runtime is slow, the "thinking…" indicator must stay until the first
+    `/ws delta` or a timeout. Test end-to-end with a real session.
+
 ---
 
 ## Status Ledger (the swarm updates this; controller verifies before marking done)
@@ -334,10 +401,11 @@ of the old `ChatView.tsx` still being served instead of the View/Page rebuild
 |---|---|---|---|---|
 | F0 design-system + shell | glm52 | DONE | `ec7f00d` | + controller fixes `d30012a` (button reset), `3a5fd5e` (topbar selector) |
 | V-BE vaults backend | gpt55 | DONE | `88e00ee` | jj markdown vault, 235 tests |
-| S1 sessions → SessionsView | glm52 | REVIEW | `0064700` (unmerged) | 1269-line SessionsWorkbench built; needs View/Page reorg + bug backlog |
-| P1 projects board | gpt55 | REVIEW | (unmerged) | built; needs View/Page reorg |
-| N1 fleet view | glm52 | REVIEW | (unmerged) | built; needs View/Page reorg |
-| ST1 settings | gpt55 | REVIEW | (unmerged) | built; needs View/Page reorg |
-| V-UI vaults view | glm52 | REVIEW | (unmerged) | built; needs View/Page reorg |
+| S1 sessions workbench | glm52 | DONE | `e0db113` | merged as monolith; S2 refactors |
+| S2 Sessions View/Page + bugs 1-18 | glm52 | RUNNING | (wt) | View/Page refactor + all bug fixes |
+| V2 Vaults View | glm52 | RUNNING | (wt) | |
+| P2 Projects View | gpt55 | RUNNING | (wt) | |
+| N2 Fleet View | gpt55 | RUNNING | (wt) | |
+| ST2 Settings View | gpt55 | RUNNING | (wt) | |
 
 
