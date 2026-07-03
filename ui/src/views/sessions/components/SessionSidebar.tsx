@@ -22,9 +22,11 @@ import { AgentPicker } from "./AgentPicker";
 export function SessionSidebar({
   width,
   activeSessionId,
+  onResizeStart,
 }: {
   width: number;
   activeSessionId: string | null;
+  onResizeStart?: (e: React.MouseEvent) => void;
 }) {
   const navigate = useNavigate();
   const { data: sessionData } = useSessions({ managed: true });
@@ -116,7 +118,7 @@ export function SessionSidebar({
           )}
         </div>
       </aside>
-      <div className="rz-x" />
+      <div className="rz-x" onMouseDown={onResizeStart} />
 
       {/* Bug 10: agent picker modal */}
       <AgentPicker

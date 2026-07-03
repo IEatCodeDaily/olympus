@@ -9,11 +9,11 @@ import React from "react";
 import { Icon, type IconName } from "../../../components/Icon";
 import type { Message, Session } from "../../../types";
 import { fmtTime, tokenFmt, isDiffResult, parseDiff } from "../helpers";
-import { MOCK_OUTLINE, MOCK_CTX } from "../fixtures";
 
 export type RsTab = "overview" | "outline" | "settings" | "browser" | "diff" | "git" | "ai";
 
 export function RightPanel({
+  width,
   tab,
   onTabChange,
   session,
@@ -21,6 +21,7 @@ export function RightPanel({
   artifacts,
   messages,
 }: {
+  width?: number;
   tab: RsTab;
   onTabChange: (t: RsTab) => void;
   session: Session | undefined;
@@ -57,7 +58,7 @@ export function RightPanel({
   }, [messages]);
 
   return (
-    <aside className="rsidebar">
+    <aside className="rsidebar" style={width ? { width } : undefined}>
       <div className="rs-tabbar">
         {tabs.map((t) => (
           <button
@@ -134,11 +135,11 @@ export function RightPanel({
 
       {tab === "outline" && (
         <div className="rsv on" data-rsv="outline">
-          <div className="rs-sec" style={{ gap: 4 }}>
+          <div className="rs-sec">
             <div className="gk" style={{ marginBottom: 4 }}>transcript</div>
-            {MOCK_OUTLINE.map((line, i) => (
-              <div key={i} className="ovl-it">{line}</div>
-            ))}
+            <div className="empty-state-msg" style={{ padding: "6px 0", fontSize: 12 }}>
+              Coming soon…
+            </div>
           </div>
         </div>
       )}
@@ -242,13 +243,9 @@ export function RightPanel({
       {tab === "git" && (
         <div className="rsv on" data-rsv="git">
           <div className="rs-sec">
-            <div className="kv">
-              <span className="k">BRANCH</span>
-              <span className="v">{MOCK_CTX.branch}</span>
-            </div>
-            <div className="kv">
-              <span className="k">PR</span>
-              <span className="v">{MOCK_CTX.pr}</span>
+            <div className="gk">git context</div>
+            <div className="empty-state-msg" style={{ padding: "6px 0", fontSize: 12 }}>
+              Coming soon…
             </div>
           </div>
           {artifacts.length > 0 && (
@@ -268,10 +265,6 @@ export function RightPanel({
                   </span>
                 </div>
               ))}
-              <div className="dr-actions" style={{ marginTop: 4 }}>
-                <button type="button" className="btn pri">Commit</button>
-                <button type="button" className="btn">Stash</button>
-              </div>
             </div>
           )}
         </div>

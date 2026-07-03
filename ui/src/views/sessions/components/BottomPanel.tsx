@@ -4,15 +4,16 @@
  */
 
 import { Icon } from "../../../components/Icon";
-import { MOCK_TERMINAL_LINES } from "../fixtures";
 
 export type BpTab = "terminal" | "output" | "debug";
 
 export function BottomPanel({
+  height,
   tab,
   onTabChange,
   onClose,
 }: {
+  height?: number;
   tab: BpTab;
   onTabChange: (t: BpTab) => void;
   onClose: () => void;
@@ -24,7 +25,7 @@ export function BottomPanel({
   ];
 
   return (
-    <div className="bpanel">
+    <div className="bpanel" style={height ? { height } : undefined}>
       <div className="bp-tabs">
         <div className="bp-tablist">
           {tabs.map((t) => (
@@ -53,12 +54,7 @@ export function BottomPanel({
         </div>
       </div>
       <div className="bp-body">
-        {tab === "terminal" &&
-          MOCK_TERMINAL_LINES.map((l, i) => (
-            <div key={i} className={`ln ${l.cls}`}>{l.text}</div>
-          ))}
-        {tab === "output" && <div className="ln d">No output yet.</div>}
-        {tab === "debug" && <div className="ln d">No debug data.</div>}
+        <div className="ln d">Coming soon…</div>
       </div>
     </div>
   );

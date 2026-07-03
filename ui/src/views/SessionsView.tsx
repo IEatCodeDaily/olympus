@@ -33,11 +33,12 @@
  *   └──────────────────────────────────────────────────────────────┘
  */
 
-import React, { useState, useCallback } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Icon } from "../components/Icon";
+import { Icon, providerLogoIcon } from "../components/Icon";
 import { useUIStore } from "../store";
-import { useSession, useMessages } from "../hooks/queries";
+import { useSession, useMessages, useAgents } from "../hooks/queries";
+import { useResizable } from "../hooks/useResizable";
 import type { Message } from "../types";
 import { fmtTime, tokenFmt, isDiffResult } from "./sessions/helpers";
 
@@ -55,19 +56,34 @@ export function SessionsView({
   sessionId: string | null;
   page: "chat" | "agents" | "usage" | null;
 }) {
-  const { sidebarCollapsed, sidebarWidth } = useUIStore();
+  const { sidebarCollapsed } = useUIStore();
   const [rsCollapsed, setRsCollapsed] = useState(false);
   const [bpCollapsed, setBpCollapsed] = useState(false);
   const [rsTab, setRsTab] = useState<RsTab>("overview");
   const [bpTab, setBpTab] = useState<BpTab>("terminal");
+
+  // Bug 17: resizable panels — left sidebar, right sidebar, bottom panel
+  const sidebar = useResizable({
+    axis: "x", min: 160, max: 400, initial: 220,
+    direction: "right", persistKey: "olympus-sidebar-w",
+  });
+  const rightPanel = useResizable({
+    axis: "x", min: 200, max: 450, initial: 279,
+    direction: "left", persistKey: "olympus-rsidebar-w",
+  });
+  const bottomPanel = useResizable({
+    axis: "y", min: 80, max: 400, initial: 152,
+    direction: "down", persistKey: "olympus-bpanel-h",
+  });
 
   return (
     <>
       {/* ── View-owned left sidebar ─────────────────────────────── */}
       {!sidebarCollapsed && (
         <SessionSidebar
-          width={sidebarWidth}
+          width={sidebar.size}
           activeSessionId={sessionId}
+          onResizeStart={sidebar.onResizeStart}
         />
       )}
 
@@ -88,6 +104,10 @@ export function SessionsView({
             bpCollapsed={bpCollapsed}
             rsTab={rsTab}
             bpTab={bpTab}
+            rsWidth={rightPanel.size}
+            bpHeight={bottomPanel.size}
+            onRsResizeStart={rightPanel.onResizeStart}
+            onBpResizeStart={bottomPanel.onResizeStart}
             onToggleRs={() => setRsCollapsed((v) => !v)}
             onToggleBp={() => setBpCollapsed((v) => !v)}
             onRsTabChange={setRsTab}
@@ -113,6 +133,10 @@ function SessionChatLayout({
   bpCollapsed,
   rsTab,
   bpTab,
+  rsWidth,
+  bpHeight,
+  onRsResizeStart,
+  onBpResizeStart,
   onToggleRs,
   onToggleBp,
   onRsTabChange,
@@ -124,6 +148,10 @@ function SessionChatLayout({
   bpCollapsed: boolean;
   rsTab: RsTab;
   bpTab: BpTab;
+  rsWidth: number;
+  bpHeight: number;
+  onRsResizeStart: (e: React.MouseEvent) => void;
+  onBpResizeStart: (e: React.MouseEvent) => void;
   onToggleRs: () => void;
   onToggleBp: () => void;
   onRsTabChange: (t: RsTab) => void;
@@ -132,8 +160,15 @@ function SessionChatLayout({
 }) {
   const { data: session } = useSession(sessionId);
   const { data: msgData } = useMessages(sessionId);
+  const { data: agentsData } = useAgents();
   const messages = msgData?.messages ?? [];
   const navigate = useNavigate();
+
+  // Provider for the session's bound agent → logo glyph
+  const sessionAgentInfo = agentsData?.agents.find(
+    (a) => a.id === session?.agent,
+  );
+  const agentLogo = providerLogoIcon(sessionAgentInfo?.provider);
 
   // Derived artifact list from messages
   const artifacts = React.useMemo(() => {
@@ -179,7 +214,10 @@ function SessionChatLayout({
           </button>
           <span className="vp-title chat-title">{session?.title ?? "Untitled"}</span>
           {session?.agent && (
-            <span className="proj-badge">{session.agent.toUpperCase()}</span>
+            <span className="proj-badge">
+              <Icon name={agentLogo} size={11} />
+              {session.agent.toUpperCase()}
+            </span>
           )}
         </div>
         <div className="vp-right">
@@ -221,8 +259,9 @@ function SessionChatLayout({
           {/* View-owned bottom panel */}
           {!bpCollapsed && (
             <>
-              <div className="rz-y" />
+              <div className="rz-y" onMouseDown={onBpResizeStart} />
               <BottomPanel
+                height={bpHeight}
                 tab={bpTab}
                 onTabChange={onBpTabChange}
                 onClose={onCloseBp}
@@ -234,8 +273,9 @@ function SessionChatLayout({
         {/* View-owned right sidebar */}
         {!rsCollapsed && (
           <>
-            <div className="rz-x" />
+            <div className="rz-x" onMouseDown={onRsResizeStart} />
             <RightPanel
+              width={rsWidth}
               tab={rsTab}
               onTabChange={onRsTabChange}
               session={session}

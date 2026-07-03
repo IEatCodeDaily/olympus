@@ -49,7 +49,31 @@ const paths: Record<string, React.ReactNode> = {
   "clock": <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
   "terminal": <><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></>,
   "dollar": <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
+  // ── Olympus mountain glyph (favicon mark) ──
+  "mountain": <><path d="m4 19 8-12 8 12" /><path d="m8.5 19 3.5-5.5L15.5 19" /></>,
+  // ── Theme toggle ──
+  "sun": <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></>,
+  "moon": <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />,
+  // ── Provider / agent brand logos (simplified glyphs) ──
+  "logo-hermes": <><path d="m4 19 8-12 8 12" /><path d="m8.5 19 3.5-5.5L15.5 19" /></>,
+  "logo-claude": <path d="M7 21 12 3l5 18" />,
+  "logo-openai": <><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z" /><path d="M12 7l4.33 2.5v5L12 17l-4.33-2.5v-5z" /></>,
+  "logo-zai": <><rect x="3" y="8" width="18" height="12" rx="2" /><path d="M12 8V4M9 14h.01M15 14h.01" /></>,
 };
+
+/**
+ * Map a provider string (from /api/agents) to a brand logo icon name.
+ * Falls back to the generic bot icon for unknown providers.
+ */
+export function providerLogoIcon(provider: string | null | undefined): IconName {
+  if (!provider) return "logo-hermes";
+  const p = provider.toLowerCase();
+  if (p.includes("anthropic") || p.includes("claude")) return "logo-claude";
+  if (p.includes("openai") || p.includes("codex") || p.includes("gpt")) return "logo-openai";
+  if (p.includes("zai") || p.includes("zhipu") || p.includes("glm")) return "logo-zai";
+  if (p.includes("hermes") || p.includes("nous")) return "logo-hermes";
+  return "bot";
+}
 
 export type IconName = keyof typeof paths;
 
