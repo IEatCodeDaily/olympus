@@ -19,7 +19,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::{AgentKind, Capabilities, MergeMode, SetupAdapter, SpawnOverlay, Support};
-use crate::views::RegistryEntry;
 
 pub struct CodexAdapter;
 

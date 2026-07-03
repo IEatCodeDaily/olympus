@@ -15,7 +15,6 @@ pub mod hermes;
 use std::path::Path;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 use crate::views::{RegistryEntry, RegistryView};
 

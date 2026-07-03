@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
+use crate::vault::{NoteDocument, NoteTreeEntry, NoteTreeEntryKind, VaultSummary};
 use crate::views::{CardRow, MessageRow, RegistryEntry, SessionRow, SetupRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
@@ -322,6 +323,76 @@ impl RegistryEntryDto {
             slug: row.slug.clone(),
             definition: row.definition.clone(),
             registered_at: row.registered_at,
+        }
+    }
+}
+
+/// `Vault` summary as the UI consumes it (api-contract.md §Vaults).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultSummaryDto {
+    pub id: String,
+    pub name: String,
+    pub note_count: usize,
+    pub updated_at: f64,
+}
+
+impl From<VaultSummary> for VaultSummaryDto {
+    fn from(vault: VaultSummary) -> Self {
+        Self {
+            id: vault.id,
+            name: vault.name,
+            note_count: vault.note_count,
+            updated_at: vault.updated_at,
+        }
+    }
+}
+
+/// Recursive note tree entry. Folders have `kind="folder"`; files have `kind="note"`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteTreeEntryDto {
+    pub path: String,
+    pub title: String,
+    pub updated_at: f64,
+    pub kind: String,
+    pub children: Vec<NoteTreeEntryDto>,
+}
+
+impl From<NoteTreeEntry> for NoteTreeEntryDto {
+    fn from(entry: NoteTreeEntry) -> Self {
+        Self {
+            path: entry.path,
+            title: entry.title,
+            updated_at: entry.updated_at,
+            kind: match entry.kind {
+                NoteTreeEntryKind::Folder => "folder".to_string(),
+                NoteTreeEntryKind::Note => "note".to_string(),
+            },
+            children: entry.children.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Full note document.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteDocumentDto {
+    pub path: String,
+    pub title: String,
+    pub markdown: String,
+    pub frontmatter: serde_json::Value,
+    pub linked_notes: Vec<String>,
+}
+
+impl From<NoteDocument> for NoteDocumentDto {
+    fn from(note: NoteDocument) -> Self {
+        Self {
+            path: note.path,
+            title: note.title,
+            markdown: note.markdown,
+            frontmatter: note.frontmatter,
+            linked_notes: note.linked_notes,
         }
     }
 }

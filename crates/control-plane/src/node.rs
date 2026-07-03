@@ -72,7 +72,6 @@ struct NodeEntry {
     version: String,
     local: bool,
     last_heartbeat: Instant,
-    registered_at: Instant,
 }
 
 /// Heartbeat timeout: a node is `offline` if no heartbeat for this long.
@@ -115,7 +114,6 @@ impl NodeRegistry {
                 version: version.to_string(),
                 local,
                 last_heartbeat: now,
-                registered_at: now,
             },
         );
     }
@@ -321,8 +319,8 @@ async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry)
     loop {
         let line = match lines.next_line().await {
             Ok(Some(l)) => l,
-            Ok(None) => break,       // EOF — peer disconnected
-            Err(_) => break,         // read error
+            Ok(None) => break, // EOF — peer disconnected
+            Err(_) => break,   // read error
         };
         let line = line.trim().to_string();
         if line.is_empty() {
@@ -399,8 +397,7 @@ mod tests {
     #[tokio::test]
     async fn register_and_list() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false)
-            .await;
+        reg.register("node-1", "host-1", 4, "0.1", false).await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -412,8 +409,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_updates_slots() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false)
-            .await;
+        reg.register("node-1", "host-1", 4, "0.1", false).await;
 
         reg.heartbeat("node-1", 2).await.unwrap();
 
@@ -431,8 +427,7 @@ mod tests {
     #[tokio::test]
     async fn deregister_removes_node() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false)
-            .await;
+        reg.register("node-1", "host-1", 4, "0.1", false).await;
         assert_eq!(reg.list().await.len(), 1);
 
         reg.deregister("node-1").await;
@@ -442,11 +437,9 @@ mod tests {
     #[tokio::test]
     async fn re_register_updates_fields() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 2, "0.1", false)
-            .await;
+        reg.register("node-1", "host-1", 2, "0.1", false).await;
         // Re-register with updated capacity
-        reg.register("node-1", "host-1", 8, "0.2", false)
-            .await;
+        reg.register("node-1", "host-1", 8, "0.2", false).await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -469,8 +462,7 @@ mod tests {
     #[tokio::test]
     async fn set_draining_changes_status() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false)
-            .await;
+        reg.register("node-1", "host-1", 4, "0.1", false).await;
 
         reg.set_draining("node-1").await.unwrap();
         let nodes = reg.list().await;
@@ -501,7 +493,8 @@ mod tests {
 
     #[tokio::test]
     async fn message_deserialize_hello() {
-        let json = r#"{"kind":"hello","nodeId":"w1","hostname":"talos","slotsTotal":4,"version":"0.1"}"#;
+        let json =
+            r#"{"kind":"hello","nodeId":"w1","hostname":"talos","slotsTotal":4,"version":"0.1"}"#;
         let msg: NodeMessage = serde_json::from_str(json).unwrap();
         match msg {
             NodeMessage::Hello {

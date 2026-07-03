@@ -16,7 +16,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// A content-hash line anchor. The hash is a SHA-256 of the line content
 /// (trimmed) — two lines with the same content produce the same anchor, so
@@ -248,6 +248,7 @@ pub fn run_spike() -> Result<String> {
     Ok(summary)
 }
 
+#[cfg(test)]
 fn init_jj_workspace(path: &Path) -> Result<()> {
     std::process::Command::new("jj")
         .arg("git")

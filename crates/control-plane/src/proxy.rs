@@ -26,8 +26,7 @@ use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Json;
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -76,8 +75,6 @@ pub enum ProxyStatus {
 /// Internal tracking entry.
 struct ProxyEntry {
     endpoint: ProxyEndpoint,
-    /// When the endpoint was registered (epoch seconds).
-    registered_at: f64,
 }
 
 /// Thread-safe proxy routing table.
@@ -95,17 +92,10 @@ impl ProxyTable {
 
     /// Register or update an endpoint. If the slug exists, it's overwritten.
     pub async fn upsert(&self, endpoint: ProxyEndpoint) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        self.routes.write().await.insert(
-            endpoint.slug.clone(),
-            ProxyEntry {
-                endpoint,
-                registered_at: now,
-            },
-        );
+        self.routes
+            .write()
+            .await
+            .insert(endpoint.slug.clone(), ProxyEntry { endpoint });
     }
 
     /// Remove an endpoint. Returns true if it existed.
@@ -115,7 +105,11 @@ impl ProxyTable {
 
     /// Look up an endpoint by slug.
     pub async fn get(&self, slug: &str) -> Option<ProxyEndpoint> {
-        self.routes.read().await.get(slug).map(|e| e.endpoint.clone())
+        self.routes
+            .read()
+            .await
+            .get(slug)
+            .map(|e| e.endpoint.clone())
     }
 
     /// List all endpoints.
@@ -173,7 +167,9 @@ fn default_auth() -> ProxyAuth {
     ProxyAuth::SessionScoped
 }
 
-pub async fn list_proxy_endpoints(State(state): State<crate::server::AppState>) -> impl IntoResponse {
+pub async fn list_proxy_endpoints(
+    State(state): State<crate::server::AppState>,
+) -> impl IntoResponse {
     let endpoints = state.proxy.list().await;
     Json(json!({ "endpoints": endpoints }))
 }
@@ -246,7 +242,15 @@ pub async fn proxy_forward_root(
     Query(query): Query<HashMap<String, String>>,
     req: Request<Body>,
 ) -> Response {
-    proxy_forward(state, Path((slug, String::new())), method, headers, Query(query), req).await
+    proxy_forward(
+        state,
+        Path((slug, String::new())),
+        method,
+        headers,
+        Query(query),
+        req,
+    )
+    .await
 }
 
 /// The catch-all handler for `/proxy/{slug}/{path:.*}`.
@@ -264,11 +268,7 @@ pub async fn proxy_forward(
     };
 
     if endpoint.status == ProxyStatus::Stopped {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "endpoint stopped",
-        )
-            .into_response();
+        return (StatusCode::SERVICE_UNAVAILABLE, "endpoint stopped").into_response();
     }
 
     // Auth check.
@@ -280,10 +280,7 @@ pub async fn proxy_forward(
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "));
             if provided != Some(expected.as_str()) {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    "invalid or missing proxy token",
-                )
+                return (StatusCode::UNAUTHORIZED, "invalid or missing proxy token")
                     .into_response();
             }
         }
@@ -294,11 +291,7 @@ pub async fn proxy_forward(
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "));
             if provided != Some(state.token.as_str()) {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    "olympus token required",
-                )
-                    .into_response();
+                return (StatusCode::UNAUTHORIZED, "olympus token required").into_response();
             }
         }
     }
@@ -363,10 +356,8 @@ async fn forward_to_backend(
     });
 
     // Build the upstream request.
-    let (parts, body) = req.into_parts();
-    let mut upstream_req = Request::builder()
-        .method(method)
-        .uri(&upstream);
+    let (_parts, body) = req.into_parts();
+    let mut upstream_req = Request::builder().method(method).uri(&upstream);
 
     // Copy headers, fixing Host.
     for (key, value) in headers.iter() {
@@ -409,9 +400,7 @@ async fn forward_to_backend(
 fn proxy_not_found(slug: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
-        [
-            ("content-type", "text/html; charset=utf-8"),
-        ],
+        [("content-type", "text/html; charset=utf-8")],
         format!(
             "<html><body><h1>404 — No proxy endpoint '{slug}'</h1>\
              <p>This endpoint has not been registered. \
@@ -424,9 +413,7 @@ fn proxy_not_found(slug: &str) -> Response {
 fn proxy_bad_gateway(target: &str, error: &str) -> Response {
     (
         StatusCode::BAD_GATEWAY,
-        [
-            ("content-type", "text/html; charset=utf-8"),
-        ],
+        [("content-type", "text/html; charset=utf-8")],
         format!(
             "<html><body><h1>502 — Backend unreachable</h1>\
              <p>Target <code>{target}</code> did not respond.</p>\

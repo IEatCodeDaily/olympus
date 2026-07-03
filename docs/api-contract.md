@@ -84,6 +84,29 @@ export interface ModelInfo {
   model: string;
   displayName: string;
 }
+
+export interface VaultSummary {
+  id: string;        // slug generated from the vault name
+  name: string;
+  noteCount: number;
+  updatedAt: number; // epoch seconds
+}
+
+export interface NoteTreeEntry {
+  path: string;      // markdown path relative to vault root
+  title: string;
+  updatedAt: number; // epoch seconds
+  kind: "folder" | "note";
+  children: NoteTreeEntry[];
+}
+
+export interface NoteDocument {
+  path: string;
+  title: string;     // frontmatter title, H1, or file stem fallback
+  markdown: string;  // full markdown including frontmatter
+  frontmatter: Record<string, unknown>;
+  linkedNotes: string[]; // wikilinks + simple markdown links, normalized for graphing
+}
 ```
 
 ## REST endpoints (MVP)
@@ -133,6 +156,15 @@ GET /api/setup                         # declared agent setup (ADR 0006 §3)
   ?scope=org:<org> | ?scope=project:<org>/<project>   # one scope's raw declaration
   ?org=<org>&project=<project>         # OR: the merged EFFECTIVE setup (org + project)
   → 200 Setup    # an undeclared scope returns an empty Setup, not 404
+
+GET /api/vaults                        # markdown-first knowledge vaults (ADR 0004)
+  → 200 { "vaults": VaultSummary[] }
+
+GET /api/vaults/:id/notes
+  → 200 { "notes": NoteTreeEntry[] }  # recursive folder/note tree
+
+GET /api/vaults/:id/note?path=<relative-markdown-path>
+  → 200 NoteDocument | 404
 ```
 
 Where `Setup` is:
@@ -168,6 +200,18 @@ PUT /api/setup                         # declare (set/replace) a scope's agent s
          plugins?: string[], hooks?: string[] }   # PUT = full replace of the scope
   → 200 Setup                          # the stored declaration
   → 400 if scope is not "org:<slug>" or "project:<org>/<project>"
+
+POST /api/vaults                       # create a jj-colocated markdown vault
+  body { name: string }
+  → 201 VaultSummary
+
+PUT /api/vaults/:id/note?path=<relative-markdown-path>
+  body { markdown?: string, newPath?: string }     # write and/or rename a note
+  → 200 NoteDocument
+  → 400 if path escapes the vault root or a new note omits markdown
+
+DELETE /api/vaults/:id/note?path=<relative-markdown-path>
+  → 204
 
 
 POST /api/sessions/:id/cancel          # (post-spike) → ACP session/cancel

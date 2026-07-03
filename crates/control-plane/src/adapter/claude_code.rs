@@ -19,7 +19,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::{AgentKind, Capabilities, MergeMode, SetupAdapter, SpawnOverlay, Support};
-use crate::views::RegistryEntry;
 
 pub struct ClaudeCodeAdapter;
 
@@ -111,7 +110,7 @@ impl SetupAdapter for ClaudeCodeAdapter {
         if !resolved.hooks.resolved.is_empty() {
             let settings_path = space.join(".claude").join("settings.json");
             std::fs::create_dir_all(space.join(".claude"))
-                .with_context(|| format!("creating .claude dir"))?;
+                .with_context(|| "creating .claude dir".to_string())?;
 
             let mut settings: serde_json::Value = if mode == MergeMode::Union {
                 std::fs::read(&settings_path)
