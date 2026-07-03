@@ -857,6 +857,7 @@ fn vault_error(err: anyhow::Error) -> Response {
 
 #[derive(Debug, Deserialize)]
 struct PostMessageBody {
+    #[serde(alias = "content")]
     text: String,
     #[serde(default)]
     model: Option<String>,
@@ -1598,7 +1599,15 @@ async fn post_message(
             resume_hermes.unwrap_or(captured_hermes_id)
         };
 
-        // Send the prompt.
+        let mut stream = runtime.events();
+        let mut assistant_text = String::new();
+        let assistant_msg_id = assistant_seed_id;
+        // Accumulate structured tool calls seen this turn so they're persisted
+        // on the assistant message (and surface in the transcript's tool UI).
+        let mut tool_calls_acc: Vec<serde_json::Value> = Vec::new();
+
+        // Subscribe before sending the prompt so fast runtimes cannot emit and
+        // finish the whole turn before the drain loop is listening.
         if let Err(e) = runtime
             .send(AgentCommand::Prompt {
                 text: prompt_text,
@@ -1615,13 +1624,7 @@ async fn post_message(
             bridge.clear_in_flight(&session_id).await;
             return;
         }
-
-        let mut stream = runtime.events();
-        let mut assistant_text = String::new();
-        let assistant_msg_id = assistant_seed_id;
-        // Accumulate structured tool calls seen this turn so they're persisted
-        // on the assistant message (and surface in the transcript's tool UI).
-        let mut tool_calls_acc: Vec<serde_json::Value> = Vec::new();
+        let mut terminal_event_seen = false;
 
         while let Some(event) = stream.next().await {
             match event {
@@ -1634,6 +1637,7 @@ async fn post_message(
                     });
                 }
                 AgentEvent::Done { finish_reason } => {
+                    terminal_event_seen = true;
                     let _ = deltas.send(ServerFrame::MessageDone {
                         session_id: session_id.clone(),
                         message_id: assistant_msg_id,
@@ -1684,11 +1688,42 @@ async fn post_message(
                     break;
                 }
                 AgentEvent::Error(e) => {
+                    terminal_event_seen = true;
                     tracing::warn!(error = %e, session = %session_id, "agent error event");
+                    let content = format!("⚠ agent error: {e}");
+                    let finish_reason = format!("error: {e}");
+                    if let Ok(event) = bridge.append_system_message(
+                        &session_id,
+                        &hermes_id_clone,
+                        assistant_msg_id,
+                        &content,
+                        Some(&finish_reason),
+                    ) {
+                        {
+                            let mut v = views.write().await;
+                            v.apply(&event);
+                        }
+                        let dto = crate::server::dto::MessageDto {
+                            message_id: assistant_msg_id,
+                            session_id: session_id.clone(),
+                            role: "system".into(),
+                            content: Some(content),
+                            tool_name: None,
+                            tool_calls: None,
+                            reasoning: None,
+                            timestamp: event_timestamp(&event),
+                            token_count: None,
+                            finish_reason: Some(finish_reason.clone()),
+                        };
+                        let _ = deltas.send(ServerFrame::MessageAppended {
+                            session_id: session_id.clone(),
+                            message: dto,
+                        });
+                    }
                     let _ = deltas.send(ServerFrame::MessageDone {
                         session_id: session_id.clone(),
                         message_id: assistant_msg_id,
-                        finish_reason: Some(format!("error: {e}")),
+                        finish_reason: Some(finish_reason),
                     });
                     break;
                 }
@@ -1712,6 +1747,44 @@ async fn post_message(
             // increment inflated the id on any turn with a tool call, colliding
             // with the next turn's user-message id and dropping/clobbering the
             // assistant reply (the multi-turn "no response" bug).
+        }
+        if !terminal_event_seen {
+            tracing::warn!(session = %session_id, "agent stream closed without terminal event");
+            let content = "⚠ agent stream closed unexpectedly".to_string();
+            let finish_reason = "error: agent stream closed unexpectedly".to_string();
+            if let Ok(event) = bridge.append_system_message(
+                &session_id,
+                &hermes_id_clone,
+                assistant_msg_id,
+                &content,
+                Some(&finish_reason),
+            ) {
+                {
+                    let mut v = views.write().await;
+                    v.apply(&event);
+                }
+                let dto = crate::server::dto::MessageDto {
+                    message_id: assistant_msg_id,
+                    session_id: session_id.clone(),
+                    role: "system".into(),
+                    content: Some(content),
+                    tool_name: None,
+                    tool_calls: None,
+                    reasoning: None,
+                    timestamp: event_timestamp(&event),
+                    token_count: None,
+                    finish_reason: Some(finish_reason.clone()),
+                };
+                let _ = deltas.send(ServerFrame::MessageAppended {
+                    session_id: session_id.clone(),
+                    message: dto,
+                });
+            }
+            let _ = deltas.send(ServerFrame::MessageDone {
+                session_id: session_id.clone(),
+                message_id: assistant_msg_id,
+                finish_reason: Some(finish_reason),
+            });
         }
         // Turn finished (Done, Error, or stream closed): clear the in-flight flag
         // so liveness drops back to idle.
@@ -2550,6 +2623,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn agent_error_event_is_persisted_as_system_message() {
+        let (mut state, _d) = test_state();
+        state.bridge = Arc::new(BridgeManager::with_factory(
+            state.log.clone(),
+            test_support::mock_factory(),
+        ));
+        let app = build_router(state.clone());
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["id"].as_str().unwrap().to_string();
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/sessions/{session_id}/messages"))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"trigger agent error"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        let mut messages = serde_json::Value::Null;
+        for _ in 0..50 {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/sessions/{session_id}/messages"))
+                        .header("authorization", "Bearer testtoken")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            messages = serde_json::from_slice(&body).unwrap();
+            if messages["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["role"] == "system" && m["content"] == "⚠ agent error: mock failure")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let system = messages["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "system")
+            .expect("system error message should be persisted");
+        assert_eq!(system["content"], "⚠ agent error: mock failure");
     }
 
     // ---- card CRUD tests (C1) ----

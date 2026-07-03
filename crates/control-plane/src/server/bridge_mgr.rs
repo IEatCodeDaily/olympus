@@ -375,6 +375,35 @@ impl BridgeManager {
         self.log.append(&event)?;
         Ok(event)
     }
+
+    /// Append a system message to the log for synthetic control-plane notices
+    /// such as agent runtime errors, returning the event so callers can also
+    /// apply it to the in-memory views.
+    pub fn append_system_message(
+        &self,
+        session_id: &str,
+        hermes_id: &str,
+        message_id: u64,
+        text: &str,
+        finish_reason: Option<&str>,
+    ) -> Result<Event> {
+        let now = chrono_epoch();
+        let event = Event::MessageAppended {
+            session_id: session_id.to_string(),
+            hermes_session_id: hermes_id.to_string(),
+            message_id,
+            role: "system".into(),
+            content: Some(text.to_string()),
+            tool_name: None,
+            tool_calls: None,
+            reasoning: None,
+            timestamp: now,
+            token_count: None,
+            finish_reason: finish_reason.map(|s| s.to_string()),
+        };
+        self.log.append(&event)?;
+        Ok(event)
+    }
 }
 
 /// Current epoch seconds as f64.
