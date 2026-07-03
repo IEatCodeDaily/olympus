@@ -431,3 +431,116 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
 /* ── Shell placeholder pane ──────────────────────── */
 .shell-placeholder { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .shell-placeholder-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: var(--space-16); }
+
+/* ── Vaults view (V-UI) ──────────────────────────── */
+/* Override gv-wrap direction for vaults so dtabs + content stack vertically */
+[data-view="vaults"].gv-wrap { flex-direction: column; }
+
+/* Content area: side-by-side note pane + agent panel */
+.vault-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-10) var(--space-12);
+  display: flex;
+  flex-direction: column;
+}
+
+.vault-note-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 760px;
+  flex: 1;
+}
+
+.vault-editor {
+  width: 100%;
+  max-width: 680px;
+  height: 420px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 12px 14px;
+  outline: none;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.vault-linked {
+  padding-top: var(--space-6);
+  border-top: var(--border-w) solid var(--border);
+  margin-top: var(--space-6);
+}
+
+.vault-link-pill {
+  cursor: pointer;
+}
+
+.vault-ask-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+.vault-ask-input::placeholder { color: var(--text-faint); }
+
+.vault-agent-panel {
+  width: 250px;
+}
+
+.vault-sidebar {}
+
+.vault-picker-menu {
+  position: absolute;
+  z-index: 20;
+  background: var(--bg-elev);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  min-width: 160px;
+  padding: var(--space-2) 0;
+  margin: 0 var(--space-4);
+}
+
+/* Tab close button */
+.tab-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+}
+.dtab:hover .tab-close,
+.dtab.on .tab-close { display: flex; }
+.tab-close:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ── SessionsWorkbench additions ───────────────────────────────────── */
+
+/* System / meta messages */
+.msg-system { padding: var(--space-3) 0; }
+
+/* Reasoning block (expandable thinking section) */
+.reasoning-block { margin-bottom: var(--space-3); }
+.reasoning-toggle { display: flex; align-items: center; gap: var(--space-2); color: var(--faint); font-size: var(--fs-11); padding: 2px 0; cursor: pointer; }
+.reasoning-toggle:hover { color: var(--dim); }
+.reasoning-body { margin-top: var(--space-2); padding: var(--space-4) var(--space-5); background: var(--elev); border: var(--border-w) solid var(--border); border-radius: var(--radius); font-size: var(--fs-12); color: var(--dim); line-height: var(--lh-relaxed); white-space: pre-wrap; }
+
+/* Tool-call list inside a message */
+.tc-list { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
+
+/* View wrapper used by SessionsWorkbench (flex column fill) */
+div[data-view="sessions"].view.on { display: flex; flex: 1; min-height: 0; }
+.chat-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }

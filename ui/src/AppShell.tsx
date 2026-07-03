@@ -23,9 +23,10 @@ import { createSession } from "./api";
 import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
 import type { Session } from "./types";
-import ChatView from "./views/ChatView";
+import { SessionsWorkbench, SessionEmptyPane } from "./views/SessionsWorkbench";
 import FleetView from "./views/FleetView";
-import { VaultsView, ProjectsView, SettingsView } from "./views/PlaceholderViews";
+import { VaultsView, VaultSidebar } from "./views/VaultsView";
+import { ProjectsView, SettingsView } from "./views/PlaceholderViews";
 
 // ── Nav definition ─────────────────────────────────
 // The 5 surfaces, in nav order. Matches the plan's table exactly.
@@ -77,7 +78,12 @@ export function AppShell() {
             <FleetSidebar />
           </SecondarySidebar>
         )}
-        {!sidebarCollapsed && (surface === "vaults" || surface === "projects" || surface === "settings") && (
+        {!sidebarCollapsed && surface === "vaults" && (
+          <SecondarySidebar width={sidebarWidth}>
+            <VaultSidebar />
+          </SecondarySidebar>
+        )}
+        {!sidebarCollapsed && (surface === "projects" || surface === "settings") && (
           <SecondarySidebar width={sidebarWidth}>
             <PlaceholderSidebar surface={surface} />
           </SecondarySidebar>
@@ -86,9 +92,9 @@ export function AppShell() {
         {/* Viewport — the active surface's main content */}
         <div className="viewport">
           {surface === "sessions" && sessionId ? (
-            <ChatView sessionId={sessionId} />
+            <SessionsWorkbench sessionId={sessionId} />
           ) : surface === "sessions" ? (
-            <SessionListPane />
+            <SessionEmptyPane />
           ) : surface === "fleet" ? (
             <FleetView />
           ) : surface === "vaults" ? (
@@ -98,7 +104,7 @@ export function AppShell() {
           ) : surface === "settings" ? (
             <SettingsView />
           ) : (
-            <SessionListPane />
+            <SessionEmptyPane />
           )}
         </div>
       </div>
@@ -281,6 +287,7 @@ function FleetSidebar() {
 }
 
 // ── Session sidebar ────────────────────────────────
+// Groups: PINNED (liveness===active managed), RECENT (managed), OBSERVED (managed===false)
 
 function SessionSidebar({
   width,
@@ -295,10 +302,21 @@ function SessionSidebar({
   const sessions = sessionData?.sessions ?? [];
   const history = historyData?.sessions ?? [];
 
+  // PINNED = managed + active liveness
+  const pinned = sessions.filter((s) => s.liveness === "active");
+  // RECENT = managed + not active
+  const recent = sessions.filter((s) => s.liveness !== "active");
+  // OBSERVED = not managed (imported from hermes)
+  const observed = history;
+
   const handleNewSession = useCallback(async () => {
     try {
       const session = await createSession();
-      if (session?.id) void navigate({ to: `/sessions/$sessionId`, params: { sessionId: session.id } });
+      if (session?.id)
+        void navigate({
+          to: `/sessions/$sessionId`,
+          params: { sessionId: session.id },
+        });
     } catch {
       // sessions list will refetch
     }
@@ -320,16 +338,24 @@ function SessionSidebar({
         </button>
       </div>
       <div className="sb-scroll">
+        {pinned.length > 0 && (
+          <SessionSection
+            label="PINNED"
+            sessions={pinned}
+            activeSessionId={activeSessionId}
+            onSelect={handleSelectSession}
+          />
+        )}
         <SessionSection
           label="RECENT"
-          sessions={sessions}
+          sessions={recent}
           activeSessionId={activeSessionId}
           onSelect={handleSelectSession}
         />
-        {history.length > 0 && (
+        {observed.length > 0 && (
           <SessionSection
             label="OBSERVED"
-            sessions={history}
+            sessions={observed}
             activeSessionId={activeSessionId}
             onSelect={handleSelectSession}
           />
@@ -375,34 +401,30 @@ function SessionSection({
               <span className="title">{s.title || "Untitled"}</span>
             </span>
             <span className="meta">
+              {s.model && (
+                <span
+                  className="modelpill"
+                  style={{
+                    fontSize: 9,
+                    padding: "1px 4px",
+                    background: "none",
+                    border: "none",
+                    color: "var(--faint)",
+                    fontFamily: "var(--font-mono)",
+                    maxWidth: 64,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.model.split("-").slice(0, 2).join("-")}
+                </span>
+              )}
               <span>{s.messageCount}</span>
               <span>{timeAgo(s.lastActivity)}</span>
             </span>
           </button>
         ))}
-      </div>
-    </>
-  );
-}
-
-// ── Session list empty pane ────────────────────────
-
-function SessionListPane() {
-  return (
-    <>
-      <div className="gv-head">
-        <span className="gv-title">Sessions</span>
-      </div>
-      <div className="gv-body">
-        <div className="empty-state">
-          <div className="empty-state-icon">
-            <Icon name="message-square" size={32} />
-          </div>
-          <div className="empty-state-title">Select a session</div>
-          <div className="empty-state-msg">
-            Choose a session from the sidebar or create a new one to start chatting.
-          </div>
-        </div>
       </div>
     </>
   );
