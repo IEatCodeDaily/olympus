@@ -34,6 +34,31 @@
   --mono:         var(--font-mono);
 }
 
+/* ── Global control reset ──────────────────────────
+   F0 renders session rows, nav items, and chips as <button> elements. Without
+   this reset the browser paints its UA default (#efefef fill + 2px outset
+   border), which shows as light-gray boxes with near-invisible text on the dark
+   canvas. Neutralize all interactive-control chrome; .ol-* and shell classes
+   supply the real styling. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  text-align: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+button {
+  cursor: pointer;
+  line-height: inherit;
+}
+
 /* .mono utility class (used across views) */
 .mono { font-family: var(--font-mono); }
 
@@ -43,6 +68,7 @@
 /* ── TopBar ──────────────────────────────────────── */
 .topbar { height: var(--topbar-h); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-6); background: var(--chrome); }
 .tb-left { display: flex; align-items: center; gap: var(--space-4); flex: 1; }
+.tb-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); letter-spacing: var(--tracking-snug); }
 .icobtn { display: flex; align-items: center; justify-content: center; padding: 5px; border-radius: var(--radius); color: var(--dim); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .icobtn:hover { background: var(--hover); color: var(--text); }
 .icobtn:focus-visible { outline: var(--ring-w) solid var(--ring); outline-offset: var(--ring-offset); }

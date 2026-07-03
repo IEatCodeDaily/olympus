@@ -112,7 +112,6 @@ export function AppShell() {
 // ── TopBar ─────────────────────────────────────────
 
 function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
-  const navigate = useNavigate();
   const { toggleSidebar } = useUIStore();
   const { theme, toggleTheme } = useTheme();
 
@@ -129,22 +128,7 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
           <Icon name="panel-left" size={14} />
         </button>
         <span className="divider" />
-        {/* Nav rail — icon chips for each surface */}
-        <div className="layouts">
-          {SURFACES.map((s) => (
-            <button
-              type="button"
-              key={s.surface}
-              className={`chip ${activeSurface === s.surface ? "on" : ""}`}
-              onClick={() => void navigate({ to: s.path })}
-              title={s.label}
-              aria-label={s.label}
-              aria-current={activeSurface === s.surface ? "page" : undefined}
-            >
-              <Icon name={s.icon} size={13} />
-            </button>
-          ))}
-        </div>
+        <span className="tb-title">{SURFACES.find((s) => s.surface === activeSurface)?.label ?? "Olympus"}</span>
       </div>
 
       <div className="tb-center">
