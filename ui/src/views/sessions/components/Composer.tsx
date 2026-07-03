@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { Icon } from "../../../components/Icon";
+import { Icon, providerLogoIcon } from "../../../components/Icon";
 import { useAgents, useModels } from "../../../hooks/queries";
 import type { AgentInfo } from "../../../types";
 
@@ -138,7 +138,7 @@ export function Composer({
                 title="Agent · model"
                 onClick={() => setPickerOpen((v) => !v)}
               >
-                <Icon name="bot" size={12} />
+                <Icon name={providerLogoIcon(activeAgent?.provider)} size={12} />
                 <span className="nm">{agentLabel}</span>
                 <span className="psep" />
                 <span className="nm">{selectedModel || activeAgent?.model || "auto"}</span>

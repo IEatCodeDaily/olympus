@@ -116,7 +116,7 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
           title="Toggle sidebar"
           aria-label="Toggle sidebar"
         >
-          <Icon name="panel-left" size={14} />
+          <Icon name="mountain" size={14} />
         </button>
         <span className="divider" />
         {/* View selector — icon chips for each surface (concept: topbar .layouts) */}
@@ -150,7 +150,7 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
           title={theme === "obsidian" ? "Switch to light" : "Switch to dark"}
           aria-label="Toggle theme"
         >
-          <Icon name={theme === "obsidian" ? "globe" : "sparkles"} size={14} />
+          <Icon name={theme === "obsidian" ? "sun" : "moon"} size={14} />
         </button>
         <OrgChip />
         <div className="profile" title="rpw">rp</div>
