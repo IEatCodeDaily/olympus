@@ -22,6 +22,7 @@ use olympus_control_plane::{
     search::SearchIndex,
     server::{self, AppState, ImportState},
     sync,
+    vault::VaultStore,
     views::ViewManager,
 };
 use tokio::sync::{broadcast, RwLock};
@@ -178,6 +179,7 @@ async fn main() -> Result<()> {
         irc: olympus_control_plane::irc::IrcBus::new(),
         nodes: node_registry.clone(),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
+        vaults: Arc::new(VaultStore::new(org_workspace_root(&default_org())?)),
     };
 
     let sync_log = Arc::clone(&log_arc);

@@ -21,6 +21,8 @@ async fn main() -> anyhow::Result<()> {
         session_source: Some("olympus".into()),
         event_buffer: 256,
         start_timeout_secs: 30,
+        mcp_servers: Vec::new(),
+        env: Vec::new(),
     };
     let rt = HermesAgentRuntime::new_arc(cfg);
 

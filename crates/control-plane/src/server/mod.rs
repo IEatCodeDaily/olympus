@@ -35,10 +35,11 @@ use crate::log::Log;
 use crate::search::SearchIndex;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
-use dto::{CardDto, MessageDto, RegistryEntryDto, SearchHitDto, SessionDto, SetupDto};
+use dto::{
+    CardDto, MessageDto, NoteDocumentDto, NoteTreeEntryDto, RegistryEntryDto, SearchHitDto,
+    SessionDto, SetupDto, VaultSummaryDto,
+};
 use ws::ServerFrame;
-
-use crate::adapter::SetupAdapter;
 
 /// Import progress, surfaced on `/api/health`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +85,8 @@ pub struct AppState {
     pub nodes: crate::node::NodeRegistry,
     /// Reverse proxy routing table — slug → backend target.
     pub proxy: crate::proxy::ProxyTable,
+    /// Markdown-first knowledge vault storage (ADR 0004).
+    pub vaults: Arc<crate::vault::VaultStore>,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -119,8 +122,22 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/setup", get(get_setup).put(put_setup))
         .route("/api/registry", get(list_registry).put(put_registry_entry))
         .route("/api/nodes", get(list_nodes))
-        .route("/api/proxy", get(crate::proxy::list_proxy_endpoints).post(crate::proxy::create_proxy_endpoint))
-        .route("/api/proxy/{slug}", axum::routing::delete(crate::proxy::delete_proxy_endpoint))
+        .route("/api/vaults", get(list_vaults).post(create_vault))
+        .route("/api/vaults/{id}/notes", get(list_vault_notes))
+        .route(
+            "/api/vaults/{id}/note",
+            get(get_vault_note)
+                .put(put_vault_note)
+                .delete(delete_vault_note),
+        )
+        .route(
+            "/api/proxy",
+            get(crate::proxy::list_proxy_endpoints).post(crate::proxy::create_proxy_endpoint),
+        )
+        .route(
+            "/api/proxy/{slug}",
+            axum::routing::delete(crate::proxy::delete_proxy_endpoint),
+        )
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -128,13 +145,18 @@ pub fn build_router(state: AppState) -> Router {
     // Must be registered AFTER all /api/* routes so it doesn't shadow them.
     // The fallback handler catches all /proxy/* paths.
     let proxy_forward = Router::new()
-        .route("/proxy/{slug}/{rest}", get(crate::proxy::proxy_forward)
-            .post(crate::proxy::proxy_forward)
-            .put(crate::proxy::proxy_forward)
-            .delete(crate::proxy::proxy_forward)
-            .patch(crate::proxy::proxy_forward))
-        .route("/proxy/{slug}", get(crate::proxy::proxy_forward_root)
-            .post(crate::proxy::proxy_forward_root));
+        .route(
+            "/proxy/{slug}/{rest}",
+            get(crate::proxy::proxy_forward)
+                .post(crate::proxy::proxy_forward)
+                .put(crate::proxy::proxy_forward)
+                .delete(crate::proxy::proxy_forward)
+                .patch(crate::proxy::proxy_forward),
+        )
+        .route(
+            "/proxy/{slug}",
+            get(crate::proxy::proxy_forward_root).post(crate::proxy::proxy_forward_root),
+        );
 
     Router::new()
         .route("/api/health", get(health))
@@ -160,7 +182,14 @@ fn cors_layer() -> CorsLayer {
                 .map(|o| crate::auth::origin_ok(Some(o)))
                 .unwrap_or(false)
         }))
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
@@ -216,6 +245,29 @@ struct MessagesQuery {
 struct SearchQuery {
     q: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VaultNoteQuery {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateVaultBody {
+    name: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PutVaultNoteBody {
+    #[serde(default)]
+    markdown: Option<String>,
+    /// Optional rename target. `newPath` is the explicit API; `path` is accepted
+    /// as the natural "PUT this note at a new path" shape for early UI callers.
+    #[serde(default)]
+    new_path: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 // ---- handlers ----
@@ -705,6 +757,102 @@ async fn list_agents_handler(State(_state): State<AppState>) -> impl IntoRespons
 async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {
     let nodes = state.nodes.list().await;
     Json(json!({ "nodes": nodes }))
+}
+
+async fn list_vaults(State(state): State<AppState>) -> Response {
+    match state.vaults.list_vaults() {
+        Ok(vaults) => {
+            let vaults: Vec<VaultSummaryDto> = vaults.into_iter().map(Into::into).collect();
+            Json(json!({ "vaults": vaults })).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn create_vault(
+    State(state): State<AppState>,
+    Json(body): Json<CreateVaultBody>,
+) -> Response {
+    match state.vaults.create_vault(&body.name) {
+        Ok(vault) => (
+            StatusCode::CREATED,
+            Json(serde_json::to_value(VaultSummaryDto::from(vault)).unwrap()),
+        )
+            .into_response(),
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn list_vault_notes(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.vaults.list_notes(&id) {
+        Ok(notes) => {
+            let notes: Vec<NoteTreeEntryDto> = notes.into_iter().map(Into::into).collect();
+            Json(json!({ "notes": notes })).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn get_vault_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<VaultNoteQuery>,
+) -> Response {
+    match state.vaults.read_note(&id, &q.path) {
+        Ok(note) => {
+            Json(serde_json::to_value(NoteDocumentDto::from(note)).unwrap()).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn put_vault_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<VaultNoteQuery>,
+    Json(body): Json<PutVaultNoteBody>,
+) -> Response {
+    let new_path = body.new_path.or(body.path);
+    match state.vaults.write_note(
+        &id,
+        &q.path,
+        crate::vault::WriteNote {
+            markdown: body.markdown,
+            new_path,
+        },
+    ) {
+        Ok(note) => {
+            Json(serde_json::to_value(NoteDocumentDto::from(note)).unwrap()).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn delete_vault_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<VaultNoteQuery>,
+) -> Response {
+    match state.vaults.delete_note(&id, &q.path) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => vault_error(err),
+    }
+}
+
+fn vault_error(err: anyhow::Error) -> Response {
+    let status = if crate::vault::not_found(&err) {
+        StatusCode::NOT_FOUND
+    } else if crate::vault::bad_request(&err) {
+        StatusCode::BAD_REQUEST
+    } else {
+        tracing::error!(error = %err, "vault operation failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    (
+        status,
+        Json(json!({ "error": "vault_error", "message": err.to_string() })),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1897,6 +2045,10 @@ mod tests {
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
             proxy: crate::proxy::ProxyTable::new(),
+            vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
+                dir.path().join("default"),
+                crate::vault::JjMode::Disabled,
+            )),
         };
         (state, dir)
     }
@@ -1987,6 +2139,10 @@ mod tests {
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
             proxy: crate::proxy::ProxyTable::new(),
+            vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
+                dir.path().join("default"),
+                crate::vault::JjMode::Disabled,
+            )),
         };
         let app = build_router(state);
 
@@ -2484,6 +2640,110 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn vault_routes_create_write_read_and_list_notes() {
+        let (state, _d) = test_state();
+        let app = build_router(state);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/vaults")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"name": "Ops Vault"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(created["id"], "ops-vault");
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/vaults/ops-vault/note?path=runbooks/boot.md")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "markdown": "---\ntitle: Boot\n---\n# Ignored\nSee [[Incident Guide]]"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let note: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(note["path"], "runbooks/boot.md");
+        assert_eq!(note["title"], "Boot");
+        assert_eq!(note["linkedNotes"][0], "Incident Guide");
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/vaults/ops-vault/note?path=runbooks/boot.md")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/vaults/ops-vault/notes")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tree: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(tree["notes"][0]["kind"], "folder");
+        assert_eq!(tree["notes"][0]["children"][0]["path"], "runbooks/boot.md");
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/vaults")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list["vaults"][0]["noteCount"], 1);
     }
 
     #[tokio::test]

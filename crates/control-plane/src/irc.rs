@@ -30,13 +30,9 @@ pub struct IrcMessage {
 
 /// A registered peer on the bus. Each peer has an inbox channel.
 struct Peer {
-    /// The session_id this peer represents.
-    session_id: String,
     /// Inbox sender — the bus pushes messages here; the peer drains via the
     /// receiver (held by the peer's runtime, or polled via the API).
     inbox_tx: mpsc::UnboundedSender<IrcMessage>,
-    /// When the peer registered (for idle/uptime tracking).
-    registered_at: f64,
 }
 
 /// The in-process IRC bus. Thread-safe via RwLock.
@@ -56,24 +52,12 @@ impl IrcBus {
     /// If the peer is already registered, returns the existing inbox
     /// (idempotent — re-registering is a no-op).
     pub async fn register(&self, session_id: &str) -> mpsc::UnboundedReceiver<IrcMessage> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-
         let (tx, rx) = mpsc::unbounded_channel();
 
         let mut peers = self.peers.write().await;
         // If already registered, return a fresh receiver (the old one may be
         // dropped). Replace the sender to reset the inbox.
-        peers.insert(
-            session_id.to_string(),
-            Peer {
-                session_id: session_id.to_string(),
-                inbox_tx: tx,
-                registered_at: now,
-            },
-        );
+        peers.insert(session_id.to_string(), Peer { inbox_tx: tx });
         rx
     }
 
