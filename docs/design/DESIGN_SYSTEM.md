@@ -526,6 +526,49 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-03 — Tokenize the last raw literals in `index.css` (vault editor / ask-input / tab-close) — closes debt #2
+
+- **The debt this closes (was #2 in the visible list):** `index.css` was fully
+  tokenized in the 2026-07-02 sweeps *except* three blocks added later — the
+  vault-view CSS (`.vault-editor`, `.vault-ask-input`) and the detail-tab close
+  button (`.tab-close`). These still carried raw literals that predate the
+  modular scales: `border: 1px solid`, bare `border-radius: 6px`/`2px`,
+  `font-size: 12px`, off-scale `padding: 12px 14px`, and a raw `line-height: 1.7`.
+  They were the file's only remaining off-scale holdouts.
+- **Fix (system-level, in `index.css` — no view internals touched):**
+  - `.vault-editor` — `border` → `var(--border-w) solid …`; `border-radius: 6px`
+    → `var(--radius-md)` (identical 6px); `font-size: 12px` → `var(--fs-12)`
+    (identical); `padding: 12px 14px` → `var(--space-6)` (snaps the odd 14px x-axis
+    onto the 12px step — a ≤2px, imperceptible tightening onto scale);
+    `line-height: 1.7` → `var(--lh-relaxed)` (1.65, the body-prose token).
+  - `.vault-ask-input` — `font-size: 12px` → `var(--fs-12)` (identical).
+  - `.tab-close` — `border-radius: 2px` → `var(--radius-sm)` (3px; a 1px snap onto
+    the smallest radius token — this control had no matching 2px token).
+- **Behavior:** the `--radius-md`/`--fs-12` repoints are **exactly value-identical**
+  (zero pixel delta). The three snaps (`14px→12px` pad x-axis, `1.7→1.65` lh,
+  `2px→3px` radius) are all ≤2px / ≤0.05 and imperceptible; they bring the last
+  three blocks onto the canonical scale so the whole file now reads only
+  `var(--token)` for radius, border-width, font-size, and on-scale padding.
+- **Verified:** `cd ui && bun run typecheck` (exit 0, clean — the previously-flagged
+  `Icon.test.tsx` error is gone) and `bun run build` (exit 0, CSS 59.40 kB). Fully
+  reversible (this file + the changelog). Debt #2 is now closed.
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Adoption gap.** The rich `.ol-*` primitive library exists but live views
+     (`AppShell`, `FleetView`, `ChatView`) still lean on bespoke `index.css`
+     classes. Migrating views onto `.ol-*` / `shell.tsx` is the big consistency
+     win — but it edits view internals, so it's a view-worker task the design-lead
+     should *spec + spot-fix styling for*, not rewrite wholesale.
+  2. **Sub-pixel font-size drift.** A cluster of `12.5px`/`13.5px`/`11.5px`/`10.5px`
+     literals remain on `.vp-title`, `.gv-title`, `.dr-title`, `.btn`, `.dtab`,
+     `.bp-tab`, `.msg-user`, `.md`, `.stat .l`, etc. — half-pixel sizes with no
+     matching `--fs-*` token. Either add `--fs-11-5`/`--fs-12-5`/`--fs-13-5` half
+     steps to `typography.css` and repoint, or snap each to the nearest existing
+     step. A single focused type-scale pass would close it.
+  3. **Formal contrast audit** (axe/WAVE) across both themes, especially
+     `--text-faint`, `--text-dim`, and status inks on their washes.
+  4. **`.ol-*` visual QA in-browser** in both themes — the primitives were built
+     to spec but haven't all been screenshot-verified against the live views.
+
 ### 2026-07-03 — Full reconciliation: rewrite §1–§10 to the shipped modular token system (silver, obsidian/light, `design/tokens/*`)
 
 - **The debt this closes (was the #1 flagged item):** since the `b9a1b0e`
