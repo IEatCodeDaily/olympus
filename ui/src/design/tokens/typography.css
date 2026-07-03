@@ -16,9 +16,13 @@
   /* ── Size scale (role-named) ── */
   --fs-9:    9px;    /* micro mono: kbd hints, tiny meta, row counts */
   --fs-10:   10px;   /* mono labels: section headers, badges, source pills */
+  --fs-10-5: 10.5px; /* half-step: stat labels, dense mono values */
   --fs-11:   11px;   /* small mono data: artifact names, log meta */
+  --fs-11-5: 11.5px; /* half-step: tabs, tool output, list/todo rows, buttons */
   --fs-12:   12px;   /* meta + controls: nav items, timestamps, key-values */
+  --fs-12-5: 12.5px; /* half-step: view/drawer titles, palette rows */
   --fs-13:   13px;   /* inputs, composer text, dense body */
+  --fs-13-5: 13.5px; /* half-step: user-message + markdown body */
   --fs-14:   14px;   /* UI default: body, message content */
   --fs-15:   15px;   /* comfortable body prose */
   --fs-16:   16px;   /* card titles, list-item headings */

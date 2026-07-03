@@ -526,6 +526,53 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-03 — Formalize the half-step control type tier (`--fs-10-5 … --fs-13-5`) + repoint all 18 sub-pixel font sizes — closes the sub-pixel drift debt
+
+- **The debt this closes (top in-lane item, prior run's debt #2):** `index.css`
+  carried **18** raw half-pixel `font-size` literals — `10.5px` (×2), `11.5px`
+  (×10), `12.5px` (×4), `13.5px` (×2) — on `.vp-title`, `.gv-title`, `.dr-title`,
+  `.btn`, `.dtab`, `.bp-tab`, `.bp-body`, `.tc-out`, `.ovl-it`, `.todo`, `.cp-row`,
+  `.cp-row .v`, `.stat .l`, `.md`, `.md td`, `.msg-user`, `.msg-ai pre code`, and
+  `.pal-r`. They had **no matching `--fs-*` token**, so the file's type layer was
+  the last scale still leaking raw values. Notably these are **not** accidental
+  drift: `typography.css` already documents a deliberate "14px body / **12–12.5px
+  controls**" dense-control tier — the half-steps were an intended tier that was
+  simply never given tokens.
+- **Fix (system-level, in the token layer — no view internals touched):**
+  - **`design/tokens/typography.css`** — promoted the half-step tier to first-class
+    tokens interleaved into the existing scale: `--fs-10-5` (10.5px, stat labels /
+    dense mono values), `--fs-11-5` (11.5px, tabs / tool output / list+todo rows /
+    buttons), `--fs-12-5` (12.5px, view+drawer titles / palette rows), `--fs-13-5`
+    (13.5px, user-message + markdown body). Each carries a role comment.
+  - **`index.css`** — repointed all 18 sites to the new tokens (e.g.
+    `font-size: 12.5px` → `var(--fs-12-5)`).
+- **Behavior:** **exactly zero pixels move** — every new token equals the literal
+  it replaces (10.5→10.5px, etc.). This is pure tokenization: the dense-control
+  tier is now theme-/scale-addressable like every other size, and the type layer
+  of `index.css` reads only `var(--fs-*)`. A future density or accessibility pass
+  can now rescale the control tier from one place instead of hunting 18 literals.
+- **Verified:** `cd ui && bun run typecheck` (exit 0) and `bun run build` (exit 0,
+  CSS 61.47 kB). Screenshotted the live app in **both** themes — **obsidian**
+  (dark) and **daybreak** (light): `.gv-title` ("Sessions"), empty-state copy,
+  topbar controls, and the "New session" button all render legibly with identical
+  sizing and no contrast/layout regression. Fully reversible (this file +
+  `typography.css` + `index.css` type repoints).
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Adoption gap.** The rich `.ol-*` primitive library exists but live views
+     (`AppShell`, `FleetView`, `ChatView`, and the new `ProjectsView`/`ContextRing`)
+     still lean on bespoke `index.css` classes. Migrating views onto `.ol-*` /
+     `shell.tsx` is the big consistency win — but it edits view internals, so it's
+     a view-worker task the design-lead should *spec + spot-fix styling for*.
+  2. **Off-scale raw `Npx` in newly-landed view CSS.** The in-flight `ContextRing`
+     block (`.ctx-*`) and a few older rules still carry raw geometry
+     (`border-radius: 2px`, `height: 3px`, `gap: 6px`, `padding: 9px 11px`,
+     `width: 48px`, `transition: width 0.3s`). A radius/space/motion tokenization
+     sweep of the new `.ctx-*`/`.kcard`/`.step` clusters mirrors the earlier passes.
+  3. **Formal contrast audit** (axe/WAVE) across both themes, especially
+     `--text-faint`, `--text-dim`, and status inks on their washes.
+  4. **`.ol-*` visual QA in-browser** in both themes — the primitives were built
+     to spec but haven't all been screenshot-verified against the live views.
+
 ### 2026-07-03 — Tokenize the last raw literals in `index.css` (vault editor / ask-input / tab-close) — closes debt #2
 
 - **The debt this closes (was #2 in the visible list):** `index.css` was fully
