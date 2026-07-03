@@ -12,6 +12,9 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowStepStatus,
+  VaultSummary,
+  NoteTreeEntry,
+  NoteDocument,
 } from "../types";
 
 // ── Helpers ────────────────────────────────────────────
@@ -530,4 +533,198 @@ export function generateSearchHits(query: string): SearchHit[] {
     }
   }
   return hits;
+}
+
+// ── Vaults ─────────────────────────────────────────────
+
+export const VAULTS: VaultSummary[] = [
+  { id: "engineering", name: "Engineering", noteCount: 142, updatedAt: NOW - 7200 },
+  { id: "ops-runbooks", name: "Ops runbooks", noteCount: 38, updatedAt: NOW - 86400 },
+  { id: "personal", name: "Personal", noteCount: 7, updatedAt: NOW - 172800 },
+];
+
+export const VAULT_NOTES: Record<string, NoteTreeEntry[]> = {
+  engineering: [
+    {
+      path: "redb",
+      title: "redb",
+      updatedAt: NOW - 3600,
+      kind: "folder",
+      children: [
+        { path: "redb/redb-compaction.md", title: "redb-compaction.md", updatedAt: NOW - 7200, kind: "note", children: [] },
+        { path: "redb/event-log-design.md", title: "event-log-design.md", updatedAt: NOW - 604800, kind: "note", children: [] },
+        { path: "redb/zstd-tuning.md", title: "zstd-tuning.md", updatedAt: NOW - 259200, kind: "note", children: [] },
+      ],
+    },
+    {
+      path: "runbooks",
+      title: "runbooks",
+      updatedAt: NOW - 86400,
+      kind: "folder",
+      children: [
+        { path: "runbooks/grafana-runbook.md", title: "grafana-runbook.md", updatedAt: NOW - 259200, kind: "note", children: [] },
+      ],
+    },
+    { path: "acp-wire-spike.md", title: "acp-wire-spike.md", updatedAt: NOW - 86400, kind: "note", children: [] },
+  ],
+  "ops-runbooks": [
+    {
+      path: "incidents",
+      title: "incidents",
+      updatedAt: NOW - 86400,
+      kind: "folder",
+      children: [
+        { path: "incidents/2024-01-15-db-down.md", title: "2024-01-15-db-down.md", updatedAt: NOW - 86400, kind: "note", children: [] },
+      ],
+    },
+    { path: "boot.md", title: "boot.md", updatedAt: NOW - 172800, kind: "note", children: [] },
+  ],
+  personal: [
+    { path: "scratch.md", title: "scratch.md", updatedAt: NOW - 172800, kind: "note", children: [] },
+  ],
+};
+
+export const VAULT_NOTE_CONTENT: Record<string, Record<string, string>> = {
+  engineering: {
+    "redb/redb-compaction.md": `# redb compaction
+
+The redb event log grows monotonically. Compaction merges old
+multiversion pages, reclaiming space. Triggered on size threshold or
+manual API call.
+
+## Why compact
+
+- Read amplification grows with stale MVCC pages.
+- Write throughput degrades past 4 GB of stale pages.
+
+## Benchmarks
+
+| Range | Size before → after | Ratio | Time |
+|---|---|---|---|
+| 0001–0010 (cold) | 120 MB → 28 MB | 4.3× | +45 ms |
+| 0011–0040 (warm) | 96 MB → 31 MB | 3.1× | +8 ms |
+| tail (hot) | 12 MB | — | — |
+
+## Linked notes
+
+[[event-log-design.md]] · [[acp-wire-spike.md]] · [[grafana-runbook.md]]`,
+    "redb/event-log-design.md": `# Event log design
+
+Append-only event-sourced log built on redb. Each event is zstd-compressed
+before write. The materialized views are pure projections of the log.
+
+## Key properties
+
+- Append-only: no in-place mutation.
+- MVCC readers see a consistent snapshot.
+- Compaction reclaims space from superseded pages.
+
+See [[redb-compaction.md]] for compaction strategy.`,
+    "redb/zstd-tuning.md": `# zstd compression tuning
+
+Default level 3 is optimal for mixed read/write workloads.
+
+Level 9 saves ~15% space at 3× CPU cost — only worth it on cold tiers.
+
+Related: [[redb-compaction.md]]`,
+    "runbooks/grafana-runbook.md": `# Grafana runbook
+
+When dashboards show stale data:
+
+1. Check datasource health in Grafana admin.
+2. Verify CloudWatch IRSA tokens haven't expired.
+3. Restart the grafana pod if metrics are 5+ min stale.
+
+Related: [[event-log-design.md]]`,
+    "acp-wire-spike.md": `# ACP wire spike
+
+Frame capture of a live \`session/resume\` across the ACP boundary.
+
+## Findings
+
+- Streaming deltas arrive above 64 in-flight frames.
+- The \`message.delta\` frame carries UTF-8 text fragments.
+
+Related: [[redb-compaction.md]] · [[event-log-design.md]]`,
+  },
+  "ops-runbooks": {
+    "boot.md": `# Ops boot
+
+Standard cold-start sequence for the control plane.
+
+1. Import state.db (read-only).
+2. Build views + tantivy index.
+3. Serve API on :8787.`,
+    "incidents/2024-01-15-db-down.md": `# 2024-01-15 DB outage
+
+Timeline and post-mortem of the 45-minute database outage.
+
+## Impact
+
+- All writes blocked 14:00–14:45 UTC.
+- ~200 failed requests.
+
+## Root cause
+
+Connection pool exhaustion from a leaked transaction.`,
+  },
+  personal: {
+    "scratch.md": `# Scratch
+
+Ideas and notes that don't have a home yet.
+
+- Try io_uring for the event log.
+- Investigate tantivy custom tokenizers for code search.`,
+  },
+};
+
+/** In-memory mutable copy so PUT/DELETE round-trips work in MSW mode. */
+export const VAULT_NOTES_MUTABLE: Record<string, Record<string, string>> =
+  JSON.parse(JSON.stringify(VAULT_NOTE_CONTENT));
+
+/** Derive a NoteDocument from stored markdown (parses wikilinks + frontmatter). */
+export function buildNoteDoc(
+  vaultId: string,
+  path: string,
+): NoteDocument | null {
+  const store = VAULT_NOTES_MUTABLE[vaultId];
+  if (!store) return null;
+  const md = store[path];
+  if (md === undefined) return null;
+
+  // Parse frontmatter (YAML between --- fences at the start)
+  let frontmatter: Record<string, unknown> = {};
+  let markdown = md;
+  const fmMatch = md.match(/^---\n([\s\S]*?)\n---\n(.*)$/);
+  if (fmMatch) {
+    const fmText = fmMatch[1];
+    markdown = fmMatch[2];
+    // Naive key: value parse
+    for (const line of fmText.split("\n")) {
+      const m = line.match(/^(\w+):\s*(.*)$/);
+      if (m) frontmatter[m[1]] = m[2];
+    }
+  }
+
+  // Parse [[wikilinks]] and remove the H1 for the title
+  const linked = new Set<string>();
+  for (const m of markdown.matchAll(/\[\[([^\]]+)\]\]/g)) {
+    linked.add(m[1]);
+  }
+  // Also parse [text](path.md) style links
+  for (const m of markdown.matchAll(/\[([^\]]*)\]\(([^)]+\.md)\)/g)) {
+    linked.add(m[2]);
+  }
+
+  // Title from H1 or filename
+  const h1 = markdown.match(/^#\s+(.+)$/m);
+  const title = h1 ? h1[1].trim() : path.split("/").pop() ?? path;
+
+  return {
+    path,
+    title,
+    markdown: md, // return full markdown including frontmatter
+    frontmatter,
+    linkedNotes: [...linked],
+  };
 }

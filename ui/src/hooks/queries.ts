@@ -9,6 +9,9 @@ import {
   fetchModels,
   healthCheck,
   fetchCards,
+  fetchVaults,
+  fetchVaultNotes,
+  fetchVaultNote,
   onFrame,
   connectWs,
 } from "../api";
@@ -23,6 +26,10 @@ export const qk = {
   models: () => ["models"] as const,
   health: () => ["health"] as const,
   cards: (params?: Record<string, unknown>) => ["cards", params] as const,
+  vaults: () => ["vaults"] as const,
+  vaultNotes: (vaultId: string) => ["vaultNotes", vaultId] as const,
+  vaultNote: (vaultId: string, path: string) =>
+    ["vaultNote", vaultId, path] as const,
 };
 
 /** Sessions list with auto-refetch. */
@@ -102,6 +109,36 @@ export function useCards(params?: { boardId?: string; status?: string }) {
     queryKey: qk.cards(params),
     queryFn: () => fetchCards(params),
     staleTime: 10_000,
+  });
+}
+
+/** All vaults. */
+export function useVaults() {
+  return useQuery({
+    queryKey: qk.vaults(),
+    queryFn: fetchVaults,
+    staleTime: 30_000,
+  });
+}
+
+/** Note tree for a vault. */
+export function useVaultNotes(vaultId: string | null) {
+  return useQuery({
+    queryKey: vaultId ? qk.vaultNotes(vaultId) : ["vaultNotes", "none"],
+    queryFn: () => fetchVaultNotes(vaultId!),
+    enabled: !!vaultId,
+    staleTime: 10_000,
+  });
+}
+
+/** Single note document. */
+export function useVaultNote(vaultId: string | null, path: string | null) {
+  return useQuery({
+    queryKey:
+      vaultId && path ? qk.vaultNote(vaultId, path) : ["vaultNote", "none"],
+    queryFn: () => fetchVaultNote(vaultId!, path!),
+    enabled: !!vaultId && !!path,
+    staleTime: 5_000,
   });
 }
 

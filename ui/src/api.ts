@@ -27,8 +27,13 @@ import type {
   RegistryResponse,
   RegistryQueryParams,
   PutRegistryBody,
+  VaultsResponse,
+  NotesTreeResponse,
+  NoteDocument,
+  PutNoteBody,
+  VaultSummary,
+  NoteTreeEntry,
 } from "./types";
-
 const BASE = import.meta.env.VITE_API_BASE as string;
 const T = import.meta.env.VITE_API_TOKEN as string;
 
@@ -258,6 +263,67 @@ export async function reassignCard(id: string, body: ReassignCardBody): Promise<
   return postJson<Card, ReassignCardBody>(`/api/cards/${id}/reassign`, body, "reassign card failed");
 }
 
+// ── Vaults (ADR 0004 — markdown knowledge base) ──────
+
+export async function fetchVaults(): Promise<VaultsResponse> {
+  const res = await fetch(`${BASE}/api/vaults`, { headers: authHeaders() });
+  return expectJson(res, "vaults");
+}
+
+export async function createVault(name: string): Promise<VaultSummary> {
+  return postJson<VaultSummary, { name: string }>(
+    "/api/vaults",
+    { name },
+    "create vault failed",
+  );
+}
+
+export async function fetchVaultNotes(
+  vaultId: string,
+): Promise<NotesTreeResponse> {
+  const res = await fetch(`${BASE}/api/vaults/${vaultId}/notes`, {
+    headers: authHeaders(),
+  });
+  return expectJson(res, "vault notes");
+}
+
+export async function fetchVaultNote(
+  vaultId: string,
+  path: string,
+): Promise<NoteDocument> {
+  const q = new URLSearchParams({ path });
+  const res = await fetch(`${BASE}/api/vaults/${vaultId}/note?${q}`, {
+    headers: authHeaders(),
+  });
+  return expectJson(res, "vault note");
+}
+
+export async function putVaultNote(
+  vaultId: string,
+  path: string,
+  body: PutNoteBody,
+): Promise<NoteDocument> {
+  const q = new URLSearchParams({ path });
+  const res = await fetch(`${BASE}/api/vaults/${vaultId}/note?${q}`, {
+    method: "PUT",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return expectJson(res, "put vault note");
+}
+
+export async function deleteVaultNote(
+  vaultId: string,
+  path: string,
+): Promise<void> {
+  const q = new URLSearchParams({ path });
+  const res = await fetch(`${BASE}/api/vaults/${vaultId}/note?${q}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`delete vault note failed (${res.status})`);
+}
+
 // ── WebSocket (singleton, safe for mock mode) ──────────
 
 type FrameListener = (frame: ServerFrame) => void;
@@ -401,4 +467,4 @@ export async function sendIrcMessage(
   return postJson(`/api/irc/send`, { from, to, content }, "ircSend");
 }
 
-export type { Session, Message, SearchHit, ModelInfo, ServerFrame, ClientFrame };
+export type { Session, Message, SearchHit, ModelInfo, ServerFrame, ClientFrame, VaultSummary, NoteDocument, NoteTreeEntry };

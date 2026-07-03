@@ -9,6 +9,10 @@ import {
   WORKFLOW_RUNS,
   generateSearchHits,
   NODES,
+  VAULTS,
+  VAULT_NOTES,
+  VAULT_NOTES_MUTABLE,
+  buildNoteDoc,
 } from "./fixtures";
 import type {
   SessionListResponse,
@@ -263,4 +267,77 @@ export const handlers = [
       runs: WORKFLOW_RUNS,
     });
   }),
+
+  // ── Vaults ──────────────────────────────────────────
+
+  // GET /api/vaults
+  http.get("http://127.0.0.1:8787/api/vaults", async () => {
+    await delay(80 + Math.random() * 60);
+    return HttpResponse.json({ vaults: VAULTS });
+  }),
+
+  // POST /api/vaults
+  http.post("http://127.0.0.1:8787/api/vaults", async ({ request }) => {
+    const body = (await request.json()) as { name: string };
+    const id = body.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    const vault = { id, name: body.name, noteCount: 0, updatedAt: Math.floor(Date.now() / 1000) };
+    VAULTS.push(vault);
+    VAULT_NOTES_MUTABLE[id] = {};
+    return HttpResponse.json(vault, { status: 201 });
+  }),
+
+  // GET /api/vaults/:id/notes
+  http.get<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/notes",
+    ({ params }: { params: { id: string } }) => {
+      const tree = VAULT_NOTES[params.id] ?? [];
+      return HttpResponse.json({ notes: tree });
+    },
+  ),
+
+  // GET /api/vaults/:id/note?path=...
+  http.get<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/note",
+    ({ params, request }: { params: { id: string }; request: Request }) => {
+      const path = new URL(request.url).searchParams.get("path") ?? "";
+      const doc = buildNoteDoc(params.id, path);
+      if (!doc) return new HttpResponse(null, { status: 404 });
+      return HttpResponse.json(doc);
+    },
+  ),
+
+  // PUT /api/vaults/:id/note?path=...
+  http.put<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/note",
+    async ({ params, request }: { params: { id: string }; request: Request }) => {
+      const path = new URL(request.url).searchParams.get("path") ?? "";
+      const body = (await request.json()) as { markdown?: string; newPath?: string };
+      const store = VAULT_NOTES_MUTABLE[params.id];
+      if (!store) return new HttpResponse(null, { status: 404 });
+      if (body.markdown !== undefined) {
+        store[path] = body.markdown;
+      }
+      // Rename support
+      const targetPath = body.newPath ?? path;
+      if (body.newPath && body.newPath !== path) {
+        store[body.newPath] = store[path] ?? body.markdown ?? "";
+        delete store[path];
+      }
+      const doc = buildNoteDoc(params.id, targetPath);
+      if (!doc) return new HttpResponse(null, { status: 404 });
+      return HttpResponse.json(doc);
+    },
+  ),
+
+  // DELETE /api/vaults/:id/note?path=...
+  http.delete<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/note",
+    ({ params, request }: { params: { id: string }; request: Request }) => {
+      const path = new URL(request.url).searchParams.get("path") ?? "";
+      const store = VAULT_NOTES_MUTABLE[params.id];
+      if (!store) return new HttpResponse(null, { status: 404 });
+      delete store[path];
+      return new HttpResponse(null, { status: 204 });
+    },
+  ),
 ];

@@ -5,13 +5,17 @@ import { AppShell } from "./AppShell";
 // URL is the single source of truth for:
 //   /                         → sessions list (no active session)
 //   /sessions/$sessionId      → chat view for a specific session
-//   /vaults                   → vaults list (placeholder until V-UI)
-//   /vaults/$vaultId          → vault detail (placeholder)
-//   /vaults/$vaultId/$notePath→ note editor (placeholder)
+//   /vaults                   → vaults list (vault picker)
+//   /vaults/$vaultId          → vault detail (note editor)
+//   /vaults/$vaultId/tables   → vault tables view
+//   /vaults/$vaultId/graph    → vault graph view
 //   /projects                 → projects / kanban board (placeholder until P1)
 //   /projects/$boardId        → specific board (placeholder)
 //   /fleet                    → fleet management
 //   /settings                 → settings (placeholder until ST1)
+//
+// The active note within a vault is tracked via the ?note=<path> query param
+// (note paths contain slashes, so they can't be a clean route segment).
 //
 // Everything else (sidebar collapse, panel toggles, right-tab) stays in
 // Zustand — those are ephemeral UI preferences, not things you'd bookmark
@@ -45,9 +49,15 @@ const vaultDetailRoute = createRoute({
   component: () => null,
 });
 
-const vaultNoteRoute = createRoute({
+const vaultTablesRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/vaults/$vaultId/$notePath",
+  path: "/vaults/$vaultId/tables",
+  component: () => null,
+});
+
+const vaultGraphRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/vaults/$vaultId/graph",
   component: () => null,
 });
 
@@ -80,7 +90,8 @@ const routeTree = rootRoute.addChildren([
   sessionRoute,
   vaultsRoute,
   vaultDetailRoute,
-  vaultNoteRoute,
+  vaultTablesRoute,
+  vaultGraphRoute,
   projectsRoute,
   projectBoardRoute,
   fleetRoute,
@@ -99,18 +110,37 @@ declare module "@tanstack/react-router" {
 /** The five navigable surfaces (in nav order). */
 export type SurfaceName = "sessions" | "vaults" | "projects" | "fleet" | "settings";
 
-/** Extract the active surface + session from the current URL. */
+/** Which sub-page is active within the Vaults surface. */
+export type VaultPage = "note" | "tables" | "graph";
+
+/** Extract the active surface + context from the current URL. */
 export function parseRoute(pathname: string): {
   surface: SurfaceName;
   sessionId: string | null;
+  vaultId: string | null;
+  vaultPage: VaultPage;
 } {
   if (pathname.startsWith("/sessions/")) {
     const id = pathname.split("/sessions/")[1];
-    return { surface: "sessions", sessionId: id || null };
+    return { surface: "sessions", sessionId: id || null, vaultId: null, vaultPage: "note" };
   }
-  if (pathname.startsWith("/vaults")) return { surface: "vaults", sessionId: null };
-  if (pathname.startsWith("/projects")) return { surface: "projects", sessionId: null };
-  if (pathname.startsWith("/fleet")) return { surface: "fleet", sessionId: null };
-  if (pathname.startsWith("/settings")) return { surface: "settings", sessionId: null };
-  return { surface: "sessions", sessionId: null };
+  if (pathname.startsWith("/vaults/")) {
+    const rest = pathname.slice("/vaults/".length);
+    // /vaults/$vaultId/tables, /vaults/$vaultId/graph, /vaults/$vaultId
+    const parts = rest.split("/");
+    const vaultId = parts[0] || null;
+    const sub = parts[1];
+    const vaultPage: VaultPage =
+      sub === "tables" ? "tables" : sub === "graph" ? "graph" : "note";
+    return { surface: "vaults", sessionId: null, vaultId, vaultPage };
+  }
+  if (pathname.startsWith("/vaults"))
+    return { surface: "vaults", sessionId: null, vaultId: null, vaultPage: "note" };
+  if (pathname.startsWith("/projects"))
+    return { surface: "projects", sessionId: null, vaultId: null, vaultPage: "note" };
+  if (pathname.startsWith("/fleet"))
+    return { surface: "fleet", sessionId: null, vaultId: null, vaultPage: "note" };
+  if (pathname.startsWith("/settings"))
+    return { surface: "settings", sessionId: null, vaultId: null, vaultPage: "note" };
+  return { surface: "sessions", sessionId: null, vaultId: null, vaultPage: "note" };
 }
