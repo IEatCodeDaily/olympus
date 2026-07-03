@@ -52,18 +52,75 @@ titles / kickers (`SELECTED NODE`, `RUNNING`, `BRANCH`). Addresses the user as
 
 ---
 
-## The nav (this milestone)
+## Architecture: View → Page (LOAD-BEARING — every worker must understand this)
 
-Rebuild the left rail to exactly these five surfaces (in order), plus the
-existing top-bar search (⌘K) and org/profile chip:
+The app shell is a **two-level hierarchy**. Naming is fixed and enforced:
 
-| Surface | Route | View file | Backend | Status |
-|---|---|---|---|---|
-| **Sessions** | `/` · `/sessions/$id` | `views/SessionsWorkbench.tsx` | `/api/sessions`, `/api/sessions/:id/messages`, `/ws`, POST/PATCH/fork/cancel | backend ✅ |
-| **Vaults** | `/vaults` · `/vaults/$vaultId/$notePath` | `views/VaultsView.tsx` | `/api/vaults*` (NEW — card V-BE) | backend ❌→V-BE |
-| **Projects** | `/projects` · `/projects/$boardId` | `views/ProjectsView.tsx` | `/api/cards*` | backend ✅ |
-| **Fleet** | `/fleet` | `views/FleetView.tsx` | `/api/nodes` | backend ✅ |
-| **Settings** | `/settings` | `views/SettingsView.tsx` | `/api/health`, `/api/agents`, `/api/models` | backend ✅ |
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ TopBar: [sidebar toggle] · [View selector: 5 chips] · search ⌘K │
+│         · theme · org · profile                                  │
+├────────────────┬──────────────────────────┬──────────────────────┤
+│  Left Sidebar  │  Viewport                │  Right Sidebar       │
+│  (View-owned)  │  (Page-owned content)    │  (View-owned)        │
+│   NavItems +   │                          │                      │
+│   context      │                          │                      │
+│                ├──────────────────────────┤                      │
+│                │  Bottom Panel (View-owned)│                     │
+└────────────────┴──────────────────────────┴──────────────────────┘
+```
+
+### View (topbar selector chip)
+- **Selected by:** a topbar chip (Sessions, Vaults, Projects, Fleet, Settings).
+- **Owns:** the **left sidebar content** (NavItems + context lists), the
+  **viewport LAYOUT** (how viewport/right-sidebar/bottom-panel are arranged),
+  the **right sidebar** content, and the **bottom panel** content.
+- A View switch re-renders the sidebar + viewport layout entirely.
+- File: one `views/<View>View.tsx` per View (e.g. `SessionsView.tsx`).
+
+### Page (left-sidebar NavItem)
+- **Selected by:** a NavItem inside the View-owned left sidebar.
+- **Owns:** the **viewport content only**. A Page CANNOT modify the left
+  sidebar, right sidebar, or bottom panel — those are fixed by the View.
+- Each Page is a **URL-persistent route** (TanStack Router knows it;
+  back/forward and deep-linking work). Switching NavItems swaps viewport
+  content and changes the URL, nothing else.
+- File: one component per Page, rendered inside the View's viewport slot.
+
+### Viewport layout varies per View
+
+The viewport is not a fixed shape. Each View defines its own layout:
+
+| View | Left sidebar (View-owned) | Viewport layout | Right sidebar (View-owned) |
+|---|---|---|---|
+| **Sessions** | New Session; NavItems (Agents, Usage); session list (pinned/recent/observed) | chat transcript + composer; collapsible bottom panel (Terminal/Output/Debug) | tabbed (Outline, Context, Git, Diff, AI) |
+| **Vaults** | vault selector; NavItems (Notes tree, Tables, Graph); directory tree | tabbed note editor | vault agent / info / properties |
+| **Projects** | NavItems (Boards list); filters | kanban columns (per board) | card detail |
+| **Fleet** | NavItems (Nodes list); Add node | node grid / drill-in | node detail (running sessions) |
+| **Settings** | NavItems (Appearance, Model routing, Runtime) | settings sections | (none or minimal) |
+
+### File naming convention (ENFORCED)
+- `views/<View>View.tsx` — the View component (owns sidebar + viewport layout).
+- `views/<view>/pages/<Page>Page.tsx` — one file per Page (viewport content).
+  e.g. `views/sessions/pages/ChatPage.tsx`, `views/sessions/pages/AgentsPage.tsx`.
+- `components/` — cross-View shared primitives (the `.ol-*` wrappers, if any).
+- The old `ChatView.tsx` is replaced by `SessionsView.tsx` + its Pages. Delete
+  the old file when the View lands.
+
+---
+
+## The 5 Views (this milestone) — routes
+
+All routes are URL-persistent (TanStack Router). Active View = topbar chip;
+active Page = left-sidebar NavItem. Both live on the URL.
+
+| View | View route | Pages (sidebar NavItems) | Backend |
+|---|---|---|---|
+| **Sessions** | `/sessions` | `/sessions` (list/empty), `/sessions/$id` (chat), `/sessions/agents`, `/sessions/usage` | `/api/sessions*`, `/api/sessions/:id/messages`, `/ws`, POST/PATCH/fork/cancel |
+| **Vaults** | `/vaults` | `/vaults` (vault picker), `/vaults/$vaultId` (note), `/vaults/$vaultId/tables`, `/vaults/$vaultId/graph` | `/api/vaults*` ✅ |
+| **Projects** | `/projects` | `/projects` (default board), `/projects/$boardId` | `/api/cards*` ✅ |
+| **Fleet** | `/fleet` | `/fleet` (grid), `/fleet/$nodeId` (drill-in) | `/api/nodes` ✅ |
+| **Settings** | `/settings` | `/settings/appearance`, `/settings/models`, `/settings/runtime` | `/api/health`, `/api/agents`, `/api/models` |
 
 ---
 
@@ -216,13 +273,71 @@ Match the concept Vaults view (Obsidian-like).
 4. Only `var(--token)` colors in components. Add tokens to every theme block.
 5. Build only these 5 surfaces. Do not build Workflow/Plugins/Console/Ledger/Atlas.
 
-## Status Ledger (the swarm updates this)
+## Bug-fix backlog (operator-reported, against the old shipped ChatView)
+
+These are concrete defects found while testing the live UI. Most are symptoms
+of the old `ChatView.tsx` still being served instead of the View/Page rebuild
+(S1). Fix them as part of the Sessions View rebuild — S1 must address each:
+
+1. **Fork warning modal not visible when chat is long** — the modal must use a
+   fixed-position overlay (`.ol-overlay` + `.ol-dialog`), not inline, so it
+   floats above a long scrollable transcript. Test with a 200+ message session.
+2. **Composer missing agent/model/thinking selector** — the composer needs
+   three controls: **Agent** (`/api/agents`), **Model** (inferred from agent,
+   overridable via `/api/models`), **Thinking** toggle (on/off; if the backend
+   exposes a thinking/reasoning mode flag, wire it; else store in localStorage
+   and pass with the send). Match the concept composer.
+3. **"ACP and CLI" on configured agents — what's the difference?** Remove the
+   confusing dual-label. An agent is a Hermes profile; it is driven over ACP.
+   There is no separate "CLI" agent type. Show ONE label: the profile id +
+   provider (e.g. `coding-agent · openai-codex`). If a backend field implies a
+   transport, drop it from the UI.
+4. **Claude and Codex missing from agent list** — the LIVE `/api/agents` already
+   returns them (default=claude-opus, coding-agent/gpt55=codex gpt-5.x,
+   glm52=zai). The bug is the UI not fetching `/api/agents`. Wire it.
+5. **Dot on inactive session** — remove the idle liveness dot from session
+   rows. Show a dot ONLY when `liveness === "active"` (a turn is in-flight).
+   Idle/unknown = no dot.
+6. **No right sidebar and bottom panel** — the Sessions View viewport layout
+   MUST include the right sidebar (tabbed) + collapsible bottom panel. This is
+   View-owned layout, not Page content. (Part of S1's scope.)
+7. **Chat feature not working — sent message not visible, no agent status** —
+   TWO root causes confirmed by the controller:
+   (a) `createSession()` reads `.session.id` from the response, but the backend
+       returns the session **flat** (no `session:` wrapper). Fix the helper to
+       read the flat `id`.
+   (b) `sendMessage` returns 202 immediately; the UI must show the user's
+       message **optimistically** (append to transcript before the server
+       round-trip) and surface agent status (idle → thinking → streaming →
+       done) via `/ws` frames. Currently the UI waits for a message.done that
+       may not arrive if the runtime is slow; show "thinking…" immediately.
+8. **Tool output not formatted** — tool messages need real rendering: a
+   **collapsible dropdown** with the tool symbol + tool name + execution time
+   in the header; expanding shows the input parameters and the output (syntax-
+   highlighted where possible). See bug 9.
+9. **Remove "assistant" / "tool" header per message bubble** — styling alone
+   conveys role (user = right-aligned or distinct bg; agent = left/default).
+   Tool calls render as a collapsed dropdown (icon + `toolName` + `Xms`),
+   expandable to show args + result. No text header line.
+
+10. **Session creation should ask which agent to use** — the "New Session"
+    action opens an **agent picker** (list from `/api/agents`); selecting an
+    agent creates the managed session bound to that profile (POST
+    `/api/sessions` with `{ agent }`), which infers the node to run it on.
+    Later: the Agents NavItem/Page configures which agents appear in this
+    picker. For now, show all agents from `/api/agents`.
+
+---
+
+## Status Ledger (the swarm updates this; controller verifies before marking done)
 | Card | Assignee | Status | Commit | Notes |
 |---|---|---|---|---|
-| F0 design-system + shell | glm52 | TODO | | blocks all UI |
-| V-BE vaults backend | gpt55 | TODO | | no F0 dep |
-| S1 sessions workbench | glm52 | TODO (dep F0) | | |
-| P1 projects board | gpt55 | TODO (dep F0) | | |
-| N1 fleet view | glm52 | TODO (dep F0) | | |
-| ST1 settings | gpt55 | TODO (dep F0) | | |
-| V-UI vaults view | glm52 | TODO (dep F0+V-BE) | | |
+| F0 design-system + shell | glm52 | DONE | `ec7f00d` | + controller fixes `d30012a` (button reset), `3a5fd5e` (topbar selector) |
+| V-BE vaults backend | gpt55 | DONE | `88e00ee` | jj markdown vault, 235 tests |
+| S1 sessions → SessionsView | glm52 | REVIEW | `0064700` (unmerged) | 1269-line SessionsWorkbench built; needs View/Page reorg + bug backlog |
+| P1 projects board | gpt55 | REVIEW | (unmerged) | built; needs View/Page reorg |
+| N1 fleet view | glm52 | REVIEW | (unmerged) | built; needs View/Page reorg |
+| ST1 settings | gpt55 | REVIEW | (unmerged) | built; needs View/Page reorg |
+| V-UI vaults view | glm52 | REVIEW | (unmerged) | built; needs View/Page reorg |
+
+
