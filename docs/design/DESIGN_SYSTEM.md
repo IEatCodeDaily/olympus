@@ -534,6 +534,61 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-04 — Tokenize the `.ctx-*` ContextRing geometry (radius/space/motion) + fix its 300ms transition — closes long-standing debt #1
+
+- **The debt this closes (top of the visible list for the last 3+ runs):** the
+  ContextRing block in `index.css` (`.ctx-bar-track/-fill`, `.ctx-io`,
+  `.ctx-breakdown`, `.ctx-gk`, `.ctx-bd-val`, `.ctx-mini-track/-fill`) carried
+  **raw off-scale geometry** that predated the modular scales: `border-radius: 2px`
+  (×6), `gap: 2px/3px`, `margin-bottom: 2px`, `gap: 6px`, `width: 48px`, and a
+  `transition: width 0.3s ease` that **violated §6's 150ms interaction cap**. It
+  was blocked run after run because `index.css` was **dirty** with the ContextRing
+  view worker's uncommitted `.ctx-*` work — committing a tokenization pass would
+  have swept their unfinished feature into a design commit.
+- **Why now:** the working tree is **clean at HEAD** (`git status --short` empty)
+  — the ContextRing worker has committed. The blocking condition every prior run
+  cited is cleared, so the deferred sweep is finally safe to do in isolation.
+- **Fix (system-level, `index.css` — no view internals/business logic touched):**
+  - **Radius:** all six `border-radius: 2px` → `var(--radius-full)`, matching the
+    shipped convention of the sibling progress bars `.gbar` (line 355) and
+    `.cp-bar` (line 456), which both pill their tracks with `--radius-full`. On a
+    3–4px-tall bar, full-round and 2px are visually identical, so zero perceptible
+    change — but the value is now scale-addressable.
+  - **Spacing:** `gap: 2px` → `var(--space-1)`; `gap: 3px` → `var(--space-1)`
+    (2px, a 1px snap onto the step scale); `margin-bottom: 2px` → `var(--space-1)`;
+    `gap: 6px` → `var(--space-3)` (identical); `width: 48px` → `var(--space-24)`
+    (identical). All ≤1px, imperceptible.
+  - **Motion:** `transition: width 0.3s ease` → `transition: width var(--dur-slow)
+    var(--ease-out)` — brings the context-bar fill animation onto the token motion
+    system AND under the §6 150ms cap (300ms → 150ms) with the enter/expand easing.
+  - Bar **heights** (3px/4px) intentionally left raw — they are thickness
+    primitives, exactly as `.gbar` (6px) and `.cp-bar` (5px) leave theirs.
+- **Behavior:** no color, no layout shift — the radius change is invisible on
+  thin bars, the space snaps are ≤1px, and the only functional change is a faster,
+  spec-compliant fill transition. Fully reversible (this one block).
+- **Verified:** `cd ui && bun run typecheck` (exit 0) and `bun run build` (exit 0,
+  CSS 64.64 kB). Screenshotted the live session right-sidebar CONTEXT WINDOW
+  section in-browser — the context bar + IN/OUT/MSGS breakdown render cleanly with
+  no misalignment (bars empty at 0 tokens for this session; geometry intact). The
+  edit is color-token-agnostic so both obsidian + daybreak are structurally
+  unaffected. `index.css` was confirmed clean at HEAD before + the only staged
+  file after (`git diff --stat` = 1 file, 8 lines).
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Off-scale raw `Npx` in the remaining older view CSS:** `.kcard`/`.step`
+     `padding: 9px 11px`/`9px 10px`, `.col-h`/`.tc-body`/`.sec-head` `padding: 9px …`,
+     `.rs-sec` `11px …`, `.pal-in`/`.ubar-row` `11px …` — the `9px`/`11px` axis
+     literals have no matching step token (9px≈`--space-4`+1, 11px between `--space-5`
+     and `--space-6`). Decide: add `--space-4-5`(9px)/`--space-5-5`(11px) half-steps
+     (mirrors the `--fs-*-5` half-step precedent) or snap each to the nearest step.
+  2. **Adoption gap.** The `.ol-*` primitive library exists but live views
+     (`AppShell`, `FleetView`, `ChatView`, `ProjectsView`, `ContextRing`) still
+     lean on bespoke `index.css` classes — a view-worker task to *spec + spot-fix*.
+  3. **Full automated axe/WAVE sweep** across every live surface (token-level
+     ratios are done; per-surface DOM audit — focus order, ARIA, component-state
+     contrast — remains).
+  4. **`.ol-*` visual QA in-browser** in both themes — primitives built to spec
+     but not all screenshot-verified against the live views.
+
 ### 2026-07-03 — Raise `--text-faint` to WCAG AA in both themes — closes the tertiary-text contrast debt (was debt #3)
 
 - **The debt this closes (the standing "formal contrast audit" item, #3 on the
