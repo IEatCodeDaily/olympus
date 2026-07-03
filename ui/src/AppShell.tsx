@@ -17,11 +17,11 @@
 import { useRouterState, useNavigate } from "@tanstack/react-router";
 import { Icon, type IconName } from "./components/Icon";
 import { useUIStore } from "./store";
-import { useHealth, useNodes } from "./hooks/queries";
+import { useHealth } from "./hooks/queries";
 import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
 import { SessionsView } from "./views/SessionsView";
-import FleetView from "./views/FleetView";
+import { FleetView } from "./views/fleet/FleetView";
 import { VaultsView } from "./views/VaultsView";
 import { ProjectsView, SettingsView } from "./views/PlaceholderViews";
 
@@ -52,7 +52,7 @@ const SURFACES: {
 
 export function AppShell() {
   const { location } = useRouterState();
-  const { surface, sessionId, page } = parseRoute(location.pathname);
+  const { surface, sessionId, page, nodeId } = parseRoute(location.pathname);
   const { sidebarCollapsed, sidebarWidth } = useUIStore();
 
   return (
@@ -64,12 +64,12 @@ export function AppShell() {
           <SessionsView sessionId={sessionId} page={page} />
         )}
 
-        {/* Other surfaces keep the shell-level sidebar + viewport split */}
-        {!sidebarCollapsed && surface === "fleet" && (
-          <SecondarySidebar width={sidebarWidth}>
-            <FleetSidebar />
-          </SecondarySidebar>
+        {/* Fleet View owns its own sidebar + viewport layout */}
+        {surface === "fleet" && (
+          <FleetView nodeId={nodeId} />
         )}
+
+        {/* Other surfaces keep the shell-level sidebar + viewport split */}
         {!sidebarCollapsed && surface === "vaults" && (
           <SecondarySidebar width={sidebarWidth}>
             <PlaceholderSidebar surface={surface} />
@@ -81,12 +81,10 @@ export function AppShell() {
           </SecondarySidebar>
         )}
 
-        {/* Viewport for non-sessions surfaces */}
-        {surface !== "sessions" && (
+        {/* Viewport for non-sessions, non-fleet surfaces */}
+        {surface !== "sessions" && surface !== "fleet" && (
           <div className="viewport">
-            {surface === "fleet" ? (
-              <FleetView />
-            ) : surface === "vaults" ? (
+            {surface === "vaults" ? (
               <VaultsView />
             ) : surface === "projects" ? (
               <ProjectsView />
@@ -225,54 +223,6 @@ function PlaceholderSidebar({ surface }: { surface: SurfaceName }) {
   );
 }
 
-function FleetSidebar() {
-  const { data: nodesData } = useNodes();
-  const nodes = nodesData?.nodes ?? [];
-
-  return (
-    <div className="sb-scroll">
-      <div className="sb-pad">
-        <button type="button" className="newbtn" title="Add node (UDS registration)">
-          <Icon name="plus" size={14} />
-          Add node
-        </button>
-      </div>
-      <div className="sec-head">
-        <span className="lbl">NODES</span>
-        <span className="sp" />
-        <span className="ct">{nodes.length}</span>
-      </div>
-      <div className="sec-content">
-        {nodes.length === 0 && (
-          <div className="empty-state-msg" style={{ padding: "8px 0" }}>
-            No nodes registered
-          </div>
-        )}
-        {nodes.map((n) => (
-          <div key={n.nodeId} className="srow">
-            <span
-              className="dot"
-              style={{
-                background:
-                  n.status === "online"
-                    ? "var(--green)"
-                    : n.status === "draining"
-                      ? "var(--amber)"
-                      : "var(--red)",
-              }}
-            />
-            <div className="info">
-              <span className="title">{n.nodeId}</span>
-            </div>
-            <span className="meta">
-              <span>{n.lastHeartbeatAgoSecs}s</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ── Session sidebar ────────────────────────────────
 // MOVED to views/sessions/components/SessionSidebar.tsx

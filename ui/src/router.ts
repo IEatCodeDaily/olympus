@@ -88,6 +88,12 @@ const fleetRoute = createRoute({
   component: () => null,
 });
 
+const fleetNodeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/fleet/$nodeId",
+  component: () => null,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -105,6 +111,7 @@ const routeTree = rootRoute.addChildren([
   projectsRoute,
   projectBoardRoute,
   fleetRoute,
+  fleetNodeRoute,
   settingsRoute,
 ]);
 
@@ -133,8 +140,9 @@ export function parseRoute(pathname: string): {
   page: SessionsPage | null;
   vaultId: string | null;
   vaultPage: VaultPage;
+  nodeId: string | null;
 } {
-  const base = { sessionId: null, page: null, vaultId: null, vaultPage: "note" as VaultPage };
+  const base = { sessionId: null, page: null, vaultId: null, vaultPage: "note" as VaultPage, nodeId: null };
   if (pathname === "/sessions" || pathname === "/") {
     return { surface: "sessions", ...base };
   }
@@ -160,6 +168,10 @@ export function parseRoute(pathname: string): {
   }
   if (pathname.startsWith("/vaults")) return { surface: "vaults", ...base };
   if (pathname.startsWith("/projects")) return { surface: "projects", ...base };
+  if (pathname.startsWith("/fleet/")) {
+    const nodeId = pathname.slice("/fleet/".length) || null;
+    return { surface: "fleet", ...base, nodeId };
+  }
   if (pathname.startsWith("/fleet")) return { surface: "fleet", ...base };
   if (pathname.startsWith("/settings")) return { surface: "settings", ...base };
   return { surface: "sessions", ...base };

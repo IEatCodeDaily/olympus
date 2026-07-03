@@ -1,21 +1,29 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * E2E: Fleet view — node grid, drill-in panel, Add-node affordance.
+ * E2E: Fleet view — node grid, node detail page, Add-node affordance.
  *
  * Uses MSW mocks (NODES fixture: local/gpu-box/edge-mini).
  * Verifies:
  *  1. Fleet surface loads via nav.
  *  2. All three node cards render with correct status dots.
- *  3. Clicking a node card opens the detail panel.
- *  4. Panel shows hostname, slots, and a sessions list.
- *  5. Clicking the same card again collapses the panel.
+ *  3. Clicking a node card navigates to /fleet/$nodeId (detail page).
+ *  4. Detail page shows hostname, slots, and a sessions list.
+ *  5. Back navigation (chevron) returns to the grid.
  *  6. Add-node button opens the help popover.
+ *
+ * NOTE: Both the sidebar and the grid use data-node-id. Tests scope card
+ * locators to [data-testid='fleet-grid'] to avoid strict-mode ambiguity.
  */
 
 async function gotoFleet(page: Page) {
   await page.goto("/fleet");
   await page.waitForSelector("[data-testid='fleet-grid']", { timeout: 10_000 });
+}
+
+/** Scoped to the grid container to avoid sidebar ambiguity. */
+function gridCard(page: Page, nodeId: string) {
+  return page.locator(`[data-testid='fleet-grid'] [data-node-id='${nodeId}']`);
 }
 
 test.describe("Fleet view", () => {
@@ -31,7 +39,7 @@ test.describe("Fleet view", () => {
   test("local node card has LOCAL badge", async ({ page }) => {
     await gotoFleet(page);
 
-    const localCard = page.locator("[data-node-id='local']");
+    const localCard = gridCard(page, "local");
     await expect(localCard).toBeVisible();
     await expect(localCard.locator(".ol-badge-accent")).toContainText("LOCAL");
   });
@@ -40,58 +48,64 @@ test.describe("Fleet view", () => {
     await gotoFleet(page);
 
     // online node (local) gets ok badge
-    const localCard = page.locator("[data-node-id='local']");
+    const localCard = gridCard(page, "local");
     // Has a live dot (ol-dot-live class)
     await expect(localCard.locator(".ol-dot-live")).toBeVisible();
 
     // draining node (gpu-box) gets warn badge
-    const gpuCard = page.locator("[data-node-id='gpu-box']");
+    const gpuCard = gridCard(page, "gpu-box");
     await expect(gpuCard.locator(".ol-dot-warn")).toBeVisible();
   });
 
-  test("clicking a node card opens the detail panel", async ({ page }) => {
+  test("clicking a node card opens the detail page", async ({ page }) => {
     await gotoFleet(page);
 
-    const localCard = page.locator("[data-node-id='local']");
+    const localCard = gridCard(page, "local");
     await localCard.click();
 
-    // Detail panel should appear
-    const panel = page.locator("[aria-label='Node local detail']");
-    await expect(panel).toBeVisible();
+    // URL navigates to /fleet/local
+    await page.waitForURL("**/fleet/local", { timeout: 5_000 });
 
-    // Panel shows hostname
-    await expect(panel).toContainText("localhost");
+    // Detail page renders with the node's aria-label
+    const detail = page.locator("[aria-label='Node local detail']");
+    await expect(detail).toBeVisible();
 
-    // Panel shows SLOTS heading
-    await expect(panel).toContainText("SLOTS");
+    // Detail shows hostname
+    await expect(detail).toContainText("localhost");
 
-    // Panel shows RUNNING SESSIONS heading
-    await expect(panel).toContainText("RUNNING SESSIONS");
+    // Detail shows SLOTS heading
+    await expect(detail).toContainText("SLOTS");
+
+    // Detail shows RUNNING SESSIONS heading
+    await expect(detail).toContainText("RUNNING SESSIONS");
   });
 
-  test("clicking the same card again collapses the panel", async ({ page }) => {
+  test("back button from detail page returns to grid", async ({ page }) => {
     await gotoFleet(page);
 
-    const localCard = page.locator("[data-node-id='local']");
-
-    // Open
-    await localCard.click();
+    // Navigate to detail via grid card click
+    await gridCard(page, "local").click();
+    await page.waitForURL("**/fleet/local", { timeout: 5_000 });
     await expect(page.locator("[aria-label='Node local detail']")).toBeVisible();
 
-    // Close via same card
-    await localCard.click();
+    // Click the back button (aria-label "Back to fleet")
+    await page.getByRole("button", { name: "Back to fleet" }).click();
+    await page.waitForURL("**/fleet", { timeout: 5_000 });
+
+    // Grid is visible again
+    await expect(page.locator("[data-testid='fleet-grid']")).toBeVisible();
     await expect(page.locator("[aria-label='Node local detail']")).not.toBeVisible();
   });
 
-  test("panel close button dismisses the panel", async ({ page }) => {
-    await gotoFleet(page);
+  test("sidebar 'All nodes' link returns to grid from detail", async ({ page }) => {
+    await page.goto("/fleet/local");
+    await page.waitForSelector("[aria-label='Node local detail']", { timeout: 10_000 });
 
-    await page.locator("[data-node-id='local']").click();
-    const panel = page.locator("[aria-label='Node local detail']");
-    await expect(panel).toBeVisible();
+    // Click "All nodes" in the sidebar
+    await page.getByRole("button", { name: "All nodes" }).click();
+    await page.waitForURL("**/fleet", { timeout: 5_000 });
 
-    await panel.getByRole("button", { name: "Close panel" }).click();
-    await expect(panel).not.toBeVisible();
+    await expect(page.locator("[data-testid='fleet-grid']")).toBeVisible();
   });
 
   test("Add-node button opens the help popover", async ({ page }) => {
@@ -110,7 +124,7 @@ test.describe("Fleet view", () => {
   test("offline node card renders with reduced prominence", async ({ page }) => {
     await gotoFleet(page);
 
-    const edgeCard = page.locator("[data-node-id='edge-mini']");
+    const edgeCard = gridCard(page, "edge-mini");
     await expect(edgeCard).toBeVisible();
     // offline dot
     await expect(edgeCard.locator(".ol-dot-err")).toBeVisible();

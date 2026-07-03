@@ -42,6 +42,13 @@ describe("parseRoute", () => {
     const result = parseRoute("/fleet");
     expect(result.surface).toBe("fleet");
     expect(result.sessionId).toBeNull();
+    expect(result.nodeId).toBeNull();
+  });
+
+  it("parses /fleet/$nodeId", () => {
+    const result = parseRoute("/fleet/local");
+    expect(result.surface).toBe("fleet");
+    expect(result.nodeId).toBe("local");
   });
 
   it("parses /settings", () => {
