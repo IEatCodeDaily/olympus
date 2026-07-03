@@ -4,7 +4,10 @@ import { AppShell } from "./AppShell";
 // ── Route tree ─────────────────────────────────────
 // URL is the single source of truth for:
 //   /                         → sessions list (no active session)
+//   /sessions                 → sessions list (no active session)
 //   /sessions/$sessionId      → chat view for a specific session
+//   /sessions/agents          → agents page (Page = NavItem in sidebar)
+//   /sessions/usage           → usage page (Page = NavItem in sidebar)
 //   /vaults                   → vaults list (placeholder until V-UI)
 //   /vaults/$vaultId          → vault detail (placeholder)
 //   /vaults/$vaultId/$notePath→ note editor (placeholder)
@@ -25,6 +28,12 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: () => null, // AppShell reads location for active session
+});
+
+const sessionsIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions",
+  component: () => null,
 });
 
 const sessionRoute = createRoute({
@@ -77,6 +86,7 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  sessionsIndexRoute,
   sessionRoute,
   vaultsRoute,
   vaultDetailRoute,
@@ -99,18 +109,31 @@ declare module "@tanstack/react-router" {
 /** The five navigable surfaces (in nav order). */
 export type SurfaceName = "sessions" | "vaults" | "projects" | "fleet" | "settings";
 
-/** Extract the active surface + session from the current URL. */
+/** The Sessions-view pages (left-sidebar NavItems inside the View). */
+export type SessionsPage = "chat" | "agents" | "usage";
+
+/** Extract the active surface + session/page from the current URL. */
 export function parseRoute(pathname: string): {
   surface: SurfaceName;
   sessionId: string | null;
+  page: SessionsPage | null;
 } {
+  if (pathname === "/sessions" || pathname === "/") {
+    return { surface: "sessions", sessionId: null, page: null };
+  }
+  if (pathname === "/sessions/agents") {
+    return { surface: "sessions", sessionId: null, page: "agents" };
+  }
+  if (pathname === "/sessions/usage") {
+    return { surface: "sessions", sessionId: null, page: "usage" };
+  }
   if (pathname.startsWith("/sessions/")) {
     const id = pathname.split("/sessions/")[1];
-    return { surface: "sessions", sessionId: id || null };
+    return { surface: "sessions", sessionId: id || null, page: "chat" };
   }
-  if (pathname.startsWith("/vaults")) return { surface: "vaults", sessionId: null };
-  if (pathname.startsWith("/projects")) return { surface: "projects", sessionId: null };
-  if (pathname.startsWith("/fleet")) return { surface: "fleet", sessionId: null };
-  if (pathname.startsWith("/settings")) return { surface: "settings", sessionId: null };
-  return { surface: "sessions", sessionId: null };
+  if (pathname.startsWith("/vaults")) return { surface: "vaults", sessionId: null, page: null };
+  if (pathname.startsWith("/projects")) return { surface: "projects", sessionId: null, page: null };
+  if (pathname.startsWith("/fleet")) return { surface: "fleet", sessionId: null, page: null };
+  if (pathname.startsWith("/settings")) return { surface: "settings", sessionId: null, page: null };
+  return { surface: "sessions", sessionId: null, page: null };
 }

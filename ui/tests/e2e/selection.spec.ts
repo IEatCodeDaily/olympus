@@ -162,6 +162,12 @@ test.describe("Session selection and chat-view switching", () => {
     await expect(forkButton).toBeEnabled();
     await forkButton.click();
 
+    // Bug 1 fix: fork now opens a fixed-position confirmation modal.
+    // Click the confirm button in the dialog to proceed with the fork.
+    const confirmBtn = page.getByRole("button", { name: "Fork to continue" }).last();
+    await expect(confirmBtn).toBeVisible({ timeout: 3_000 });
+    await confirmBtn.click();
+
     // A forked session is managed (steerable): the composer input is present,
     // and it shows a managed status badge — "running" (active) when freshly
     // forked within the recency window, or "idle" otherwise.

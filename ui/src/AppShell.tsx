@@ -14,18 +14,19 @@
 // provides its own secondary sidebar slot (session list, vault tree, etc.).
 // Surfaces whose card hasn't merged render a .ol-* placeholder pane.
 
-import { useCallback } from "react";
 import { useRouterState, useNavigate } from "@tanstack/react-router";
 import { Icon, type IconName } from "./components/Icon";
 import { useUIStore } from "./store";
-import { useSessions, useHealth, useNodes } from "./hooks/queries";
-import { createSession } from "./api";
+import { useHealth, useNodes } from "./hooks/queries";
 import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
-import type { Session } from "./types";
-import { SessionsWorkbench, SessionEmptyPane } from "./views/SessionsWorkbench";
+import { SessionsView } from "./views/SessionsView";
 import FleetView from "./views/FleetView";
 import { VaultsView, ProjectsView, SettingsView } from "./views/PlaceholderViews";
+
+// ── Helpers ────────────────────────────────────────
+
+// timeAgo moved to views/sessions/helpers.ts (View-owned)
 
 // ── Nav definition ─────────────────────────────────
 // The 5 surfaces, in nav order. Matches the plan's table exactly.
@@ -44,34 +45,25 @@ const SURFACES: {
 
 // ── Helpers ────────────────────────────────────────
 
-function timeAgo(ts: number): string {
-  const diff = Date.now() / 1000 - ts;
-  if (diff < 60) return "now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
-}
+// (timeAgo moved to views/sessions/helpers.ts)
 
 // ── Main shell ─────────────────────────────────────
 
 export function AppShell() {
   const { location } = useRouterState();
-  const { surface, sessionId } = parseRoute(location.pathname);
+  const { surface, sessionId, page } = parseRoute(location.pathname);
   const { sidebarCollapsed, sidebarWidth } = useUIStore();
 
   return (
     <div className="app">
       <TopBar activeSurface={surface} />
       <div className="body">
-        {/* Secondary sidebar — per-surface content */}
-        {!sidebarCollapsed && surface === "sessions" && (
-          <>
-            <SessionSidebar
-              width={sidebarWidth}
-              activeSessionId={sessionId}
-            />
-          </>
+        {/* Sessions View owns its own sidebar + viewport layout */}
+        {surface === "sessions" && (
+          <SessionsView sessionId={sessionId} page={page} />
         )}
+
+        {/* Other surfaces keep the shell-level sidebar + viewport split */}
         {!sidebarCollapsed && surface === "fleet" && (
           <SecondarySidebar width={sidebarWidth}>
             <FleetSidebar />
@@ -88,24 +80,20 @@ export function AppShell() {
           </SecondarySidebar>
         )}
 
-        {/* Viewport — the active surface's main content */}
-        <div className="viewport">
-          {surface === "sessions" && sessionId ? (
-            <SessionsWorkbench sessionId={sessionId} />
-          ) : surface === "sessions" ? (
-            <SessionEmptyPane />
-          ) : surface === "fleet" ? (
-            <FleetView />
-          ) : surface === "vaults" ? (
-            <VaultsView />
-          ) : surface === "projects" ? (
-            <ProjectsView />
-          ) : surface === "settings" ? (
-            <SettingsView />
-          ) : (
-            <SessionEmptyPane />
-          )}
-        </div>
+        {/* Viewport for non-sessions surfaces */}
+        {surface !== "sessions" && (
+          <div className="viewport">
+            {surface === "fleet" ? (
+              <FleetView />
+            ) : surface === "vaults" ? (
+              <VaultsView />
+            ) : surface === "projects" ? (
+              <ProjectsView />
+            ) : surface === "settings" ? (
+              <SettingsView />
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -286,145 +274,5 @@ function FleetSidebar() {
 }
 
 // ── Session sidebar ────────────────────────────────
-// Groups: PINNED (liveness===active managed), RECENT (managed), OBSERVED (managed===false)
-
-function SessionSidebar({
-  width,
-  activeSessionId,
-}: {
-  width: number;
-  activeSessionId: string | null;
-}) {
-  const navigate = useNavigate();
-  const { data: sessionData } = useSessions({ managed: true });
-  const { data: historyData } = useSessions({ managed: false, limit: 20 });
-  const sessions = sessionData?.sessions ?? [];
-  const history = historyData?.sessions ?? [];
-
-  // PINNED = managed + active liveness
-  const pinned = sessions.filter((s) => s.liveness === "active");
-  // RECENT = managed + not active
-  const recent = sessions.filter((s) => s.liveness !== "active");
-  // OBSERVED = not managed (imported from hermes)
-  const observed = history;
-
-  const handleNewSession = useCallback(async () => {
-    try {
-      const session = await createSession();
-      if (session?.id)
-        void navigate({
-          to: `/sessions/$sessionId`,
-          params: { sessionId: session.id },
-        });
-    } catch {
-      // sessions list will refetch
-    }
-  }, [navigate]);
-
-  const handleSelectSession = useCallback(
-    (id: string) => {
-      void navigate({ to: `/sessions/$sessionId`, params: { sessionId: id } });
-    },
-    [navigate],
-  );
-
-  return (
-    <SecondarySidebar width={width}>
-      <div className="sb-pad">
-        <button type="button" className="newbtn" onClick={handleNewSession}>
-          <Icon name="plus" size={14} />
-          New session
-        </button>
-      </div>
-      <div className="sb-scroll">
-        {pinned.length > 0 && (
-          <SessionSection
-            label="PINNED"
-            sessions={pinned}
-            activeSessionId={activeSessionId}
-            onSelect={handleSelectSession}
-          />
-        )}
-        <SessionSection
-          label="RECENT"
-          sessions={recent}
-          activeSessionId={activeSessionId}
-          onSelect={handleSelectSession}
-        />
-        {observed.length > 0 && (
-          <SessionSection
-            label="OBSERVED"
-            sessions={observed}
-            activeSessionId={activeSessionId}
-            onSelect={handleSelectSession}
-          />
-        )}
-      </div>
-    </SecondarySidebar>
-  );
-}
-
-function SessionSection({
-  label,
-  sessions,
-  activeSessionId,
-  onSelect,
-}: {
-  label: string;
-  sessions: Session[];
-  activeSessionId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  if (sessions.length === 0) return null;
-  return (
-    <>
-      <div className="sec-head">
-        <span className="lbl">{label}</span>
-        <span className="sp" />
-        <span className="ct">{sessions.length}</span>
-      </div>
-      <div className="sec-content">
-        {sessions.slice(0, 50).map((s) => (
-          <button
-            type="button"
-            key={s.id}
-            className={`srow ${activeSessionId === s.id ? "on" : ""}`}
-            data-session-id={s.id}
-            data-managed={s.managed ? "true" : "false"}
-            onClick={() => onSelect(s.id)}
-          >
-            <span
-              className={`dot ${s.liveness === "active" ? "active" : "idle"}`}
-            />
-            <span className="info">
-              <span className="title">{s.title || "Untitled"}</span>
-            </span>
-            <span className="meta">
-              {s.model && (
-                <span
-                  className="modelpill"
-                  style={{
-                    fontSize: 9,
-                    padding: "1px 4px",
-                    background: "none",
-                    border: "none",
-                    color: "var(--faint)",
-                    fontFamily: "var(--font-mono)",
-                    maxWidth: 64,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {s.model.split("-").slice(0, 2).join("-")}
-                </span>
-              )}
-              <span>{s.messageCount}</span>
-              <span>{timeAgo(s.lastActivity)}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-    </>
-  );
-}
+// MOVED to views/sessions/components/SessionSidebar.tsx
+// (View-owned per the View/Page architecture)

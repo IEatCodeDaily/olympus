@@ -1,0 +1,142 @@
+/**
+ * MessageBubble — a single message in the transcript.
+ *
+ * Bug fixes applied:
+ *  - Bug 9: No "ASSISTANT" / "TOOL" text header. Styling conveys role.
+ *    User = right-aligned elevated bubble; agent = left/default.
+ *  - Bug 8: Tool calls render as collapsible dropdowns
+ *    (icon + toolName + status), expandable to args + output.
+ */
+
+import React, { useState, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+import { Icon } from "../../../components/Icon";
+import type { Message, ToolCall } from "../../../types";
+import { fmtTime, isDiffResult } from "../helpers";
+import { ToolCard } from "./ToolCard";
+import { DiffCard } from "./DiffCard";
+
+export const MessageBubble = React.memo(function MessageBubble({
+  msg,
+  onFork,
+}: {
+  msg: Message;
+  onFork: () => void;
+}) {
+  const isUser = msg.role === "user";
+  const isSystem = msg.role === "system" || msg.role === "session_meta";
+  const ts = fmtTime(msg.timestamp);
+  const [copied, setCopied] = useState(false);
+  const [tcExpanded, setTcExpanded] = useState<Set<number>>(new Set());
+  const [reasonExpanded, setReasonExpanded] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard?.writeText(msg.content ?? "");
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [msg.content]);
+
+  const toggleTc = useCallback((idx: number) => {
+    setTcExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }, []);
+
+  if (isSystem) {
+    return (
+      <div className="msg-system" data-ts={ts}>
+        <span className="gk">{msg.content}</span>
+      </div>
+    );
+  }
+
+  // Tool-result message (role === "tool") renders inline as a card.
+  // Bug 9: no "TOOL" text header — the card styling conveys it.
+  if (msg.role === "tool") {
+    const tc = msg.toolCalls?.[0] ?? null;
+    return (
+      <ToolCard
+        tc={tc ?? { name: msg.toolName ?? "tool", args: null, result: msg.content }}
+        idx={0}
+        expanded={false}
+        onToggle={() => {}}
+      />
+    );
+  }
+
+  return (
+    <div className={isUser ? "msg-user" : "msg-ai"} data-ts={ts}>
+      {/* Bug 9: removed the .who ASSISTANT/TOOL header line entirely. */}
+
+      {/* Reasoning block */}
+      {msg.reasoning && (
+        <div className="reasoning-block">
+          <button
+            type="button"
+            className="reasoning-toggle"
+            onClick={() => setReasonExpanded((v) => !v)}
+          >
+            <Icon name={reasonExpanded ? "chevron-down" : "chevron-right"} size={11} />
+            <span className="gk" style={{ fontSize: 10 }}>
+              thinking
+            </span>
+          </button>
+          {reasonExpanded && (
+            <div className="reasoning-body">{msg.reasoning}</div>
+          )}
+        </div>
+      )}
+
+      {/* Content */}
+      {isUser ? (
+        <span>{msg.content}</span>
+      ) : (
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {msg.content ?? ""}
+        </ReactMarkdown>
+      )}
+
+      {/* Tool calls embedded in assistant message */}
+      {msg.toolCalls && msg.toolCalls.length > 0 && (
+        <div className="tc-list">
+          {msg.toolCalls.map((tc, idx) =>
+            isDiffResult(tc) ? (
+              <DiffCard key={idx} tc={tc} />
+            ) : (
+              <ToolCard
+                key={idx}
+                tc={tc}
+                idx={idx}
+                expanded={tcExpanded.has(idx)}
+                onToggle={toggleTc}
+              />
+            ),
+          )}
+        </div>
+      )}
+
+      {/* Message actions */}
+      <div className="msg-acts">
+        <button type="button" onClick={handleCopy} title="Copy">
+          <Icon name={copied ? "check" : "copy"} size={12} />
+        </button>
+        <button
+          type="button"
+          title="Fork from here"
+          onClick={onFork}
+        >
+          <Icon name="git-branch" size={12} />
+        </button>
+        <span className="ts">{ts}</span>
+      </div>
+    </div>
+  );
+});
+
+// Re-export for convenience
+export type { ToolCall };
