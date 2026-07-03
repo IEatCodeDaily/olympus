@@ -348,9 +348,9 @@ function getWsUrl(): string {
 export function connectWs(): void {
   if (ws || connecting) return;
 
-  const useMocks = import.meta.env.VITE_USE_MOCKS !== "false";
-  if (useMocks) return;
-
+  // In mock mode the MockWebSocket is installed on window.WebSocket, so
+  // `new WebSocket()` creates a mock instance that speaks ServerFrame. We
+  // still need to connect so frames flow through onFrame listeners.
   connecting = true;
   try {
     ws = new WebSocket(getWsUrl());
@@ -375,7 +375,10 @@ export function connectWs(): void {
     ws.onclose = () => {
       connecting = false;
       ws = null;
-      setTimeout(() => connectWs(), 2000);
+      // In mock mode the MockWebSocket is a singleton-like stand-in; don't
+      // reconnect (the mock never closes during normal operation).
+      const useMocks = import.meta.env.VITE_USE_MOCKS !== "false";
+      if (!useMocks) setTimeout(() => connectWs(), 2000);
     };
   } catch {
     connecting = false;

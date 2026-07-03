@@ -1,4 +1,5 @@
 import { http, HttpResponse, delay, WebSocketHandler } from "msw";
+import { MockWebSocket } from "./ws-mock";
 import {
   SESSIONS,
   MESSAGES_BY_SESSION,
@@ -26,6 +27,7 @@ import type {
   UsageRange,
   UsageResponse,
   NodesResponse,
+  ToolCall,
 } from "../types";
 
 // ── REST Handlers ─────────────────────────────────────
@@ -160,10 +162,10 @@ export const handlers = [
       const body = (await request.json().catch(() => ({}))) as { text?: string };
       const now = Date.now() / 1000;
       const msgs = MESSAGES_BY_SESSION[params.id] ?? (MESSAGES_BY_SESSION[params.id] = []);
-      msgs.push({
+      const userMsg = {
         messageId: msgs.length,
         sessionId: params.id,
-        role: "user",
+        role: "user" as const,
         content: body.text ?? "",
         toolName: null,
         toolCalls: null,
@@ -171,10 +173,48 @@ export const handlers = [
         timestamp: now,
         tokenCount: null,
         finishReason: null,
-      });
+      };
+      msgs.push(userMsg);
       sess.messageCount = msgs.length;
       sess.lastActivity = now;
       if (!sess.hermesId) sess.hermesId = `mock-${params.id}`;
+
+      // Broadcast the user message.appended frame so live listeners see it.
+      MockWebSocket.broadcast({ kind: "message.appended", sessionId: params.id, message: userMsg });
+
+      // Simulate an assistant turn with tool calls after a short delay.
+      // This drives the Output tab (tool activity) and Debug tab (raw frames).
+      const assistantId = msgs.length;
+      setTimeout(() => {
+        const toolCalls = mockToolCallsForPrompt(body.text ?? "");
+        const replyMsg = {
+          messageId: assistantId,
+          sessionId: params.id,
+          role: "assistant" as const,
+          content: "Done. I ran the necessary tools — see the Output panel for details.",
+          toolName: null,
+          toolCalls,
+          reasoning: null,
+          timestamp: Date.now() / 1000,
+          tokenCount: 42,
+          finishReason: null,
+        };
+        msgs.push(replyMsg);
+        sess.messageCount = msgs.length;
+        MockWebSocket.broadcast({
+          kind: "message.appended",
+          sessionId: params.id,
+          message: replyMsg,
+        });
+        // Follow up with message.done so the transcript + query cache update.
+        MockWebSocket.broadcast({
+          kind: "message.done",
+          sessionId: params.id,
+          messageId: assistantId,
+          finishReason: "stop",
+        });
+      }, 1500);
+
       return HttpResponse.json({ accepted: true }, { status: 202 });
     }
   ),
@@ -344,3 +384,43 @@ export const handlers = [
     },
   ),
 ];
+
+/**
+ * Generate plausible tool calls for a mock assistant reply, based on the
+ * prompt text. Used to drive the Output panel with realistic activity.
+ */
+function mockToolCallsForPrompt(prompt: string): ToolCall[] {
+  const p = prompt.toLowerCase();
+  const calls: ToolCall[] = [];
+
+  if (p.includes("search") || p.includes("find") || p.includes("look")) {
+    calls.push({
+      name: "web_search",
+      args: { query: prompt.slice(0, 60), limit: 5 },
+      result: '[{"title":"Relevant result","url":"https://example.com/1"},{"title":"Another result","url":"https://example.com/2"}]',
+    });
+  }
+  if (p.includes("file") || p.includes("read") || p.includes("code")) {
+    calls.push({
+      name: "read_file",
+      args: { path: "/home/rpw/project/src/main.ts" },
+      result: "import { app } from './app';\napp.listen(3000);",
+    });
+  }
+  if (p.includes("run") || p.includes("execute") || p.includes("command")) {
+    calls.push({
+      name: "terminal",
+      args: { command: "npm run build" },
+      result: "> olympus@0.1.0 build\n> tsc && vite build\n✓ built in 2.3s",
+    });
+  }
+  // Always include at least one call so the Output tab shows activity.
+  if (calls.length === 0) {
+    calls.push({
+      name: "terminal",
+      args: { command: "echo 'processing request'" },
+      result: "processing request",
+    });
+  }
+  return calls;
+}

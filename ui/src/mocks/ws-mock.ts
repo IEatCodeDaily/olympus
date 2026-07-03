@@ -135,6 +135,16 @@ class MockWebSocket {
       this.timers.push(t);
     });
   }
+
+  /**
+   * Broadcast a frame to all connected mock sockets (used by MSW handlers to
+   * simulate server-pushed events like message.appended after a POST).
+   */
+  static broadcast(frame: ServerFrame): void {
+    for (const inst of MockWebSocket.instances) {
+      inst.emit(frame);
+    }
+  }
 }
 
 let installed = false;
@@ -146,3 +156,5 @@ export function installWsMock(): void {
   // @ts-expect-error — deliberate override for mock mode
   window.WebSocket = MockWebSocket;
 }
+
+export { MockWebSocket };

@@ -259,6 +259,7 @@ function SessionChatLayout({
             <>
               <div className="rz-y" onMouseDown={onBpResizeStart} />
               <BottomPanel
+                sessionId={sessionId}
                 height={bpHeight}
                 tab={bpTab}
                 onTabChange={onBpTabChange}
