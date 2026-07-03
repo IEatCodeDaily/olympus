@@ -189,8 +189,9 @@ function SessionSection({
   );
 }
 
-/** A clean session row: title left, time right. Hover reveals pin/archive
- *  actions. A native title tooltip shows agent · node · model · summary. */
+/** A clean session row: title left, time right, hover reveals pin/archive.
+ *  Status icon (left): spinner when agent running, green dot when completed,
+ *  orange ! when waiting for input, nothing when idle/opened. */
 function SessionRow({
   session,
   active,
@@ -203,7 +204,7 @@ function SessionRow({
   const title = session.title || "Untitled";
   const time = timeAgo(session.lastActivity);
 
-  // Tooltip: agent · node · model · summary (first ~80 chars of content)
+  // Tooltip: agent · node · model · summary
   const tooltip = [
     session.agent ? `agent: ${session.agent}` : null,
     session.node ? `node: ${session.node}` : null,
@@ -213,6 +214,14 @@ function SessionRow({
     .filter(Boolean)
     .join(" · ");
 
+  // Status icon logic:
+  //   active = agent is running → spinner
+  //   idle + opened = no icon (user is looking at it)
+  //   idle + not opened = no icon (completed sessions lose the dot once opened)
+  //   TODO: when backend exposes "waiting for input" → orange ! icon
+  const isRunning = session.liveness === "active";
+  const showIcon = isRunning && !active;
+
   return (
     <div
       className={`srow ${active ? "on" : ""}`}
@@ -221,6 +230,15 @@ function SessionRow({
       title={tooltip}
       onClick={() => onSelect(session.id)}
     >
+      {showIcon && (
+        <span className="srow-icon">
+          {isRunning ? (
+            <span className="srow-spinner" />
+          ) : (
+            <span className="srow-dot done" />
+          )}
+        </span>
+      )}
       <span className="srow-title">{title}</span>
       <span className="srow-time">{time}</span>
       {/* Hover actions */}

@@ -119,6 +119,10 @@ button {
 .srow { display: flex; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); border-radius: var(--radius); cursor: pointer; transition: background var(--dur) var(--ease); position: relative; }
 .srow:hover { background: var(--hover); }
 .srow.on { background: var(--silver-wash); }
+.srow-icon { display: flex; align-items: center; justify-content: center; width: 12px; flex-shrink: 0; }
+.srow-spinner { width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.srow-dot.done { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--ok); }
 .srow-title { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .srow-time { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); flex-shrink: 0; }
 .srow-actions { display: none; align-items: center; gap: 1px; position: absolute; right: var(--space-4); background: linear-gradient(90deg, transparent, var(--hover) 30%); padding-left: 20px; }
