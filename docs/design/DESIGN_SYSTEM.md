@@ -435,7 +435,7 @@ need is a new rule in `index.css` (or a new `.ol-*` primitive) first.
 | `PageHeader` | `{ title, subtitle?, actions? }` | `.gv-head` / `.gv-title` / `.gv-sub` / `.gv-actions` |
 | `EmptyState` | `{ icon?, title, message?, cta? }` | `.empty-state` / `-icon` / `-title` / `-msg` / `-cta` |
 | `StatPill` | `{ label, value }` | `.stat` / `.v` / `.l` |
-| `Badge` | `{ kind?, children }` | `.gtag` + `kind→variant` map (ready/running/done/online→`ok`, warning/warn→`warn`, blocked/failed/error/offline→`err`) |
+| `Badge` | `{ kind?, children }` | `.gtag` + **case-insensitive** `kind→variant` map covering the full status vocabulary — `ok` (ready/running/run/active/live/online/connected/done/complete[d]/success/succeeded/ok/healthy/pass[ed]), `warn` (warning/warn/pending/pend/queued/waiting/paused/idle/draining/degraded/stale/unknown), `err` (blocked/fail[ed]/error/offline/disconnected/stopped/cancel[l]ed/killed/crashed/timeout/timed-out). Unknown kinds → neutral `.gtag`. |
 | `PlaceholderBadge` | `{ epic }` | `.gtag warn` (amber; signals a view whose backend epic isn't live) |
 
 ### 8.C — App-shell / view classes (`index.css`)
@@ -525,6 +525,65 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 ---
 
 ## 11. Changelog
+
+### 2026-07-03 — Harden the `Badge` primitive: case-insensitive lookup + full status vocabulary — closes an information-carrying-color gap
+
+- **The debt this closes (a fresh a11y/correctness gap, not on the prior list):**
+  the shared `Badge` shell primitive (§8.B) mapped only **10 lowercase** kinds
+  (`ready/running/done/online → ok`, `warning/warn → warn`,
+  `blocked/failed/error/offline → err`) and looked them up **case-sensitively**.
+  Any status a view worker passes that is capitalized (`"Running"`, `"Failed"`)
+  or a common-but-unmapped synonym (`pending`, `queued`, `stopped`, `paused`,
+  `cancelled`, `succeeded`, `timeout`, …) fell through to `""` and rendered as a
+  **neutral gray badge** — silently mis-signaling a live / failed / needs-attention
+  state as inert. That directly violates §9's rule that color must confirm meaning
+  (a red state must read red), and it's a latent trap: the first view worker to
+  pass a real fleet status string would have shipped a wrongly-colored badge with
+  no error.
+- **Why `Badge`, and why `shell.tsx`:** the in-lane top debt (raw-`Npx` geometry
+  in the fresh `.ctx-*` ContextRing block) lives in `index.css`, which is
+  currently **dirty with an uncommitted view-worker's `ContextRing.tsx` work** —
+  tokenizing it now would entangle my system commit with their unfinished view.
+  The brief forbids that ("change the SYSTEM, not a view's business logic"), so I
+  picked the highest-leverage improvement in a file that is **clean at HEAD**.
+  `Badge` is a core shared primitive every status chip across Fleet/Sessions will
+  render, so hardening it is a genuine system-level, all-views win.
+- **Fix (system-level, `ui/src/components/shell.tsx` only — no CSS/token touched):**
+  - Lookup normalizes input: `BADGE_KIND[kind.trim().toLowerCase()]` — capitalized
+    and whitespace-padded kinds now resolve.
+  - Expanded `BADGE_KIND` from 10 → ~45 entries covering the full fleet/session
+    status vocabulary, grouped + commented by semantic: **ok** (ready, running,
+    run, active, live, online, connected, done, complete[d], success, succeeded,
+    ok, healthy, pass[ed]); **warn** (warning, warn, pending, pend, queued,
+    waiting, paused, idle, draining, degraded, stale, unknown); **err** (blocked,
+    fail[ed], error, offline, disconnected, stopped, cancel[l]ed, killed, crashed,
+    timeout, timed-out). Unknown kinds still fall back to the neutral `.gtag` on
+    purpose — the guarantee is that *known* states always carry their correct color.
+  - Rewrote the JSDoc to document the case-insensitivity, the fallback contract,
+    and the §9 "label text always carries the meaning too" tie-in.
+- **Behavior:** every existing correct call-site renders **identically** (all 10
+  original kinds still map the same); the only change is that previously-degrading
+  kinds now resolve to their correct variant. No token, CSS, or view internals
+  touched — pure primitive correctness. Fully reversible (this file + `shell.tsx`).
+- **Verified:** `cd ui && bun run typecheck` (exit 0) and `bun run build` (exit 0).
+  Pure TS/logic change with no new markup or CSS, so no visual regression is
+  possible in either theme; the existing `.gtag[.ok|.warn|.err]` rules (already
+  screenshot-verified in obsidian + daybreak in prior runs) are unchanged.
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Off-scale raw `Npx` in the `.ctx-*` ContextRing block** (`border-radius: 2px`
+     ×4, `gap: 2px/3px/6px`, `margin-bottom: 2px`, `transition: width 0.3s` — the
+     last one also **violates §6's 150ms interaction cap**). Blocked this run
+     because it's uncommitted in `index.css`; tokenize it once the ContextRing
+     view worker has committed and `index.css` is clean at HEAD. It should reuse
+     `--radius-full` (matching `.gbar`/`.cp-bar`) and a `--dur-*` token.
+  2. **Adoption gap.** The rich `.ol-*` primitive library exists but live views
+     (`AppShell`, `FleetView`, `ChatView`, `ProjectsView`) still lean on bespoke
+     `index.css` classes. Migrating views onto `.ol-*` / `shell.tsx` is the big
+     consistency win — a view-worker task the design-lead should *spec + spot-fix*.
+  3. **Formal contrast audit** (axe/WAVE) across both themes, especially
+     `--text-faint`, `--text-dim`, and status inks on their washes.
+  4. **`.ol-*` visual QA in-browser** in both themes — the primitives were built
+     to spec but haven't all been screenshot-verified against the live views.
 
 ### 2026-07-03 — Formalize the half-step control type tier (`--fs-10-5 … --fs-13-5`) + repoint all 18 sub-pixel font sizes — closes the sub-pixel drift debt
 
