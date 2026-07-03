@@ -43,6 +43,12 @@ const paths: Record<string, React.ReactNode> = {
   "cpu": <><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" /></>,
   "shield": <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />,
   "send": <path d="M12 19V5M5 12l7-7 7 7" />,
+  "x": <><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>,
+  "brain": <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18ZM12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18ZM12 5v13" />,
+  "zap": <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />,
+  "clock": <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
+  "terminal": <><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></>,
+  "dollar": <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
 };
 
 export type IconName = keyof typeof paths;
@@ -51,10 +57,12 @@ export function Icon({
   name,
   size = 14,
   className,
+  style,
 }: {
   name: IconName;
   size?: number;
   className?: string;
+  style?: React.CSSProperties;
 }) {
   return (
     <svg
@@ -67,6 +75,7 @@ export function Icon({
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
+      style={style}
       aria-hidden="true"
     >
       {paths[name] ?? null}

@@ -541,6 +541,51 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
 /* Tool-call list inside a message */
 .tc-list { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
 
-/* View wrapper used by SessionsWorkbench (flex column fill) */
+/* View wrapper used by SessionsView (flex column fill) */
 div[data-view="sessions"].view.on { display: flex; flex: 1; min-height: 0; }
 .chat-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── S2 additions: NavItem, dot-spacer, agent/usage pages ─────────── */
+
+/* NavItem — left-sidebar page links (Agents, Usage) */
+.navitem {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: 5px var(--space-4); border-radius: var(--radius);
+  font-size: var(--fs-12); color: var(--dim);
+  cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  background: none; border: none; width: 100%; text-align: left;
+}
+.navitem:hover { background: var(--hover); color: var(--text); }
+.navitem.on { background: var(--silver-wash); color: var(--text); }
+
+/* Bug 5: spacer replacing the idle dot so session rows stay aligned */
+.dot-spacer { width: 6px; height: 6px; flex-shrink: 0; }
+
+/* Thinking toggle — active state */
+.modelpill[data-thinking="true"] {
+  background: var(--silver-wash);
+  color: var(--silver);
+  border-color: var(--silver);
+}
+
+/* Agents page grid */
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-5);
+  padding: 0 var(--space-8);
+}
+.agent-card { padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-3); }
+.agent-card-head { display: flex; align-items: center; gap: var(--space-4); }
+.agent-name { font-size: var(--fs-14); font-weight: var(--fw-semibold); color: var(--text); flex: 1; }
+
+/* Usage page */
+.usage-list { display: flex; flex-direction: column; gap: var(--space-4); padding: 0 var(--space-8); }
+.usage-row { padding: var(--space-5) var(--space-6); display: flex; align-items: center; justify-content: space-between; }
+.usage-model { display: flex; align-items: center; gap: var(--space-4); }
+
+/* gv-head / gv-body — generic view page header + body */
+.gv-head { height: var(--toolbar-h); flex-shrink: 0; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-8); border-bottom: var(--border-w) solid var(--border); }
+.gv-title { font-size: var(--fs-16); font-weight: var(--fw-semibold); color: var(--text); }
+.gv-body { flex: 1; overflow-y: auto; padding: var(--space-8) 0; }
+
