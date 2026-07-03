@@ -334,9 +334,15 @@ let connecting = false;
 const listeners = new Set<FrameListener>();
 
 function getWsUrl(): string {
-  const proto = BASE.startsWith("https") ? "wss" : "ws";
-  const u = new URL(BASE);
-  return `${proto}://${u.host}/ws?token=${T}`;
+  // BASE is empty in dev (API calls go through the vite proxy). When empty,
+  // build the WS URL from the current page origin so the /ws request rides the
+  // same proxy. `new URL("")` throws, which previously killed connectWs()
+  // silently — so never feed an empty string to URL().
+  const origin = BASE || window.location.origin;
+  const u = new URL(origin);
+  const proto = u.protocol === "https:" ? "wss" : "ws";
+  const q = T ? `?token=${T}` : "";
+  return `${proto}://${u.host}/ws${q}`;
 }
 
 export function connectWs(): void {
