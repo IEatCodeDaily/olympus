@@ -12,7 +12,7 @@
 // and show an honest "no other nodes registered" empty state. When the fleet
 // endpoint ships, swap `useFleetNodes()` for the real hook.
 import { useState } from "react";
-import { Icon } from "../components/Icon";
+import { Icon, providerLogoIcon } from "../components/Icon";
 import { useAgents, useNodes } from "../hooks/queries";
 import { relativeTime } from "../lib/format";
 import type { AgentInfo, NodeInfo, NodeStatus } from "../types";
@@ -40,12 +40,6 @@ function statusDotColor(status: NodeStatus): string {
 function slotPct(used: number, total: number): number {
   if (total <= 0) return 0;
   return Math.max(0, Math.min(100, (used / total) * 100));
-}
-
-/** Harness tag shown in the fleet list. */
-function agentTypeTag(agent: AgentInfo): string {
-  if (agent.kind === "hermes") return agent.isDefault ? "acp" : "hermes";
-  return "cli";
 }
 
 /** Heartbeat label with second precision (the 10s nodes poll makes this meaningful). */
@@ -244,13 +238,11 @@ function Drawer({
 
 function AgentRow({ agent }: { agent: AgentInfo }) {
   return (
-    <div className="agrow">
-      <Icon name="bot" size={14} />
+    <div className="agrow" title={`${agent.provider ?? agent.kind} · ${agent.model ?? "—"}`}>
+      <Icon name={providerLogoIcon(agent.provider)} size={15} />
       <span className="nm">{agent.id}</span>
-      <span className="gtag">{agentTypeTag(agent)}</span>
       <span className="sp" />
       <span className="gk">{agent.model ?? "—"}</span>
-      <span className="gtag">configured</span>
     </div>
   );
 }

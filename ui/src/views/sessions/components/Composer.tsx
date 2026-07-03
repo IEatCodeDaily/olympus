@@ -7,11 +7,10 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { Icon } from "../../../components/Icon";
+import { Icon, providerLogoIcon } from "../../../components/Icon";
 import { useAgents, useModels } from "../../../hooks/queries";
 
 const THINKING_KEY = "olympus-thinking";
-const MODEL_KEY = "olympus-model";
 
 type ThinkingLevel = "off" | "low" | "medium" | "high";
 
@@ -30,15 +29,6 @@ function saveThinking(v: ThinkingLevel) {
   } catch {
     // ignore
   }
-}
-
-/** Map a provider string to an icon name for the agent logo. */
-function providerIcon(provider: string | null | undefined): string {
-  if (!provider) return "bot";
-  if (provider.includes("anthropic")) return "sparkles";
-  if (provider.includes("openai")) return "message-square";
-  if (provider.includes("zai")) return "bot";
-  return "bot";
 }
 
 export function Composer({
@@ -67,7 +57,8 @@ export function Composer({
   const lockedAgent = agents.find(
     (a) => a.id === sessionAgent || (sessionAgent == null && a.isDefault),
   );
-  const agentIcon = providerIcon(lockedAgent?.provider);
+  const agentIcon = providerLogoIcon(lockedAgent?.provider);
+  const agentName = lockedAgent?.id ?? sessionAgent ?? "agent";
 
   const [popupOpen, setPopupOpen] = useState(false);
   const [thinking, setThinking] = useState<ThinkingLevel>(loadThinking);
@@ -122,7 +113,14 @@ export function Composer({
             </button>
           </div>
           <div className="comp-r">
-            {/* Single pill: agent_icon | model | thinking — one popup */}
+            {/* Locked agent chip — harness is fixed at session creation */}
+            <span className="modelpill locked" title={`Agent locked: ${agentName} (${lockedAgent?.provider ?? "—"})`}>
+              <Icon name={agentIcon} size={13} />
+              <span className="nm">{agentName}</span>
+              <Icon name="round" size={9} />
+            </span>
+
+            {/* Model + thinking picker — editable */}
             <div className="selwrap" ref={popupRef} style={{ position: "relative" }}>
               <button
                 type="button"
@@ -130,7 +128,6 @@ export function Composer({
                 title="Model & thinking"
                 onClick={() => setPopupOpen((v) => !v)}
               >
-                <Icon name={agentIcon as import("../../../components/Icon").IconName} size={12} />
                 <span className="nm">{modelLabel}</span>
                 {thinkingLabel && (
                   <>
