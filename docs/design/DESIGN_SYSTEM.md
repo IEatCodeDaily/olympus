@@ -248,14 +248,22 @@ Theme- and density-agnostic fixed geometry.
 
 | Token | Value | | Token | Value |
 |-------|-------|-|-------|-------|
-| `--space-0` | 0 | | `--space-6` | 12px |
-| `--space-1` | 2px | | `--space-8` | 16px |
-| `--space-2` | 4px | | `--space-10` | 20px |
-| `--space-3` | 6px | | `--space-12` | 24px |
+| `--space-0` | 0 | | `--space-5-5` | 11px |
+| `--space-1` | 2px | | `--space-6` | 12px |
+| `--space-2` | 4px | | `--space-8` | 16px |
+| `--space-3` | 6px | | `--space-10` | 20px |
+| `--space-3-5` | 7px | | `--space-12` | 24px |
 | `--space-4` | 8px **(workhorse)** | | `--space-16` | 32px |
-| `--space-5` | 10px | | `--space-20` | 40px |
-| | | | `--space-24` | 48px |
+| `--space-4-5` | 9px | | `--space-20` | 40px |
+| `--space-5` | 10px | | `--space-24` | 48px |
 | | | | `--space-32` | 64px |
+
+> **Odd half-step tier (`--space-3-5`/`-4-5`/`-5-5` = 7/9/11px):** interleaved
+> half-steps that name the odd-pixel spacing the dense older view CSS needs
+> (`.step`/`.kcard`/`.col-h`/`.mi`/`.pal-*` padding + gaps). They mirror the
+> `--fs-10-5…--fs-13-5` control type tier — a first-class home for values that
+> fall between the 2px-quantum steps. Prefer a full step where one fits; reach
+> for a half-step only to name genuinely odd dense-control geometry.
 
 ### Layout constants (chrome measurements; flex under compact)
 
@@ -533,6 +541,66 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 ---
 
 ## 11. Changelog
+
+### 2026-07-04 — Formalize the odd-pixel half-step spacing tier (`--space-3-5`/`-4-5`/`-5-5`) + repoint all 15 off-scale `7/9/11px` padding+gap sites — closes debt #1
+
+- **The debt this closes (top of the visible list the last two runs — the
+  `9px`/`11px` "off-scale raw `Npx`" item):** 15 spacing declarations across the
+  older view CSS in `index.css` carried **odd-pixel padding/gap literals with no
+  matching step token** — `9px` and `11px` (the two axis values called out in the
+  prior run's debt #1) plus their `7px` sibling. Sites: `.sec-head`, `.rs-sec`,
+  `.dtab`, `.tc-body`, `.col-h`, `.kcard`, `.step`, `.agrow`, `.ubar-row`, `.art`,
+  `.mi`, `.md th/td`, `.pal-in`, `.pal-r`. These `7/9/11px` values fall **between**
+  the 2px-quantum steps (`--space-3`=6, `--space-4`=8, `--space-5`=10, `--space-6`=12),
+  so they were the last on-scale-spacing holdouts and could not be repointed without
+  a token to name them.
+- **Why now / why this shape:** the prior two runs' debt #1 explicitly posed the
+  decision — *"add `--space-4-5`(9px)/`--space-5-5`(11px) half-steps (mirrors the
+  `--fs-*-5` half-step precedent) or snap each to the nearest step."* I chose the
+  **half-step tier** over snapping: snapping would move real pixels (a visible
+  ≤2px tightening on already-dense chrome), whereas the half-step tier is **exactly
+  zero pixel delta** and gives the odd-pixel dense-control rhythm a first-class,
+  scale-addressable home — the direct analogue of the `--fs-10-5…--fs-13-5` control
+  type tier landed on 2026-07-03. The working tree was **clean at HEAD** (the
+  precondition the last two runs cited), so the deferred sweep is finally safe.
+- **Fix (system-level, token layer + `index.css` spacing repoints only — no view
+  internals/business logic touched):**
+  - **`design/tokens/spacing.css`** — added three interleaved half-steps to the
+    step scale: `--space-3-5` (7px, dense control padding), `--space-4-5` (9px,
+    dense row/card padding + gaps), `--space-5-5` (11px, panel/section padding),
+    each role-commented as the "odd tier."
+  - **`index.css`** — repointed all 15 sites' padding/gap axes to the new tokens
+    (e.g. `.step padding: 9px 11px` → `var(--space-4-5) var(--space-5-5)`;
+    `.sec-head padding: 9px … 4px` → `var(--space-4-5) … var(--space-2)`;
+    `.mi gap: 9px; padding: 7px 9px` → `var(--space-4-5)` / `var(--space-3-5)
+    var(--space-4-5)`).
+- **Behavior:** **exactly zero pixels move** — every new token equals the literal
+  it replaced (7→7, 9→9, 11→11). Element-dimension primitives (`.spin` 9px×9px,
+  `.srow-spinner` 10px, `.todo .bx` 11px, `.rs-tab` widths, `.divider` 20px) were
+  **left raw on purpose** — they are geometry sizes, not spacing steps, exactly as
+  the bar thicknesses (`.gbar` 6px) stay raw per §5's precedent. Fully reversible
+  (`spacing.css` + the 15 `index.css` lines).
+- **Verified:** `cd ui && bun run typecheck` (exit 0) and `bun run build` (exit 0,
+  CSS 64.98 kB). Grep confirms **zero** remaining `padding|gap: …7/9/11px` sites.
+  Screenshotted the live mock UI (obsidian): session sidebar `.sec-head` (RECENT +
+  count), the open-session transcript with `.tc-body` tool cards, and the right
+  sidebar `.rs-sec` sections (AGENT/NODE/MODEL, CONTEXT WINDOW IN/OUT/MSGS) — all
+  render with clean, even padding and correct alignment, no layout shift. The edit
+  is color-token-agnostic and zero-delta, so daybreak is structurally unaffected by
+  construction. `index.css` confirmed clean at HEAD before the change.
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Adoption gap.** The `.ol-*` primitive library exists but live views
+     (`AppShell`, `FleetView`, `ChatView`, `ProjectsView`, `ContextRing`,
+     `VaultsView`) still lean on bespoke `index.css` classes — a view-worker task
+     to *spec + spot-fix*, now the single largest consistency lever.
+  2. **Full automated axe/WAVE sweep** across every live surface (token-level
+     ratios are done; per-surface DOM audit — focus order, ARIA, component-state
+     contrast — remains).
+  3. **`.ol-*` visual QA in-browser** in both themes — primitives built to spec
+     but not all screenshot-verified against the live views.
+  4. **Remaining raw geometry primitives** (element sizes like `.spin`/`.rs-tab`
+     dimensions) are intentionally raw today; if a density-scalable icon-size tier
+     is ever wanted, that would be the next tokenization frontier.
 
 ### 2026-07-04 — Tokenize the `.ctx-*` ContextRing geometry (radius/space/motion) + fix its 300ms transition — closes long-standing debt #1
 

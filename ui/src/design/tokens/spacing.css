@@ -12,8 +12,11 @@
   --space-1:   2px;
   --space-2:   4px;
   --space-3:   6px;
+  --space-3-5: 7px;   /* half-step (odd tier): dense control padding */
   --space-4:   8px;
+  --space-4-5: 9px;   /* half-step (odd tier): dense row/card padding + gaps */
   --space-5:   10px;
+  --space-5-5: 11px;  /* half-step (odd tier): panel/section padding */
   --space-6:   12px;
   --space-8:   16px;
   --space-10:  20px;
