@@ -68,7 +68,6 @@ button {
 /* ── TopBar ──────────────────────────────────────── */
 .topbar { height: var(--topbar-h); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-6); background: var(--chrome); }
 .tb-left { display: flex; align-items: center; gap: var(--space-4); flex: 1; }
-.tb-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); letter-spacing: var(--tracking-snug); }
 .icobtn { display: flex; align-items: center; justify-content: center; padding: 5px; border-radius: var(--radius); color: var(--dim); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .icobtn:hover { background: var(--hover); color: var(--text); }
 .icobtn:focus-visible { outline: var(--ring-w) solid var(--ring); outline-offset: var(--ring-offset); }
@@ -89,13 +88,6 @@ button {
 .org .mk { width: 14px; height: 14px; background: var(--silver); border-radius: var(--radius-sm); }
 .org .nm { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text); }
 .profile { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--elev); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-full); font-family: var(--font-mono); font-size: var(--fs-10); font-weight: var(--fw-semibold); color: var(--dim); }
-
-/* ── Left icon rail ───────────────────────────────── */
-.rail { width: 44px; flex-shrink: 0; background: var(--chrome); border-right: var(--border-w) solid var(--border); display: flex; flex-direction: column; align-items: center; padding: var(--space-4) 0; gap: var(--space-2); }
-.rail-btn { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; border-radius: var(--radius); background: transparent; color: var(--faint); cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
-.rail-btn:hover { background: var(--hover); color: var(--text); }
-.rail-btn.on { background: var(--silver-wash); color: var(--silver); }
-.rail-btn:focus-visible { outline: var(--ring-w) solid var(--ring); outline-offset: var(--ring-offset); }
 
 /* ── Body ────────────────────────────────────────── */
 .body { flex: 1; min-height: 0; display: flex; background: var(--chrome); }

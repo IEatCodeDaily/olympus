@@ -63,9 +63,6 @@ export function AppShell() {
     <div className="app">
       <TopBar activeSurface={surface} />
       <div className="body">
-        {/* Left icon rail */}
-        <Rail activeSurface={surface} />
-
         {/* Secondary sidebar — per-surface content */}
         {!sidebarCollapsed && surface === "sessions" && (
           <>
@@ -112,6 +109,7 @@ export function AppShell() {
 // ── TopBar ─────────────────────────────────────────
 
 function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
+  const navigate = useNavigate();
   const { toggleSidebar } = useUIStore();
   const { theme, toggleTheme } = useTheme();
 
@@ -128,7 +126,22 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
           <Icon name="panel-left" size={14} />
         </button>
         <span className="divider" />
-        <span className="tb-title">{SURFACES.find((s) => s.surface === activeSurface)?.label ?? "Olympus"}</span>
+        {/* View selector — icon chips for each surface (concept: topbar .layouts) */}
+        <div className="layouts" role="tablist" aria-label="Surfaces">
+          {SURFACES.map((s) => (
+            <button
+              type="button"
+              key={s.surface}
+              className={`chip ${activeSurface === s.surface ? "on" : ""}`}
+              onClick={() => void navigate({ to: s.path })}
+              title={s.label}
+              aria-label={s.label}
+              aria-current={activeSurface === s.surface ? "page" : undefined}
+            >
+              <Icon name={s.icon} size={13} />
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="tb-center">
@@ -177,29 +190,6 @@ function OrgChip() {
       <span className="mk" />
       <span className="nm">{health?.hermesProfile ?? "default"}</span>
     </div>
-  );
-}
-
-// ── Left icon rail ─────────────────────────────────
-
-function Rail({ activeSurface }: { activeSurface: SurfaceName }) {
-  const navigate = useNavigate();
-  return (
-    <nav className="rail" aria-label="Navigation">
-      {SURFACES.map((s) => (
-        <button
-          type="button"
-          key={s.surface}
-          className={`rail-btn ${activeSurface === s.surface ? "on" : ""}`}
-          onClick={() => void navigate({ to: s.path })}
-          title={s.label}
-          aria-label={s.label}
-          aria-current={activeSurface === s.surface ? "page" : undefined}
-        >
-          <Icon name={s.icon} size={16} />
-        </button>
-      ))}
-    </nav>
   );
 }
 
