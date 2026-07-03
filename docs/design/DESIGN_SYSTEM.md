@@ -26,10 +26,11 @@
 >   over the 2026-07-01/02 changelog runs) was dropped; sizes/spacing are raw
 >   literals again in the new file.
 > - **Primitive class names changed:** e.g. `.page-header`→`.gv-head`,
->   `.stat-pill`→`.stat`, `.empty-state-message`→`.empty-state-msg`. `shell.tsx`
->   still emits the OLD class names, so `PageHeader`/`EmptyState`/`StatPill`/
->   `Badge` currently render **unstyled** against the new CSS — a real break for
->   view workers, flagged as the top design debt below.
+>   `.stat-pill`→`.stat`, `.empty-state-message`→`.empty-state-msg`.
+>   **RESOLVED 2026-07-03:** `shell.tsx` was rewritten to emit the live class
+>   vocabulary (same component API), so `PageHeader`/`EmptyState`/`StatPill`/
+>   `Badge`/`PlaceholderBadge` now render correctly against the new CSS. This was
+>   the top design debt; it is fixed.
 >
 > **Why this doc wasn't rewritten in this run:** a UI refactor is in flight and
 > **uncommitted** (TanStack Query + Zustand, `router.ts`, `AppShell.tsx`,
@@ -550,6 +551,41 @@ All motion collapses instantly. Information is never carried by animation alone
 ---
 
 ## 11. Changelog
+
+### 2026-07-03 — Resurrect shell primitives against live CSS (fix the #1 flagged debt) + tokenize amber/red gtag fills
+
+- **Problem (was the top debt in this doc's status banner):** after the
+  `b9a1b0e` silver redesign, `shell.tsx` still emitted the OLD class vocabulary
+  (`.page-header`, `.stat-pill`, `.empty-state-message`, `.badge`/`.badge-*`)
+  that **no longer exists** in the shipped `index.css`. Every shared primitive
+  — `PageHeader`, `EmptyState`, `StatPill`, `PlaceholderBadge`, `Badge` —
+  therefore rendered **completely unstyled**, silently breaking the exact
+  "every view uses shell primitives consistently" contract VISION v0.2 depends
+  on. No live view imports them yet, so the break was latent — the first view
+  worker to adopt a primitive would have shipped naked markup.
+- **Fix:** rewrote `shell.tsx` to emit the **live** class names, same public
+  component API (drop-in, zero call-site changes):
+  - `PageHeader` → `.gv-head` / `.gv-title` / `.gv-sub` / `.gv-actions`
+  - `EmptyState` → `.empty-state` / `-icon` / `-title` / `-msg` / `-cta`
+  - `StatPill` → `.stat` / `.v` / `.l`
+  - `Badge` → `.gtag` + a `kind→variant` map (ready/running/done/online→`ok`,
+    warning→`warn`, blocked/failed/error/offline→`err`)
+  - `PlaceholderBadge` → `.gtag warn` (amber, matches its semantic)
+- Added one missing rule `.empty-state-cta { margin-top:6px }` so the CTA slot
+  has spacing (token-consistent 6px = the existing `--space-3` rhythm).
+- **Also killed the only rule-level hardcoded hexes** feeding these primitives:
+  `.gtag.warn`/`.gtag.err` inlined `#fcd34d1a`/`#fcd34d40`/`#fca5a51a`/`#fca5a540`.
+  Added `--amber-wash`/`--amber-line`/`--red-wash`/`--red-line` to `:root`
+  (value-identical to the literals they replace) and repointed both rules. The
+  green variant already used `--green-wash`/`--green-line`; amber/red now match.
+- **Behavior:** **zero pixels move** — the new tokens equal the old literals,
+  and no view currently renders these primitives, so nothing on screen changes
+  today. This is pure correctness restoration: the primitives now match the CSS
+  a view worker will encounter.
+- **Verified:** `bun run build` exits 0 (CSS 25.49→25.64 kB, exactly the added
+  rule + tokens). `bun run typecheck` shows only the **pre-existing** unrelated
+  error (`Icon.test.tsx` imports uninstalled `@testing-library/user-event`) —
+  my changes add zero new type errors. Fully reversible.
 
 ### 2026-07-03 — Truth reconciliation: flag that the shipped CSS redesign has out-run this spec (doc-only; no code touched)
 
