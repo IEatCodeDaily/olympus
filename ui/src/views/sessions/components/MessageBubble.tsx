@@ -55,18 +55,11 @@ export const MessageBubble = React.memo(function MessageBubble({
     );
   }
 
-  // Tool-result message (role === "tool") renders inline as a card.
-  // Bug 9: no "TOOL" text header — the card styling conveys it.
+  // Tool-result messages (role === "tool") are SUPPRESSED — they are the
+  // result of a tool call already shown inline in the assistant message's
+  // toolCalls array. Rendering them separately creates duplicate dropdowns.
   if (msg.role === "tool") {
-    const tc = msg.toolCalls?.[0] ?? null;
-    return (
-      <ToolCard
-        tc={tc ?? { name: msg.toolName ?? "tool", args: null, result: msg.content }}
-        idx={0}
-        expanded={false}
-        onToggle={() => {}}
-      />
-    );
+    return null;
   }
 
   return (

@@ -161,12 +161,6 @@ export function ChatPage({
     onForkRequested?.(sessionId);
   }, [sessionId, navigate, onForkRequested]);
 
-  const statusLabel =
-    agentStatus === "thinking"
-      ? "thinking…"
-      : agentStatus === "streaming"
-        ? "streaming…"
-        : null;
 
   return (
     <>
@@ -196,14 +190,6 @@ export function ChatPage({
                 </ReactMarkdown>
               </div>
             )}
-            {/* Bug 7b: "thinking…" status indicator */}
-            {agentStatus === "thinking" && !streamingText && (
-              <div className="msg-ai" style={{ opacity: 0.6 }}>
-                <span className="gk" style={{ fontStyle: "italic" }}>
-                  thinking…
-                </span>
-              </div>
-            )}
           </div>
         </div>
 
@@ -227,7 +213,6 @@ export function ChatPage({
           onKeyDown={handleKeyDown}
           onSend={handleSend}
           sending={sending}
-          statusLabel={statusLabel}
           sessionModel={session?.model ?? null}
           sessionAgent={session?.agent ?? null}
         />

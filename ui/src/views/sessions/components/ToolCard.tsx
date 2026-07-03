@@ -35,7 +35,7 @@ export function ToolCard({
   }, [tc.args]);
 
   return (
-    <div className="toolcard">
+    <div className="toolcard muted">
       <div
         className="tc-head"
         style={{ cursor: "pointer" }}

@@ -115,20 +115,17 @@ button {
 .sec-head .sp { flex: 1; }
 .sec-head .ct { font-family: var(--font-mono); font-size: var(--fs-10); color: var(--faint); }
 .sec-content { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-4) var(--space-4); }
-.srow { display: flex; align-items: center; gap: var(--space-4); padding: 5px var(--space-4); border-radius: var(--radius); cursor: pointer; transition: background var(--dur) var(--ease); }
+/* Session rows — clean: title left, time right, hover reveals actions */
+.srow { display: flex; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); border-radius: var(--radius); cursor: pointer; transition: background var(--dur) var(--ease); position: relative; }
 .srow:hover { background: var(--hover); }
 .srow.on { background: var(--silver-wash); }
-.srow .dot { width: 6px; height: 6px; border-radius: var(--radius-full); flex-shrink: 0; }
-.srow .dot.active { background: var(--green); }
-.srow .dot.idle { background: var(--faint); }
-.srow .info { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
-.srow .title { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srow .preview { font-size: var(--fs-10); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srow .meta { display: flex; gap: 5px; margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); flex-shrink: 0; }
-.srow .meta span:not(:last-child) { display: none; }
-.srow .arch { display: flex; visibility: hidden; align-items: center; padding: var(--space-2); border-radius: var(--radius-sm); color: var(--faint); flex-shrink: 0; }
-.srow:hover .arch { visibility: visible; }
-.srow .arch:hover { background: var(--hover); color: var(--text); }
+.srow-title { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.srow-time { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); flex-shrink: 0; }
+.srow-actions { display: none; align-items: center; gap: 1px; position: absolute; right: var(--space-4); background: linear-gradient(90deg, transparent, var(--hover) 30%); padding-left: 20px; }
+.srow:hover .srow-actions { display: flex; }
+.srow:hover .srow-time { display: none; }
+.srow-act { display: flex; align-items: center; justify-content: center; padding: 3px; border-radius: var(--radius-sm); color: var(--faint); }
+.srow-act:hover { background: var(--bg-active); color: var(--text); }
 
 /* ── Sidebar view slots / status icons ──────────── */
 .sbv { display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
@@ -265,7 +262,10 @@ button {
 
 /* ── Toolcard (tool call output) ─────────────────── */
 .toolcard { max-width: var(--measure-msg); background: var(--elev); border: var(--border-w) solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.toolcard.muted { background: var(--bg-elev); border-color: var(--border-faint); opacity: 0.7; }
+.toolcard.muted:hover { opacity: 1; border-color: var(--border); }
 .tc-head { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-6); font-family: var(--font-mono); font-size: var(--fs-12); }
+.toolcard.muted .tc-head .nm { color: var(--text-dim); font-weight: var(--fw-regular); }
 .tc-head .nm { color: var(--text); font-weight: var(--fw-medium); }
 .tc-head .st { color: var(--green); }
 .tc-head .sp { flex: 1; }

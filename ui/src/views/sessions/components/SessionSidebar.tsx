@@ -177,49 +177,71 @@ function SessionSection({
       </div>
       <div className="sec-content">
         {sessions.slice(0, 50).map((s) => (
-          <button
-            type="button"
+          <SessionRow
             key={s.id}
-            className={`srow ${activeSessionId === s.id ? "on" : ""}`}
-            data-session-id={s.id}
-            data-managed={s.managed ? "true" : "false"}
-            onClick={() => onSelect(s.id)}
-          >
-            {/* Bug 5: dot ONLY when liveness === "active" */}
-            {s.liveness === "active" ? (
-              <span className="dot active" />
-            ) : (
-              <span className="dot-spacer" />
-            )}
-            <span className="info">
-              <span className="title">{s.title || "Untitled"}</span>
-            </span>
-            <span className="meta">
-              {s.model && (
-                <span
-                  className="modelpill"
-                  style={{
-                    fontSize: 9,
-                    padding: "1px 4px",
-                    background: "none",
-                    border: "none",
-                    color: "var(--faint)",
-                    fontFamily: "var(--font-mono)",
-                    maxWidth: 64,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {s.model.split("-").slice(0, 2).join("-")}
-                </span>
-              )}
-              <span>{s.messageCount}</span>
-              <span>{timeAgo(s.lastActivity)}</span>
-            </span>
-          </button>
+            session={s}
+            active={activeSessionId === s.id}
+            onSelect={onSelect}
+          />
         ))}
       </div>
     </>
+  );
+}
+
+/** A clean session row: title left, time right. Hover reveals pin/archive
+ *  actions. A native title tooltip shows agent · node · model · summary. */
+function SessionRow({
+  session,
+  active,
+  onSelect,
+}: {
+  session: Session;
+  active: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const title = session.title || "Untitled";
+  const time = timeAgo(session.lastActivity);
+
+  // Tooltip: agent · node · model · summary (first ~80 chars of content)
+  const tooltip = [
+    session.agent ? `agent: ${session.agent}` : null,
+    session.node ? `node: ${session.node}` : null,
+    session.model ? `model: ${session.model}` : null,
+    `${session.messageCount} messages`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div
+      className={`srow ${active ? "on" : ""}`}
+      data-session-id={session.id}
+      data-managed={session.managed ? "true" : "false"}
+      title={tooltip}
+      onClick={() => onSelect(session.id)}
+    >
+      <span className="srow-title">{title}</span>
+      <span className="srow-time">{time}</span>
+      {/* Hover actions */}
+      <span className="srow-actions">
+        <button
+          type="button"
+          className="srow-act"
+          title="Pin"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Icon name="pin" size={11} />
+        </button>
+        <button
+          type="button"
+          className="srow-act"
+          title="Archive"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Icon name="archive" size={11} />
+        </button>
+      </span>
+    </div>
   );
 }

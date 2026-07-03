@@ -1,34 +1,44 @@
 /**
  * Composer — the chat input bar.
  *
- * Bug fixes:
- *  - Bug 2: Thinking toggle (localStorage 'olympus-thinking'), persisted.
- *  - Bug 3: Agent label shows id + provider only (e.g. "coding-agent · openai-codex"),
- *    no "ACP/CLI" dual-label.
- *  - Bug 4: Fetches /api/agents (via useAgents hook) — Claude, Codex, etc.
+ * The model configuration is a single pill: ( agent_icon | model | thinking ).
+ * Agent is LOCKED from session creation — only model + thinking are configurable
+ * here. One popup controls model + thinking level.
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { Icon, providerLogoIcon } from "../../../components/Icon";
+import { Icon } from "../../../components/Icon";
 import { useAgents, useModels } from "../../../hooks/queries";
-import type { AgentInfo } from "../../../types";
 
 const THINKING_KEY = "olympus-thinking";
+const MODEL_KEY = "olympus-model";
 
-function loadThinking(): boolean {
+type ThinkingLevel = "off" | "low" | "medium" | "high";
+
+function loadThinking(): ThinkingLevel {
   try {
-    return localStorage.getItem(THINKING_KEY) === "true";
+    const v = localStorage.getItem(THINKING_KEY);
+    return (v as ThinkingLevel) ?? "off";
   } catch {
-    return false;
+    return "off";
   }
 }
 
-function saveThinking(v: boolean) {
+function saveThinking(v: ThinkingLevel) {
   try {
-    localStorage.setItem(THINKING_KEY, String(v));
+    localStorage.setItem(THINKING_KEY, v);
   } catch {
     // ignore
   }
+}
+
+/** Map a provider string to an icon name for the agent logo. */
+function providerIcon(provider: string | null | undefined): string {
+  if (!provider) return "bot";
+  if (provider.includes("anthropic")) return "sparkles";
+  if (provider.includes("openai")) return "message-square";
+  if (provider.includes("zai")) return "bot";
+  return "bot";
 }
 
 export function Composer({
@@ -37,7 +47,6 @@ export function Composer({
   onKeyDown,
   onSend,
   sending,
-  statusLabel,
   sessionModel,
   sessionAgent,
 }: {
@@ -46,7 +55,6 @@ export function Composer({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
   sending: boolean;
-  statusLabel: string | null;
   sessionModel: string | null;
   sessionAgent: string | null;
 }) {
@@ -55,48 +63,44 @@ export function Composer({
   const agents = agentsData?.agents ?? [];
   const models = modelsData?.models ?? [];
 
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [thinking, setThinking] = useState(loadThinking);
-  const [selectedAgent, setSelectedAgent] = useState<string>(
-    sessionAgent ?? agents.find((a) => a.isDefault)?.id ?? "default",
+  // The agent is locked from the session — find it to get provider + icon
+  const lockedAgent = agents.find(
+    (a) => a.id === sessionAgent || (sessionAgent == null && a.isDefault),
   );
-  const [selectedModel, setSelectedModel] = useState<string>(
-    sessionModel ?? models[0]?.id ?? "",
-  );
-  const pickerRef = useRef<HTMLDivElement>(null);
+  const agentIcon = providerIcon(lockedAgent?.provider);
 
-  // Update selections if session data arrives late
-  useEffect(() => {
-    if (sessionAgent) setSelectedAgent(sessionAgent);
-  }, [sessionAgent]);
+  const [popupOpen, setPopupOpen] = useState(false);
+  const [thinking, setThinking] = useState<ThinkingLevel>(loadThinking);
+  const [selectedModel, setSelectedModel] = useState<string>(
+    sessionModel ?? lockedAgent?.model ?? models[0]?.id ?? "",
+  );
+  const popupRef = useRef<HTMLDivElement>(null);
+
+  // Sync when session data arrives
   useEffect(() => {
     if (sessionModel) setSelectedModel(sessionModel);
   }, [sessionModel]);
 
-  // Close picker on outside click
+  // Close popup on outside click
   useEffect(() => {
-    if (!pickerOpen) return;
+    if (!popupOpen) return;
     const handler = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setPickerOpen(false);
+      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
+        setPopupOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [pickerOpen]);
+  }, [popupOpen]);
 
-  const toggleThinking = () => {
-    const next = !thinking;
-    setThinking(next);
-    saveThinking(next);
+  const setThink = (v: ThinkingLevel) => {
+    setThinking(v);
+    saveThinking(v);
   };
 
-  // Bug 3: show id + provider for the active agent
-  const activeAgent: AgentInfo | undefined =
-    agents.find((a) => a.id === selectedAgent) ?? agents.find((a) => a.isDefault);
-  const agentLabel = activeAgent
-    ? `${activeAgent.id}${activeAgent.provider ? " · " + activeAgent.provider : ""}`
-    : selectedAgent;
+  const thinkingLabel =
+    thinking === "off" ? "" : thinking.charAt(0).toUpperCase() + thinking.slice(1);
+  const modelLabel = selectedModel || lockedAgent?.model || "auto";
 
   return (
     <div className="composer">
@@ -112,70 +116,35 @@ export function Composer({
         />
         <div className="comp-bar">
           <div className="comp-l">
-            {/* Access mode pill */}
             <button type="button" className="modelpill" title="Access mode">
               <Icon name="shield" size={12} />
               <span className="nm">Full access</span>
             </button>
-            {/* Bug 2: Thinking toggle */}
-            <button
-              type="button"
-              className={`modelpill${thinking ? " on" : ""}`}
-              title="Extended thinking"
-              onClick={toggleThinking}
-              data-thinking={thinking}
-            >
-              <Icon name="brain" size={12} />
-              <span className="nm">Thinking</span>
-            </button>
           </div>
           <div className="comp-r">
-            {/* Agent / model picker — Bug 3+4 */}
-            <div className="selwrap" ref={pickerRef} style={{ position: "relative" }}>
+            {/* Single pill: agent_icon | model | thinking — one popup */}
+            <div className="selwrap" ref={popupRef} style={{ position: "relative" }}>
               <button
                 type="button"
                 className="modelpill"
-                title="Agent · model"
-                onClick={() => setPickerOpen((v) => !v)}
+                title="Model & thinking"
+                onClick={() => setPopupOpen((v) => !v)}
               >
-                <Icon name={providerLogoIcon(activeAgent?.provider)} size={12} />
-                <span className="nm">{agentLabel}</span>
-                <span className="psep" />
-                <span className="nm">{selectedModel || activeAgent?.model || "auto"}</span>
+                <Icon name={agentIcon as import("../../../components/Icon").IconName} size={12} />
+                <span className="nm">{modelLabel}</span>
+                {thinkingLabel && (
+                  <>
+                    <span className="psep" />
+                    <span className="nm">{thinkingLabel}</span>
+                  </>
+                )}
                 <Icon name="chevron-down" size={10} />
               </button>
 
-              {pickerOpen && (
+              {popupOpen && (
                 <div className="menu selpop" style={{ display: "flex" }}>
-                  <div className="gk" style={{ padding: "5px 8px 2px" }}>
-                    agent
-                  </div>
-                  {agents.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      className={`mi sel-agent${selectedAgent === a.id ? " on" : ""}`}
-                      onClick={() => {
-                        setSelectedAgent(a.id);
-                        if (a.model) setSelectedModel(a.model);
-                        setPickerOpen(false);
-                      }}
-                    >
-                      <span>
-                        {a.id}
-                        {a.provider && (
-                          <span style={{ color: "var(--faint)", marginLeft: 6 }}>
-                            {a.provider}
-                          </span>
-                        )}
-                      </span>
-                      {selectedAgent === a.id && <span className="mk2">✓</span>}
-                    </button>
-                  ))}
-                  <div className="cp-div" />
-                  <div className="gk" style={{ padding: "5px 8px 2px" }}>
-                    model
-                  </div>
+                  {/* Model selector */}
+                  <div className="gk" style={{ padding: "5px 8px 2px" }}>model</div>
                   {models.map((m) => (
                     <button
                       key={m.id}
@@ -183,27 +152,36 @@ export function Composer({
                       className={`mi${selectedModel === m.id ? " on" : ""}`}
                       onClick={() => {
                         setSelectedModel(m.id);
-                        setPickerOpen(false);
+                        setPopupOpen(false);
                       }}
                     >
                       <span>{m.id}</span>
                       {selectedModel === m.id && <span className="mk2">✓</span>}
                     </button>
                   ))}
+
+                  <div className="cp-div" />
+
+                  {/* Thinking level */}
+                  <div className="gk" style={{ padding: "5px 8px 2px" }}>thinking</div>
+                  {(["off", "low", "medium", "high"] as ThinkingLevel[]).map((lvl) => (
+                    <button
+                      key={lvl}
+                      type="button"
+                      className={`mi${thinking === lvl ? " on" : ""}`}
+                      onClick={() => {
+                        setThink(lvl);
+                        setPopupOpen(false);
+                      }}
+                    >
+                      <span>{lvl === "off" ? "Off" : lvl.charAt(0).toUpperCase() + lvl.slice(1)}</span>
+                      {thinking === lvl && <span className="mk2">✓</span>}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
 
-            {sending && <span className="spin" />}
-            {statusLabel && (
-              <span
-                className="comp-hint"
-                style={{ color: "var(--amber)", fontStyle: "italic" }}
-              >
-                {statusLabel}
-              </span>
-            )}
-            {!statusLabel && <span className="comp-hint">↵ send · ⇧↵ newline</span>}
             <button
               type="button"
               className="send"
