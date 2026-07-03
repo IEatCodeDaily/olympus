@@ -44,16 +44,26 @@ impl AgentRuntime for MockAgentRuntime {
 
     async fn send(&self, cmd: AgentCommand) -> anyhow::Result<()> {
         if let AgentCommand::Prompt { text, .. } = &cmd {
-            // Simulate the agent echoing the prompt text back as a response.
-            let response = if text.to_lowercase().contains("pong") {
-                "PONG".to_string()
-            } else {
-                format!("echo: {text}")
-            };
-            // broadcast::send is sync; Err (no subscribers) is fine.
-            let _ = self.events_tx.send(AgentEvent::Text(response));
-            let _ = self.events_tx.send(AgentEvent::Done {
-                finish_reason: Some("end_turn".into()),
+            let text = text.clone();
+            let events_tx = self.events_tx.clone();
+            tokio::spawn(async move {
+                tokio::task::yield_now().await;
+                if text.to_lowercase().contains("agent error") {
+                    let _ = events_tx.send(AgentEvent::Error("mock failure".into()));
+                    return;
+                }
+
+                // Simulate the agent echoing the prompt text back as a response.
+                let response = if text.to_lowercase().contains("pong") {
+                    "PONG".to_string()
+                } else {
+                    format!("echo: {text}")
+                };
+                // broadcast::send is sync; Err (no subscribers) is fine.
+                let _ = events_tx.send(AgentEvent::Text(response));
+                let _ = events_tx.send(AgentEvent::Done {
+                    finish_reason: Some("end_turn".into()),
+                });
             });
         }
         Ok(())
