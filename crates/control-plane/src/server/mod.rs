@@ -611,13 +611,19 @@ async fn list_sessions(
         .collect();
     drop(views);
 
-    // Stamp derived liveness: in-flight (bridge-authoritative) OR recent activity.
+    // Stamp derived liveness. Managed sessions use the authoritative in-flight
+    // flag ("running"/"idle"); observed sessions fall back to activity recency.
     let in_flight = state.bridge.in_flight_set().await;
     let now = now_epoch();
     for r in rows.iter_mut() {
-        r.liveness =
-            crate::server::dto::compute_liveness(r.last_activity, now, in_flight.contains(&r.id))
-                .to_string();
+        let managed = r.source == "acp" || r.source == "olympus";
+        r.liveness = crate::server::dto::compute_liveness(
+            r.last_activity,
+            now,
+            in_flight.contains(&r.id),
+            managed,
+        )
+        .to_string();
     }
 
     // Apply the requested sort (all descending). Default = lastActivity.
@@ -659,10 +665,12 @@ async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> R
             let mut dto = SessionDto::from_row(row);
             drop(views);
             let in_flight = state.bridge.in_flight_set().await;
+            let managed = dto.source == "acp" || dto.source == "olympus";
             dto.liveness = crate::server::dto::compute_liveness(
                 dto.last_activity,
                 now_epoch(),
                 in_flight.contains(&dto.id),
+                managed,
             )
             .to_string();
             Json(dto).into_response()
@@ -1156,10 +1164,11 @@ async fn create_session(
                     })
             };
 
-            // A freshly-created draft is active (within the recency window).
+            // A freshly-created managed draft has no in-flight turn yet → idle.
             let mut dto = dto;
+            let managed = dto.source == "acp" || dto.source == "olympus";
             dto.liveness =
-                crate::server::dto::compute_liveness(dto.last_activity, now_epoch(), false)
+                crate::server::dto::compute_liveness(dto.last_activity, now_epoch(), false, managed)
                     .to_string();
 
             let _ = state.deltas.send(ServerFrame::SessionAdded {

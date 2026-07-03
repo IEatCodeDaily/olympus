@@ -34,10 +34,11 @@ export function SessionSidebar({
   const sessions = sessionData?.sessions ?? [];
   const history = historyData?.sessions ?? [];
 
-  // PINNED = managed + active liveness
-  const pinned = sessions.filter((s) => s.liveness === "active");
-  // RECENT = managed + not active
-  const recent = sessions.filter((s) => s.liveness !== "active");
+  // PINNED = a turn is live (running) or recently active
+  const isLive = (s: Session) => s.liveness === "running" || s.liveness === "active";
+  const pinned = sessions.filter(isLive);
+  // RECENT = managed + not live
+  const recent = sessions.filter((s) => !isLive(s));
   // OBSERVED = not managed (imported from hermes)
   const observed = history;
 
@@ -215,11 +216,11 @@ function SessionRow({
     .join(" · ");
 
   // Status icon logic:
-  //   active = agent is running → spinner
-  //   idle + opened = no icon (user is looking at it)
-  //   idle + not opened = no icon (completed sessions lose the dot once opened)
+  //   running = a turn is in-flight (managed) → spinner
+  //   active  = recent activity (observed) → spinner
+  //   idle    = no icon
   //   TODO: when backend exposes "waiting for input" → orange ! icon
-  const isRunning = session.liveness === "active";
+  const isRunning = session.liveness === "running" || session.liveness === "active";
   const showIcon = isRunning && !active;
 
   return (

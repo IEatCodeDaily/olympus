@@ -53,15 +53,40 @@ pub struct SessionDto {
     pub card_id: Option<String>,
 }
 
-/// Recency window (seconds) within which a session with no in-flight turn is
-/// still considered "active" because something wrote to it recently.
+/// Recency window (seconds) within which an OBSERVED session (one Olympus does
+/// not drive) is still considered "active" because something wrote to it
+/// recently. Managed sessions ignore this — they use the authoritative
+/// in-flight flag instead (see `compute_liveness`).
 pub const ACTIVE_WINDOW_SECS: f64 = 90.0;
 
-/// Derive liveness from the authoritative in-flight flag (a turn is actively
-/// streaming) and activity recency. `in_flight` short-circuits to active; this
-/// is the accurate signal for Olympus-managed sessions the bridge drives.
-pub fn compute_liveness(last_activity: f64, now: f64, in_flight: bool) -> &'static str {
-    if in_flight || (now - last_activity) <= ACTIVE_WINDOW_SECS {
+/// Derive a session's live state, honest by construction:
+///
+/// - **Managed** sessions (Olympus drives the turn): state is the authoritative
+///   in-flight flag. `in_flight` → "running" (a turn is actively streaming),
+///   otherwise "idle" (resting / ready for the next message). We do NOT use the
+///   recency window here — a completed turn is idle the instant it finishes, not
+///   90s later. This fixes sessions appearing "active" long after they replied.
+/// - **Observed** sessions (imported; Olympus does not drive them, so there is
+///   no in-flight signal): fall back to recency — "active" if something wrote
+///   within the window, else "idle". This reflects *recent activity*, not a
+///   confirmed live process.
+///
+/// Returns "running" | "active" | "idle". ("input-required" is intentionally not
+/// synthesized — the bridge does not yet track ACP permission requests, and a
+/// fake value would be worse than an honest "running".)
+pub fn compute_liveness(
+    last_activity: f64,
+    now: f64,
+    in_flight: bool,
+    managed: bool,
+) -> &'static str {
+    if managed {
+        if in_flight {
+            "running"
+        } else {
+            "idle"
+        }
+    } else if (now - last_activity) <= ACTIVE_WINDOW_SECS {
         "active"
     } else {
         "idle"
@@ -403,24 +428,32 @@ mod tests {
     use crate::views::SessionRow;
 
     #[test]
-    fn liveness_in_flight_is_active_even_when_stale() {
-        // A turn streaming right now is active regardless of last-activity age.
-        assert_eq!(compute_liveness(0.0, 1_000_000.0, true), "active");
+    fn liveness_managed_in_flight_is_running() {
+        // A managed turn streaming right now is "running" regardless of age.
+        assert_eq!(compute_liveness(0.0, 1_000_000.0, true, true), "running");
     }
 
     #[test]
-    fn liveness_recent_activity_is_active() {
+    fn liveness_managed_not_in_flight_is_idle() {
+        // A managed session with no in-flight turn is idle the instant it
+        // finishes — no 90s recency fudge (fixes "active" lingering after reply).
         let now = 1_000_000.0;
-        assert_eq!(compute_liveness(now - 10.0, now, false), "active");
+        assert_eq!(compute_liveness(now - 5.0, now, false, true), "idle");
     }
 
     #[test]
-    fn liveness_stale_no_inflight_is_idle() {
+    fn liveness_observed_recent_activity_is_active() {
+        let now = 1_000_000.0;
+        assert_eq!(compute_liveness(now - 10.0, now, false, false), "active");
+    }
+
+    #[test]
+    fn liveness_observed_stale_is_idle() {
         let now = 1_000_000.0;
         // Older than the recency window and nothing in-flight → idle (honest:
         // could be walked-away or crashed; we don't claim "dead").
         assert_eq!(
-            compute_liveness(now - (ACTIVE_WINDOW_SECS + 30.0), now, false),
+            compute_liveness(now - (ACTIVE_WINDOW_SECS + 30.0), now, false, false),
             "idle"
         );
     }
