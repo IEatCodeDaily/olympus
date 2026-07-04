@@ -135,6 +135,14 @@ impl BridgeManager {
         }
     }
 
+    /// Return the string path of a session's space directory, or `None` if
+    /// no spaces root is configured (used by attach_session_project to locate
+    /// the space for symlinking).
+    pub fn space_for(&self, session_id: &str) -> Option<String> {
+        self.space_path(session_id)
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
     /// Mint a fresh durable Olympus session id: `<utc-compact>-<hash>`, e.g.
     /// `20260630T154812Z-a1b2c3d4`. Stable from birth (no draft→real rename) —
     /// only the space and agent session are lazy. Node is NOT baked into the id

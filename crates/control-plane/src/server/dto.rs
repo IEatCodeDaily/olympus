@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
 use crate::vault::{NoteDocument, NoteTreeEntry, NoteTreeEntryKind, VaultSummary};
-use crate::views::{CardRow, MessageRow, RegistryEntry, RepoRow, SessionRow, SetupRow};
+use crate::views::{CardRow, MessageRow, ProjectRow, RegistryEntry, RepoRow, SessionRow, SetupRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -422,6 +422,31 @@ impl From<NoteDocument> for NoteDocumentDto {
     }
 }
 
+/// `Project` as the UI consumes it — camelCase wire DTO.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDto {
+    pub id: String,
+    pub name: String,
+    pub vaults: Vec<String>,
+    pub repos: Vec<String>,
+    pub boards: Vec<String>,
+    pub created_at: f64,
+}
+
+impl ProjectDto {
+    pub fn from_row(row: &ProjectRow) -> Self {
+        Self {
+            id: row.project_id.clone(),
+            name: row.name.clone(),
+            vaults: row.vaults.clone(),
+            repos: row.repos.clone(),
+            boards: row.boards.clone(),
+            created_at: row.created_at,
+        }
+    }
+}
+
 /// `Repo` as the UI consumes it (api-contract.md §Repos).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -543,6 +568,7 @@ mod tests {
             node: None,
             parent_session_id: None,
             card_id: None,
+            project_id: None,
         }
     }
 

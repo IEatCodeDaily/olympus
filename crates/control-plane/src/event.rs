@@ -213,6 +213,29 @@ pub enum Event {
         slug: String,
         attached_at: f64,
     },
+    // ---- Project events (context container — vaults + repos + boards) ----
+    /// A project was created.
+    ProjectCreated {
+        project_id: String,
+        name: String,
+        created_at: f64,
+    },
+    /// A project's metadata was updated (name, bound vaults/repos/boards).
+    ProjectUpdated {
+        project_id: String,
+        name: Option<String>,
+        vaults: Option<Vec<String>>,
+        repos: Option<Vec<String>>,
+        boards: Option<Vec<String>>,
+    },
+    /// A project was deleted (tombstoned).
+    ProjectDeleted { project_id: String, deleted_at: f64 },
+    /// A session was attached to a project.
+    SessionProjectAttached {
+        session_id: String,
+        project_id: String,
+        attached_at: f64,
+    },
 }
 
 #[cfg(test)]

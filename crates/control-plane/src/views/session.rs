@@ -66,6 +66,8 @@ pub struct SessionRow {
     pub parent_session_id: Option<String>,
     /// Card that owns this session tree, if linked. Inherited by forks.
     pub card_id: Option<String>,
+    /// Project attached to this session, if any (from SessionProjectAttached).
+    pub project_id: Option<String>,
 }
 
 /// In-memory projection of sessions from the event log (ADR §2.4).
@@ -130,6 +132,7 @@ impl SessionView {
                         node: node.clone(),
                         parent_session_id: None,
                         card_id: None,
+                        project_id: None,
                     },
                 );
             }
@@ -181,6 +184,15 @@ impl SessionView {
                     if *timestamp > row.last_activity {
                         row.last_activity = *timestamp;
                     }
+                }
+            }
+            Event::SessionProjectAttached {
+                session_id,
+                project_id,
+                ..
+            } => {
+                if let Some(row) = self.sessions.get_mut(session_id) {
+                    row.project_id = Some(project_id.clone());
                 }
             }
             Event::MessageRemoved { .. } => {}

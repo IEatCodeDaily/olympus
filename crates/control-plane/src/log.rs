@@ -183,6 +183,28 @@ enum StoredVariant {
         slug: String,
         attached_at: f64,
     },
+    // ---- Project events (context container) — MUST remain at the END ----
+    ProjectCreated {
+        project_id: String,
+        name: String,
+        created_at: f64,
+    },
+    ProjectUpdated {
+        project_id: String,
+        name: Option<String>,
+        vaults: Option<Vec<String>>,
+        repos: Option<Vec<String>>,
+        boards: Option<Vec<String>>,
+    },
+    ProjectDeleted {
+        project_id: String,
+        deleted_at: f64,
+    },
+    SessionProjectAttached {
+        session_id: String,
+        project_id: String,
+        attached_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -428,6 +450,44 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
         } => StoredVariant::SessionRepoAttached {
             session_id: session_id.clone(),
             slug: slug.clone(),
+            attached_at: *attached_at,
+        },
+        Event::ProjectCreated {
+            project_id,
+            name,
+            created_at,
+        } => StoredVariant::ProjectCreated {
+            project_id: project_id.clone(),
+            name: name.clone(),
+            created_at: *created_at,
+        },
+        Event::ProjectUpdated {
+            project_id,
+            name,
+            vaults,
+            repos,
+            boards,
+        } => StoredVariant::ProjectUpdated {
+            project_id: project_id.clone(),
+            name: name.clone(),
+            vaults: vaults.clone(),
+            repos: repos.clone(),
+            boards: boards.clone(),
+        },
+        Event::ProjectDeleted {
+            project_id,
+            deleted_at,
+        } => StoredVariant::ProjectDeleted {
+            project_id: project_id.clone(),
+            deleted_at: *deleted_at,
+        },
+        Event::SessionProjectAttached {
+            session_id,
+            project_id,
+            attached_at,
+        } => StoredVariant::SessionProjectAttached {
+            session_id: session_id.clone(),
+            project_id: project_id.clone(),
             attached_at: *attached_at,
         },
     };
@@ -705,6 +765,44 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             slug,
             attached_at,
         },
+        StoredVariant::ProjectCreated {
+            project_id,
+            name,
+            created_at,
+        } => Event::ProjectCreated {
+            project_id,
+            name,
+            created_at,
+        },
+        StoredVariant::ProjectUpdated {
+            project_id,
+            name,
+            vaults,
+            repos,
+            boards,
+        } => Event::ProjectUpdated {
+            project_id,
+            name,
+            vaults,
+            repos,
+            boards,
+        },
+        StoredVariant::ProjectDeleted {
+            project_id,
+            deleted_at,
+        } => Event::ProjectDeleted {
+            project_id,
+            deleted_at,
+        },
+        StoredVariant::SessionProjectAttached {
+            session_id,
+            project_id,
+            attached_at,
+        } => Event::SessionProjectAttached {
+            session_id,
+            project_id,
+            attached_at,
+        },
     })
 }
 
@@ -817,7 +915,11 @@ impl Log {
                 | Event::SessionHandover { .. }
                 | Event::RepoRegistered { .. }
                 | Event::RepoRemoved { .. }
-                | Event::SessionRepoAttached { .. } => true,
+                | Event::SessionRepoAttached { .. }
+                | Event::ProjectCreated { .. }
+                | Event::ProjectUpdated { .. }
+                | Event::ProjectDeleted { .. }
+                | Event::SessionProjectAttached { .. } => true,
                 Event::SessionCreated { source, .. } => source == "olympus",
                 Event::SessionUpdated { session_id, .. }
                 | Event::MessageAppended { session_id, .. }

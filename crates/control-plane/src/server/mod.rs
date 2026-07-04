@@ -36,7 +36,7 @@ use crate::search::SearchIndex;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
 use dto::{
-    CardDto, MessageDto, NoteDocumentDto, NoteTreeEntryDto, RegistryEntryDto, RepoDto,
+    CardDto, MessageDto, NoteDocumentDto, NoteTreeEntryDto, ProjectDto, RegistryEntryDto,
     SearchHitDto, SessionDto, SetupDto, VaultSummaryDto,
 };
 use ws::ServerFrame;
@@ -87,6 +87,8 @@ pub struct AppState {
     pub proxy: crate::proxy::ProxyTable,
     /// Markdown-first knowledge vault storage (ADR 0004).
     pub vaults: Arc<crate::vault::VaultStore>,
+    /// Project (context container) storage — dir/manifest/symlink.
+    pub projects: Arc<crate::projects::ProjectStore>,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -137,6 +139,15 @@ pub fn build_router(state: AppState) -> Router {
                 .put(put_vault_note)
                 .delete(delete_vault_note),
         )
+        .route("/api/projects", get(list_projects).post(create_project))
+        .route(
+            "/api/projects/{id}",
+            get(get_project).patch(patch_project).delete(delete_project),
+        )
+        .route(
+            "/api/sessions/{id}/project",
+            axum::routing::post(attach_session_project),
+        )
         .route(
             "/api/proxy",
             get(crate::proxy::list_proxy_endpoints).post(crate::proxy::create_proxy_endpoint),
@@ -145,9 +156,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/proxy/{slug}",
             axum::routing::delete(crate::proxy::delete_proxy_endpoint),
         )
-        .route("/api/repos", get(list_repos).post(register_repo))
-        .route("/api/repos/{slug}", get(get_repo).delete(remove_repo))
-        .route("/api/sessions/{id}/repos", post(attach_repo))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -951,84 +959,192 @@ fn vault_error(err: anyhow::Error) -> Response {
         .into_response()
 }
 
-// ── Repo handlers ────────────────────────────────────────────────────────
+// ---- Projects (context container) ------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-struct RegisterRepoBody {
-    slug: String,
-    url: String,
-    #[serde(default = "default_branch")]
-    default_branch: String,
+#[serde(rename_all = "camelCase")]
+struct CreateProjectBody {
+    name: String,
 }
 
-fn default_branch() -> String {
-    "main".to_string()
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PatchProjectBody {
+    name: Option<String>,
+    vaults: Option<Vec<String>>,
+    repos: Option<Vec<String>>,
+    boards: Option<Vec<String>>,
 }
 
-async fn list_repos(State(state): State<AppState>) -> Response {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachProjectBody {
+    project_id: String,
+}
+
+async fn list_projects(State(state): State<AppState>) -> Response {
     let views = state.views.read().await;
-    let dtos: Vec<RepoDto> = views
-        .repos
+    let rows: Vec<ProjectDto> = views
+        .projects
         .list()
-        .iter()
-        .map(|r| RepoDto::from_row(r))
+        .into_iter()
+        .map(ProjectDto::from_row)
         .collect();
-    drop(views);
-    Json(dtos).into_response()
+    Json(json!({ "projects": rows, "total": rows.len() })).into_response()
 }
 
-async fn get_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
-    match state.views.read().await.repos.get(&slug) {
-        Some(row) => Json(RepoDto::from_row(row)).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+async fn get_project(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let views = state.views.read().await;
+    match views.projects.get(&id) {
+        Some(row) => Json(ProjectDto::from_row(row)).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not_found", "message": "project not found" })),
+        )
+            .into_response(),
     }
 }
 
-async fn register_repo(
+async fn create_project(
     State(state): State<AppState>,
-    Json(body): Json<RegisterRepoBody>,
+    Json(body): Json<CreateProjectBody>,
 ) -> Response {
-    let event = crate::event::Event::RepoRegistered {
-        slug: body.slug.clone(),
-        url: body.url.clone(),
-        default_branch: body.default_branch.clone(),
-        registered_at: now_epoch(),
-    };
-    append_and_apply(&state, event).await
-}
-
-async fn remove_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
-    // Verify repo exists before emitting removal event.
-    if state.views.read().await.repos.get(&slug).is_none() {
-        return StatusCode::NOT_FOUND.into_response();
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid", "message": "name is required" })),
+        )
+            .into_response();
     }
-    let event = crate::event::Event::RepoRemoved {
-        slug,
-        removed_at: now_epoch(),
+    let project_id = uuid::Uuid::new_v4().to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::ProjectCreated {
+        project_id: project_id.clone(),
+        name: name.clone(),
+        created_at: now,
     };
-    append_and_apply(&state, event).await
+    // Persist manifest to disk (best-effort; event is the source of truth).
+    let _ = state.projects.create(&project_id, &name, now);
+    append_and_apply(&state, event).await;
+    let views = state.views.read().await;
+    match views.projects.get(&project_id) {
+        Some(row) => (StatusCode::CREATED, Json(ProjectDto::from_row(row))).into_response(),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
-#[derive(Debug, Deserialize)]
-struct AttachRepoBody {
-    slug: String,
+async fn patch_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PatchProjectBody>,
+) -> Response {
+    {
+        let views = state.views.read().await;
+        if views.projects.get(&id).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "not_found", "message": "project not found" })),
+            )
+                .into_response();
+        }
+    }
+    // Update on-disk manifest (best-effort).
+    let _ = state.projects.update(
+        &id,
+        body.name.as_deref(),
+        body.vaults.as_deref(),
+        body.repos.as_deref(),
+        body.boards.as_deref(),
+    );
+    let event = crate::event::Event::ProjectUpdated {
+        project_id: id.clone(),
+        name: body.name,
+        vaults: body.vaults,
+        repos: body.repos,
+        boards: body.boards,
+    };
+    append_and_apply(&state, event).await;
+    let views = state.views.read().await;
+    match views.projects.get(&id) {
+        Some(row) => Json(ProjectDto::from_row(row)).into_response(),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
-async fn attach_repo(
+async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    {
+        let views = state.views.read().await;
+        if views.projects.get(&id).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "not_found", "message": "project not found" })),
+            )
+                .into_response();
+        }
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::ProjectDeleted {
+        project_id: id.clone(),
+        deleted_at: now,
+    };
+    append_and_apply(&state, event).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn attach_session_project(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
-    Json(body): Json<AttachRepoBody>,
+    Json(body): Json<AttachProjectBody>,
 ) -> Response {
-    // Verify session exists.
-    if state.views.read().await.sessions.get(&session_id).is_none() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let event = crate::event::Event::SessionRepoAttached {
-        session_id,
-        slug: body.slug,
-        attached_at: now_epoch(),
+    // Validate session exists.
+    let session_space = {
+        let views = state.views.read().await;
+        if views.sessions.get(&session_id).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "not_found", "message": "session not found" })),
+            )
+                .into_response();
+        }
+        // Also validate project exists.
+        if views.projects.get(&body.project_id).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "not_found", "message": "project not found" })),
+            )
+                .into_response();
+        }
+        drop(views);
+        // Retrieve session space from bridge manager.
+        state.bridge.space_for(&session_id)
     };
-    append_and_apply(&state, event).await
+    // Create symlink (best-effort).
+    let _ = state
+        .projects
+        .attach_symlink(&body.project_id, session_space.as_deref());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let event = crate::event::Event::SessionProjectAttached {
+        session_id: session_id.clone(),
+        project_id: body.project_id.clone(),
+        attached_at: now,
+    };
+    append_and_apply(&state, event).await;
+    let views = state.views.read().await;
+    match views.sessions.get(&session_id) {
+        Some(row) => Json(json!({ "sessionId": row.session_id, "projectId": row.project_id }))
+            .into_response(),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2457,6 +2573,9 @@ mod tests {
                 dir.path().join("default"),
                 crate::vault::JjMode::Disabled,
             )),
+            projects: Arc::new(crate::projects::ProjectStore::new(
+                dir.path().join("default"),
+            )),
         };
         (state, dir)
     }
@@ -2550,6 +2669,9 @@ mod tests {
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),
                 crate::vault::JjMode::Disabled,
+            )),
+            projects: Arc::new(crate::projects::ProjectStore::new(
+                dir.path().join("default"),
             )),
         };
         let app = build_router(state);

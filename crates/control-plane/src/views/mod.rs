@@ -12,6 +12,7 @@
 
 pub mod card;
 pub mod message;
+pub mod project;
 pub mod registry;
 pub mod repo;
 pub mod session;
@@ -19,6 +20,7 @@ pub mod setup;
 
 pub use card::{CardFilters, CardRow, CardView};
 pub use message::{MessageRow, MessageView};
+pub use project::{ProjectRow, ProjectView};
 pub use registry::{DriftReport, RegistryEntry, RegistryView};
 pub use repo::{RepoRow, RepoView};
 pub use session::{Filters, SessionRow, SessionView};
@@ -45,6 +47,8 @@ pub struct ViewManager {
     pub setup: SetupView,
     /// Registry projection (ADR 0006 §9.4 — slug → definition resolver).
     pub registry: RegistryView,
+    /// Project (context container) projection.
+    pub projects: ProjectView,
     /// Repo registry projection — managed git repos.
     pub repos: RepoView,
 }
@@ -58,6 +62,7 @@ impl ViewManager {
             cards: CardView::new(),
             setup: SetupView::new(),
             registry: RegistryView::new(),
+            projects: ProjectView::new(),
             repos: RepoView::new(),
         }
     }
@@ -72,6 +77,7 @@ impl ViewManager {
         self.cards = CardView::new();
         self.setup = SetupView::new();
         self.registry = RegistryView::new();
+        self.projects = ProjectView::new();
         self.repos = RepoView::new();
         for (_seq, event) in log.read_all()? {
             self.apply(&event);
@@ -89,6 +95,7 @@ impl ViewManager {
         self.cards.apply(event);
         self.setup.apply(event);
         self.registry.apply(event);
+        self.projects.apply(event);
         self.repos.apply(event);
     }
 }
