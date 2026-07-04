@@ -139,6 +139,12 @@ pub fn build_router(state: AppState) -> Router {
                 .put(put_vault_note)
                 .delete(delete_vault_note),
         )
+        .route("/api/vaults/{id}/graph", get(get_vault_graph))
+        .route("/api/vaults/{id}/collections", get(list_vault_collections))
+        .route(
+            "/api/vaults/{id}/collections/{path}",
+            get(get_collection_rows),
+        )
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/{id}",
@@ -957,6 +963,69 @@ fn vault_error(err: anyhow::Error) -> Response {
         Json(json!({ "error": "vault_error", "message": err.to_string() })),
     )
         .into_response()
+}
+
+// ---- Vault graph + collections ----
+
+async fn get_vault_graph(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.vaults.graph(&id) {
+        Ok(g) => {
+            let dto = dto::VaultGraphDto {
+                nodes: g
+                    .nodes
+                    .into_iter()
+                    .map(|n| dto::GraphNodeDto {
+                        id: n.id,
+                        title: n.title,
+                        path: n.path,
+                        cid: n.cid,
+                        link_count: n.link_count,
+                    })
+                    .collect(),
+                edges: g
+                    .edges
+                    .into_iter()
+                    .map(|e| dto::GraphEdgeDto {
+                        source: e.source,
+                        target: e.target,
+                    })
+                    .collect(),
+            };
+            Json(json!({ "nodes": dto.nodes, "edges": dto.edges })).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn list_vault_collections(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.vaults.list_collections(&id) {
+        Ok(collections) => {
+            let dtos: Vec<dto::CollectionSummaryDto> = collections
+                .into_iter()
+                .map(|c| dto::CollectionSummaryDto {
+                    name: c.name,
+                    path: c.path,
+                    row_count: c.row_count,
+                })
+                .collect();
+            Json(json!({ "collections": dtos })).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn get_collection_rows(
+    State(state): State<AppState>,
+    Path((id, path)): Path<(String, String)>,
+) -> Response {
+    match state.vaults.collection_rows(&id, &path) {
+        Ok(data) => Json(json!({
+            "columns": data.columns,
+            "rows": data.rows,
+        }))
+        .into_response(),
+        Err(err) => vault_error(err),
+    }
 }
 
 // ---- Projects (context container) ------------------------------------------------

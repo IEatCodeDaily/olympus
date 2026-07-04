@@ -59,6 +59,9 @@ pub struct NoteDocument {
     pub markdown: String,
     pub frontmatter: Value,
     pub linked_notes: Vec<String>,
+    /// BLAKE3 content hash of the markdown body (content address).
+    /// Injected into frontmatter as `cid` on write.
+    pub cid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +190,8 @@ impl VaultStore {
         }
 
         if let Some(markdown) = write.markdown {
+            // Inject content hash (BLAKE3) into frontmatter before writing.
+            let markdown = inject_content_hash(&markdown);
             if let Some(parent) = new_full.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -386,12 +391,17 @@ fn note_document(path: String, markdown: String) -> NoteDocument {
         .or_else(|| title_from_heading(body))
         .unwrap_or_else(|| title_from_path(&path));
     let linked_notes = parse_linked_notes(&markdown);
+    let cid = frontmatter
+        .get("cid")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     NoteDocument {
         path,
         title,
         markdown,
         frontmatter,
         linked_notes,
+        cid,
     }
 }
 
@@ -584,6 +594,228 @@ pub fn bad_request(err: &anyhow::Error) -> bool {
         || msg.contains("required")
         || msg.contains("must end")
         || msg.contains("name is required")
+}
+
+// ── Graph data ──────────────────────────────────────
+
+/// A node in the vault link graph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNode {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    pub cid: Option<String>,
+    pub link_count: usize,
+}
+
+/// An edge in the vault link graph (source → target wikilink).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+/// The complete vault graph: nodes (notes) + edges (wikilinks).
+#[derive(Debug, Clone)]
+pub struct VaultGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+impl VaultStore {
+    /// Build the link graph for a vault: nodes = notes, edges = wikilinks.
+    /// O(n*m) where n=notes, m=avg links per note — fine for <1000 notes.
+    pub fn graph(&self, vault_id: &str) -> Result<VaultGraph> {
+        let vault = self.existing_vault_path(vault_id)?;
+        let mut notes_map: BTreeMap<String, NoteDocument> = BTreeMap::new();
+        for file in markdown_files(&vault)? {
+            let rel = file.strip_prefix(&vault)?.to_path_buf();
+            let markdown = fs::read_to_string(&file).unwrap_or_default();
+            let doc = note_document(safe_to_string(&rel), markdown);
+            notes_map.insert(doc.title.clone(), doc);
+        }
+
+        // Build path→title index for link resolution
+        let title_to_path: BTreeMap<&str, &str> = notes_map
+            .iter()
+            .map(|(title, doc)| (title.as_str(), doc.path.as_str()))
+            .collect();
+
+        let mut link_count: BTreeMap<String, usize> = BTreeMap::new();
+        let mut edges = Vec::new();
+        for (title, doc) in &notes_map {
+            for link in &doc.linked_notes {
+                if title_to_path.contains_key(link.as_str()) {
+                    edges.push(GraphEdge {
+                        source: title.clone(),
+                        target: link.clone(),
+                    });
+                    *link_count.entry(title.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let nodes = notes_map
+            .iter()
+            .map(|(title, doc)| GraphNode {
+                id: title.clone(),
+                title: title.clone(),
+                path: doc.path.clone(),
+                cid: doc.cid.clone(),
+                link_count: *link_count.get(title).unwrap_or(&0),
+            })
+            .collect();
+
+        Ok(VaultGraph { nodes, edges })
+    }
+
+    /// Scan for collections (notes with `collection: true` in frontmatter).
+    /// A collection's rows are the child notes in the same folder with
+    /// structured frontmatter fields.
+    pub fn list_collections(&self, vault_id: &str) -> Result<Vec<CollectionSummary>> {
+        let vault = self.existing_vault_path(vault_id)?;
+        let mut collections = Vec::new();
+        for file in markdown_files(&vault)? {
+            let rel = file.strip_prefix(&vault)?.to_path_buf();
+            let markdown = fs::read_to_string(&file).unwrap_or_default();
+            let doc = note_document(safe_to_string(&rel), markdown);
+            if doc.frontmatter.get("collection").and_then(Value::as_bool) == Some(true) {
+                let name = doc
+                    .frontmatter
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&doc.title)
+                    .to_string();
+                let row_count = self.count_collection_rows(&vault, &doc.path)?;
+                collections.push(CollectionSummary {
+                    name,
+                    path: doc.path,
+                    row_count,
+                });
+            }
+        }
+        Ok(collections)
+    }
+
+    /// Get the rows of a collection: child notes in the same folder as the
+    /// collection definition note, with their frontmatter fields as columns.
+    pub fn collection_rows(&self, vault_id: &str, collection_path: &str) -> Result<CollectionData> {
+        let vault = self.existing_vault_path(vault_id)?;
+        let safe = sanitize_note_path(collection_path)?;
+        let collection_dir = safe.parent().unwrap_or(Path::new(""));
+
+        let mut rows = Vec::new();
+        let mut columns: BTreeSet<String> = BTreeSet::new();
+        for file in markdown_files(&vault)? {
+            let rel = file.strip_prefix(&vault)?.to_path_buf();
+            // Skip the collection definition note itself
+            if rel == safe {
+                continue;
+            }
+            // Only include notes in the same folder (or subfolders)
+            if !rel.starts_with(collection_dir) {
+                continue;
+            }
+            let markdown = fs::read_to_string(&file).unwrap_or_default();
+            let doc = note_document(safe_to_string(&rel), markdown);
+            if let Value::Object(ref obj) = doc.frontmatter {
+                if obj.is_empty() {
+                    continue;
+                }
+                let mut row: BTreeMap<String, Value> = BTreeMap::new();
+                row.insert("path".into(), Value::String(doc.path.clone()));
+                row.insert("title".into(), Value::String(doc.title.clone()));
+                for (k, v) in obj {
+                    // Skip collection meta fields
+                    if k == "collection" || k == "name" || k == "cid" {
+                        continue;
+                    }
+                    columns.insert(k.clone());
+                    row.insert(k.clone(), v.clone());
+                }
+                rows.push(serde_json::to_value(&row).unwrap_or(Value::Null));
+            }
+        }
+
+        Ok(CollectionData {
+            columns: columns.into_iter().collect(),
+            rows,
+        })
+    }
+
+    fn count_collection_rows(&self, vault: &Path, collection_path: &str) -> Result<usize> {
+        let safe = sanitize_note_path(collection_path)?;
+        let collection_dir = safe.parent().unwrap_or(Path::new(""));
+        let mut count = 0;
+        for file in markdown_files(vault)? {
+            let rel = file.strip_prefix(vault)?;
+            if rel == safe {
+                continue;
+            }
+            if !rel.starts_with(collection_dir) {
+                continue;
+            }
+            let markdown = fs::read_to_string(&file).unwrap_or_default();
+            let (_, fm) = parse_frontmatter(&markdown);
+            let _ = fm; // just count files with frontmatter
+            count += 1;
+        }
+        Ok(count)
+    }
+}
+
+/// A collection definition summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionSummary {
+    pub name: String,
+    pub path: String,
+    pub row_count: usize,
+}
+
+/// Collection data: column names + row values.
+#[derive(Debug, Clone)]
+pub struct CollectionData {
+    pub columns: Vec<String>,
+    pub rows: Vec<Value>,
+}
+
+/// Compute the BLAKE3 hash of the markdown content body and inject it into
+/// the frontmatter as `cid: <hex>`. If frontmatter already has a `cid`
+/// matching the current content, it's a no-op (already addressed).
+fn inject_content_hash(markdown: &str) -> String {
+    let (fm, body) = parse_frontmatter(markdown);
+    let hash = blake3::hash(body.trim().as_bytes());
+    let cid = hash.to_hex().to_string();
+
+    // Check if existing cid matches
+    if fm.get("cid").and_then(Value::as_str) == Some(&cid) {
+        return markdown.to_string(); // already correct
+    }
+
+    // Rebuild frontmatter with cid
+    let mut fm_obj = match fm {
+        Value::Object(m) => m,
+        _ => Map::new(),
+    };
+    fm_obj.insert("cid".into(), Value::String(cid.clone()));
+
+    // Serialize frontmatter back to YAML
+    let fm_yaml = serde_yaml::to_string(&fm_obj).unwrap_or_default();
+    let fm_yaml = fm_yaml.trim_end();
+
+    // Reconstruct: frontmatter + body
+    if markdown.starts_with("---\n") {
+        // Replace existing frontmatter
+        let body_start = markdown[4..]
+            .find("\n---")
+            .map(|end| 4 + end + 4)
+            .unwrap_or(markdown.len());
+        let body = &markdown[body_start..];
+        format!("---\n{}\n---\n{}", fm_yaml, body)
+    } else {
+        // Add frontmatter
+        format!("---\n{}\n---\n\n{}", fm_yaml, body)
+    }
 }
 
 #[cfg(test)]

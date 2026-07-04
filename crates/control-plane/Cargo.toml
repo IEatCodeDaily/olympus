@@ -29,6 +29,7 @@ hostname = "0.4"
 hyper.workspace = true
 hyper-util = { workspace = true }
 http-body-util.workspace = true
+blake3 = "1"
 
 [dev-dependencies]
 tempfile = "3"

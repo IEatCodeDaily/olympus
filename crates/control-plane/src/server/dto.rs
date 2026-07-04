@@ -408,6 +408,7 @@ pub struct NoteDocumentDto {
     pub markdown: String,
     pub frontmatter: serde_json::Value,
     pub linked_notes: Vec<String>,
+    pub cid: Option<String>,
 }
 
 impl From<NoteDocument> for NoteDocumentDto {
@@ -418,8 +419,53 @@ impl From<NoteDocument> for NoteDocumentDto {
             markdown: note.markdown,
             frontmatter: note.frontmatter,
             linked_notes: note.linked_notes,
+            cid: note.cid,
         }
     }
+}
+
+/// Vault graph node.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNodeDto {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    pub cid: Option<String>,
+    pub link_count: usize,
+}
+
+/// Vault graph edge.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdgeDto {
+    pub source: String,
+    pub target: String,
+}
+
+/// Vault graph response.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultGraphDto {
+    pub nodes: Vec<GraphNodeDto>,
+    pub edges: Vec<GraphEdgeDto>,
+}
+
+/// Collection summary.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionSummaryDto {
+    pub name: String,
+    pub path: String,
+    pub row_count: usize,
+}
+
+/// Collection data (rows + columns).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionDataDto {
+    pub columns: Vec<String>,
+    pub rows: Vec<serde_json::Value>,
 }
 
 /// `Project` as the UI consumes it — camelCase wire DTO.
