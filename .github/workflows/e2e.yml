@@ -1,0 +1,35 @@
+name: e2e
+on: [push, pull_request]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --check
+
+  ui-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cd ui && npm ci
+      - run: cd ui && npx playwright install --with-deps chromium
+      - run: cd ui && npx tsc --noEmit
+      - run: cd ui && npx vitest run
+      - run: cd ui && npx playwright test --reporter=list,github
+        env:
+          CI: "true"
+      - run: cd ui && bash scripts/evidence-bundle.sh
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-evidence
+          path: ui/test-evidence/
+          retention-days: 14
