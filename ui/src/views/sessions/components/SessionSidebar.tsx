@@ -210,16 +210,6 @@ function SessionRow({
   const time = timeAgo(session.lastActivity);
   const update = useUpdateSession();
 
-  // Tooltip: agent · node · model · summary
-  const tooltip = [
-    session.agent ? `agent: ${session.agent}` : null,
-    session.node ? `node: ${session.node}` : null,
-    session.model ? `model: ${session.model}` : null,
-    `${session.messageCount} messages`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
   const isRunning = session.liveness === "running" || session.liveness === "active";
   const needsInput = session.liveness === "input-required";
   const showIcon = isRunning || needsInput;
@@ -230,9 +220,14 @@ function SessionRow({
       data-session-id={session.id}
       data-managed={session.managed ? "true" : "false"}
       data-pinned={session.pinned ? "true" : "false"}
-      title={tooltip}
       onClick={() => onSelect(session.id)}
     >
+      {/* Instant hover card: node · agent · model (native title is too slow) */}
+      <span className="srow-hovercard" role="tooltip">
+        <span className="hc-row"><span className="hc-k">node</span><span className="hc-v">{session.node ?? "olympus"}</span></span>
+        <span className="hc-row"><span className="hc-k">agent</span><span className="hc-v">{session.agent ?? "—"}</span></span>
+        <span className="hc-row"><span className="hc-k">model</span><span className="hc-v">{session.model ?? "—"}</span></span>
+      </span>
       {showIcon && (
         <span className="srow-icon">
           {isRunning ? (

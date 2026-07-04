@@ -1,19 +1,11 @@
 /**
- * HistoryPage — viewport content for the "History" NavItem.
+ * HistoryPage — the full session archive, styled as a proper data table
+ * (shadcn Table/Select/Input patterns rendered with the Instrument .ol-*
+ * design tokens — this repo does not use Tailwind).
  *
- * The full session archive: EVERY session from every agent/channel (managed
- * AND observed, archived included via toggle), filterable by:
- *   - node       (session.node)
- *   - agent      (session.agent)
- *   - channel    (session.source: cli/telegram/discord/webui/cron/…)
- *   - time range (last hour / day / week / month / all)
- *   - archived   (hidden by default)
- * Free-text filter matches title/agent/model.
- *
- * The sidebar RECENT section only shows the 5 most recent sessions — this
- * page is where the rest live.
- *
- * This is Page content — renders inside the View's viewport slot only.
+ * EVERY session from every agent/channel, filterable by node, agent,
+ * channel, time range; free text matches title/agent/model; archived
+ * hidden behind a toggle. Sidebar RECENT shows only 5 — this is the rest.
  */
 
 import { useMemo, useState } from "react";
@@ -25,7 +17,7 @@ import { timeAgo } from "../helpers";
 
 type TimeRange = "all" | "1h" | "24h" | "7d" | "30d";
 
-/** Rows rendered at once — "Show more" reveals the next batch (keeps the DOM sane with 1800+ sessions). */
+/** Rows rendered at once — "Show more" reveals the next batch. */
 const PAGE_SIZE = 100;
 
 const TIME_RANGES: { id: TimeRange; label: string; secs: number | null }[] = [
@@ -38,11 +30,8 @@ const TIME_RANGES: { id: TimeRange; label: string; secs: number | null }[] = [
 
 export function HistoryPage() {
   const navigate = useNavigate();
-  // All sessions — managed and observed. Archived visibility is a toggle.
   const [showArchived, setShowArchived] = useState(false);
-  const { data } = useSessions(
-    showArchived ? {} : { archived: false },
-  );
+  const { data } = useSessions(showArchived ? {} : { archived: false });
   const sessions = useMemo(() => data?.sessions ?? [], [data]);
   const update = useUpdateSession();
 
@@ -53,19 +42,9 @@ export function HistoryPage() {
   const [q, setQ] = useState<string>("");
   const [visible, setVisible] = useState(PAGE_SIZE);
 
-  // Distinct filter options derived from the data itself.
-  const nodes = useMemo(
-    () => distinct(sessions.map((s) => s.node)),
-    [sessions],
-  );
-  const agents = useMemo(
-    () => distinct(sessions.map((s) => s.agent)),
-    [sessions],
-  );
-  const channels = useMemo(
-    () => distinct(sessions.map((s) => s.source)),
-    [sessions],
-  );
+  const nodes = useMemo(() => distinct(sessions.map((s) => s.node)), [sessions]);
+  const agents = useMemo(() => distinct(sessions.map((s) => s.agent)), [sessions]);
+  const channels = useMemo(() => distinct(sessions.map((s) => s.source)), [sessions]);
 
   const filtered = useMemo(() => {
     const cutoff = TIME_RANGES.find((t) => t.id === range)?.secs ?? null;
@@ -94,19 +73,18 @@ export function HistoryPage() {
         </span>
       </div>
       <div className="gv-body">
-        {/* Filter bar */}
-        <div
-          className="hist-filters"
-          style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 0 12px", alignItems: "center" }}
-        >
-          <input
-            type="search"
-            className="hist-search"
-            placeholder="Filter by title, agent, model…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            style={{ minWidth: 200 }}
-          />
+        {/* ── Filter toolbar ── */}
+        <div className="hist-filters">
+          <div className="hist-search-wrap">
+            <Icon name="search" size={13} />
+            <input
+              type="search"
+              className="hist-search"
+              placeholder="Filter by title, agent, model…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
           <FilterSelect label="Node" value={node} onChange={setNode} options={nodes} />
           <FilterSelect label="Agent" value={agent} onChange={setAgent} options={agents} />
           <FilterSelect label="Channel" value={channel} onChange={setChannel} options={channels} />
@@ -122,19 +100,17 @@ export function HistoryPage() {
               </option>
             ))}
           </select>
-          <label
-            style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--dim)", cursor: "pointer" }}
-          >
+          <label className="hist-archived-toggle">
             <input
               type="checkbox"
               checked={showArchived}
               onChange={(e) => setShowArchived(e.target.checked)}
             />
-            Show archived
+            <span>Archived</span>
           </label>
         </div>
 
-        {/* Session rows */}
+        {/* ── Data table ── */}
         {filtered.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state-icon">
@@ -144,27 +120,41 @@ export function HistoryPage() {
             <div className="empty-state-msg">Adjust the filters above.</div>
           </div>
         ) : (
-          <div className="hist-list">
-            {filtered.slice(0, visible).map((s) => (
-              <HistoryRow
-                key={s.id}
-                session={s}
-                onOpen={() =>
-                  void navigate({ to: "/sessions/$sessionId", params: { sessionId: s.id } })
-                }
-                onTogglePin={() =>
-                  update.mutate({ id: s.id, patch: { pinned: !s.pinned } })
-                }
-                onToggleArchive={() =>
-                  update.mutate({ id: s.id, patch: { archived: !s.archived } })
-                }
-              />
-            ))}
+          <div className="hist-table-wrap">
+            <table className="hist-table">
+              <thead>
+                <tr>
+                  <th className="col-title">Session</th>
+                  <th className="col-channel">Channel</th>
+                  <th className="col-agent">Agent</th>
+                  <th className="col-node">Node</th>
+                  <th className="col-msgs">Msgs</th>
+                  <th className="col-time">Activity</th>
+                  <th className="col-acts" aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.slice(0, visible).map((s) => (
+                  <HistoryRow
+                    key={s.id}
+                    session={s}
+                    onOpen={() =>
+                      void navigate({ to: "/sessions/$sessionId", params: { sessionId: s.id } })
+                    }
+                    onTogglePin={() =>
+                      update.mutate({ id: s.id, patch: { pinned: !s.pinned } })
+                    }
+                    onToggleArchive={() =>
+                      update.mutate({ id: s.id, patch: { archived: !s.archived } })
+                    }
+                  />
+                ))}
+              </tbody>
+            </table>
             {filtered.length > visible && (
               <button
                 type="button"
-                className="btn"
-                style={{ margin: "8px auto", display: "block" }}
+                className="btn hist-more"
                 onClick={() => setVisible((v) => v + PAGE_SIZE)}
               >
                 Show more ({filtered.length - visible} remaining)
@@ -221,55 +211,52 @@ function HistoryRow({
   onToggleArchive: () => void;
 }) {
   return (
-    <div
-      className="ol-card hist-row"
+    <tr
+      className="hist-row"
       data-session-id={session.id}
       data-managed={session.managed ? "true" : "false"}
-      style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 6 }}
       onClick={onOpen}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{ fontSize: 12, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        >
-          {session.pinned && <Icon name="pin" size={10} />} {session.title || "Untitled"}
-        </div>
-        <div style={{ fontSize: 10, color: "var(--faint)", fontFamily: "var(--font-mono)", display: "flex", gap: 8 }}>
-          <span>{session.source}</span>
-          {session.agent && <span>{session.agent}</span>}
-          {session.node && <span>@{session.node}</span>}
-          {session.model && <span>{session.model}</span>}
-          <span>{session.messageCount} msgs</span>
-          {session.archived && <span style={{ color: "var(--warn, orange)" }}>archived</span>}
-        </div>
-      </div>
-      <span style={{ fontSize: 10, color: "var(--faint)", whiteSpace: "nowrap" }}>
-        {timeAgo(session.lastActivity)}
-      </span>
-      <span className="srow-actions" style={{ display: "flex", gap: 4 }}>
-        <button
-          type="button"
-          className="srow-act"
-          title={session.pinned ? "Unpin" : "Pin"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePin();
-          }}
-        >
-          <Icon name="pin" size={11} />
-        </button>
-        <button
-          type="button"
-          className="srow-act"
-          title={session.archived ? "Unarchive" : "Archive"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleArchive();
-          }}
-        >
-          <Icon name="archive" size={11} />
-        </button>
-      </span>
-    </div>
+      <td className="col-title">
+        <span className="hist-title">
+          {session.pinned && <Icon name="pin" size={10} />}
+          {session.title || "Untitled"}
+        </span>
+        {session.archived && <span className="gtag warn hist-archived-tag">archived</span>}
+      </td>
+      <td className="col-channel">
+        <span className="gtag">{session.source}</span>
+      </td>
+      <td className="col-agent mono">{session.agent ?? "—"}</td>
+      <td className="col-node mono">{session.node ?? "—"}</td>
+      <td className="col-msgs mono">{session.messageCount}</td>
+      <td className="col-time mono">{timeAgo(session.lastActivity)}</td>
+      <td className="col-acts">
+        <span className="hist-acts">
+          <button
+            type="button"
+            className="srow-act"
+            title={session.pinned ? "Unpin" : "Pin"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTogglePin();
+            }}
+          >
+            <Icon name="pin" size={11} />
+          </button>
+          <button
+            type="button"
+            className="srow-act"
+            title={session.archived ? "Unarchive" : "Archive"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleArchive();
+            }}
+          >
+            <Icon name="archive" size={11} />
+          </button>
+        </span>
+      </td>
+    </tr>
   );
 }
