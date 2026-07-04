@@ -542,6 +542,62 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-04 — Consolidate the two app-shell spinners onto the canonical `olympus-spin` keyframe + `--loop-spin` token; kill the last local keyframes, raw `0.7s` duration, and raw `border-radius: 50%` in `index.css`
+
+- **The debt this closes (the residual of debt #2, "`index.css` still carries
+  raw literals"):** the motion layer (`design/tokens/motion.css`) defines ONE
+  canonical rotation keyframe — `@keyframes olympus-spin { to { transform:
+  rotate(360deg) } }` — and the `.ol-spinner` primitive in
+  `design/styles/components.css` already consumed it as `olympus-spin
+  var(--loop-spin)`. But `index.css` still shipped **two private, byte-identical
+  copies** of that keyframe — `@keyframes rot` (used only by `.spin`) and
+  `@keyframes spin` (used only by `.srow-spinner`) — and `.srow-spinner`
+  additionally hardcoded a bespoke **`0.7s`** duration (bypassing the
+  `--loop-spin` = 0.8s token) and a raw **`border-radius: 50%`** (bypassing
+  `--radius-full`). Three spinners, three different sources of truth for the
+  same motion.
+- **Fix (all in `index.css`):**
+  - `.spin` — `animation: var(--loop-spin) rot …` → `animation: olympus-spin
+    var(--loop-spin) …` (name-order also normalized to the shorthand convention
+    used everywhere else). Deleted the now-orphaned `@keyframes rot`.
+  - `.srow-spinner` — `animation: spin 0.7s …` → `animation: olympus-spin
+    var(--loop-spin) …`; `border-radius: 50%` → `border-radius: var(--radius-full)`.
+    Deleted the now-orphaned `@keyframes spin`.
+  - Net: **−2 duplicate keyframe blocks, −1 raw duration, −1 raw radius.** All
+    three spinners in the codebase (`.spin`, `.srow-spinner`, `.ol-spinner`) now
+    share the single `olympus-spin` + `--loop-spin` definition — one place to
+    retune spinner rhythm system-wide.
+- **Behavior:** geometry is **byte-identical** — `olympus-spin` and the deleted
+  `rot`/`spin` are the same `to { rotate(360deg) }`, and `border-radius: 50%`
+  renders identically to `--radius-full` (999px) on a 10px circle. The ONLY
+  functional delta is intentional: `.srow-spinner` (the running-session row
+  indicator) now spins at the canonical **0.8s** instead of an off-token 0.7s,
+  matching every other spinner. Color-token-agnostic, so both `obsidian` and
+  `light` are verified by construction (per the zero-delta shortcut); shell was
+  also loaded in-browser to confirm no render regression.
+- **Verified:** `bun run typecheck` clean, `bun run build` exits 0 (CSS
+  64.93 kB). Fully reversible (this file's edits are self-contained; motion.css
+  and components.css untouched). Working tree was clean at HEAD before the edit —
+  only `index.css` + this doc staged.
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Adoption gap (unchanged, the big one).** The `.ol-*` primitive library +
+     `shell.tsx` React primitives exist but live views (`AppShell`, `FleetView`,
+     `ChatView`, the vault/project/session views) still lean on bespoke
+     `index.css` classes. Migrating views onto the shared primitives is the
+     largest remaining consistency win — but it edits view internals, so it's a
+     view-worker task the design-lead should *spec + spot-fix styling for*, not
+     rewrite wholesale.
+  2. **`.ol-*` visual QA in-browser** in both themes — the primitive library was
+     built to spec but hasn't been screenshot-verified rule-by-rule against the
+     live views; drift between `.ol-*` and the `index.css` vocabulary they
+     shadow (e.g. `.ol-spinner` vs `.spin`/`.srow-spinner`, now unified on motion
+     but still separate size/border rules) is the kind of thing this surfaces.
+  3. **Remaining raw geometry literals in `index.css`** are now element-DIMENSION
+     primitives on purpose (spinner sizes 9/10px, `.todo .bx` 11px, `.divider`
+     20px, border widths `1.5px`) — these are geometry, not spacing/motion steps,
+     and are correctly left raw. If a future run wants to tokenize border widths,
+     add a `--border-w-2: 1.5px` companion to `--border-w` rather than snapping.
+
 ### 2026-07-04 — Formalize the odd-pixel half-step spacing tier (`--space-3-5`/`-4-5`/`-5-5`) + repoint all 15 off-scale `7/9/11px` padding+gap sites — closes debt #1
 
 - **The debt this closes (top of the visible list the last two runs — the
