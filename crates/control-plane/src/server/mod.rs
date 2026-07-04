@@ -127,6 +127,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/setup", get(get_setup).put(put_setup))
         .route("/api/registry", get(list_registry).put(put_registry_entry))
         .route("/api/nodes", get(list_nodes))
+        .route("/api/nodes/{id}/agents", get(node_agents))
+        .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
         .route("/api/vaults", get(list_vaults).post(create_vault))
         .route("/api/vaults/{id}/notes", get(list_vault_notes))
         .route(
@@ -801,10 +803,41 @@ async fn agent_models(
     Json(json!({ "models": agents::list_models_for(provider.as_deref()) }))
 }
 
-/// GET /api/agents — list the drivable Hermes agents (profiles) with their
-/// configured provider + model, so the UI can offer a real agent/model picker.
-async fn list_agents_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    Json(json!({ "agents": agents::list_agents() }))
+/// GET /api/agents — flat list of agents across all fleet nodes (deduped by id).
+/// Sourced from the node registry (each node's envoy-reported agents), NOT a
+/// live control-plane probe. For per-node scoping use /api/nodes/:id/agents.
+async fn list_agents_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(json!({ "agents": state.nodes.all_agents().await }))
+}
+
+/// GET /api/nodes/:id/agents — the agents a specific node's envoy discovered.
+async fn node_agents(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.nodes.agents(&id).await {
+        Ok(agents) => Json(json!({ "agents": agents })).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /api/nodes/:id/agents/refresh — re-detect agents on a node (manual, as
+/// requested: refreshing to detect newly-installed agents is explicit, not
+/// automatic). For the local node the control plane re-runs discovery in-process;
+/// a remote node would forward a detect request to its envoy (TODO when the
+/// standalone envoy binary lands).
+async fn refresh_node_agents(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if id != "local" {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "error": "remote agent refresh requires the node's envoy; only 'local' is supported in-process for now"
+            })),
+        )
+            .into_response();
+    }
+    let fresh = agents::discover_local_agents();
+    match state.nodes.set_agents(&id, fresh).await {
+        Ok(agents) => Json(json!({ "agents": agents })).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
 }
 
 async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {

@@ -136,6 +136,17 @@ export async function fetchAgents(): Promise<AgentsResponse> {
   return res.json() as Promise<AgentsResponse>;
 }
 
+/** Manually re-detect a node's agents (Fleet › Agents "detect" button).
+ *  Local node re-probes in-process; remote nodes require their envoy. */
+export async function refreshNodeAgents(nodeId: string): Promise<AgentsResponse> {
+  const res = await fetch(
+    `${BASE}/api/nodes/${encodeURIComponent(nodeId)}/agents/refresh`,
+    { method: "POST", headers: authHeaders() },
+  );
+  if (!res.ok) throw new Error(`refresh agents ${res.status}`);
+  return res.json() as Promise<AgentsResponse>;
+}
+
 export async function fetchNodes(): Promise<NodesResponse> {
   const res = await fetch(`${BASE}/api/nodes`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`nodes ${res.status}`);

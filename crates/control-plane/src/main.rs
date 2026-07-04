@@ -171,12 +171,17 @@ async fn main() -> Result<()> {
     // ---- fleet node registry ----
     let node_registry = NodeRegistry::new();
     // Auto-register the local node (in-process pseudo-envoy per ADR 0005 §3).
+    // The local node's envoy discovers its own agents (Hermes profiles + CLI
+    // harnesses installed on THIS host) — that is the per-node source of truth,
+    // not a global control-plane probe.
     let local_hostname = hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "localhost".to_string());
+    let local_agents = olympus_control_plane::server::agents::discover_local_agents();
+    tracing::info!(count = local_agents.len(), "local envoy discovered agents");
     node_registry
-        .register("local", &local_hostname, 4, "0.1", true)
+        .register("local", &local_hostname, 4, "0.1", true, local_agents)
         .await;
 
     let state = AppState {

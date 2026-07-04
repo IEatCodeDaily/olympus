@@ -12,9 +12,11 @@
 // and show an honest "no other nodes registered" empty state. When the fleet
 // endpoint ships, swap `useFleetNodes()` for the real hook.
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Icon } from "../components/Icon";
 import { BrandIcon, agentBrand } from "../components/BrandIcons";
-import { useAgents, useNodes } from "../hooks/queries";
+import { useNodes } from "../hooks/queries";
+import { refreshNodeAgents } from "../api";
 import { relativeTime } from "../lib/format";
 import type { AgentInfo, NodeInfo, NodeStatus } from "../types";
 
@@ -251,9 +253,13 @@ function AgentRow({ agent }: { agent: AgentInfo }) {
 function NodeSection({
   node,
   agents,
+  onDetect,
+  detecting,
 }: {
   node: FleetNode;
   agents: AgentInfo[];
+  onDetect: (nodeId: string) => void;
+  detecting: boolean;
 }) {
   return (
     <div style={node.status === "offline" ? { opacity: 0.6 } : undefined}>
@@ -272,13 +278,24 @@ function NodeSection({
         <span className="gk">
           {node.hostname} · {agents.length} agent{agents.length === 1 ? "" : "s"}
         </span>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="btn"
+          title="Re-detect agents installed on this node"
+          disabled={detecting}
+          onClick={() => onDetect(node.nodeId)}
+        >
+          <Icon name="activity" size={12} />
+          {detecting ? "Detecting…" : "Detect agents"}
+        </button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {agents.length > 0 ? (
           agents.map((a) => <AgentRow key={a.id} agent={a} />)
         ) : (
           <div className="mono" style={{ fontSize: 11, color: "var(--faint)" }}>
-            no agents configured
+            no agents detected
           </div>
         )}
       </div>
@@ -291,18 +308,32 @@ function NodeSection({
 export default function FleetView() {
   const [sub, setSub] = useState<SubView>("fleet");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detectingNode, setDetectingNode] = useState<string | null>(null);
 
   const nodesQ = useNodes();
-  const agentsQ = useAgents();
-
-  const agents = agentsQ.data?.agents ?? [];
+  const queryClient = useQueryClient();
 
   // Nodes come directly from the backend now — the local node auto-registers
-  // at boot; remote envoys register via UDS. No more synthesis.
+  // at boot; remote envoys register via UDS. Each node carries its OWN
+  // envoy-discovered agents (per-node, not a global control-plane probe).
   const nodes: FleetNode[] = nodesQ.data?.nodes ?? [];
 
   const selectedNode =
     nodes.find((n) => n.nodeId === selectedId) ?? (selectedId ? null : nodes[0] ?? null);
+
+  const handleDetect = async (nodeId: string) => {
+    setDetectingNode(nodeId);
+    try {
+      await refreshNodeAgents(nodeId);
+      // Re-fetch nodes so the refreshed per-node agent list shows.
+      await queryClient.invalidateQueries({ queryKey: ["nodes"] });
+      await queryClient.invalidateQueries({ queryKey: ["agents"] });
+    } catch {
+      // best-effort; a remote node without an envoy returns 501
+    } finally {
+      setDetectingNode(null);
+    }
+  };
 
   return (
     <>
@@ -351,7 +382,7 @@ export default function FleetView() {
             {selectedNode && (
               <Drawer
                 node={selectedNode}
-                agents={selectedNode.local ? agents : []}
+                agents={selectedNode.agents ?? []}
                 onClose={() => setSelectedId(null)}
               />
             )}
@@ -362,7 +393,9 @@ export default function FleetView() {
               <NodeSection
                 key={node.nodeId}
                 node={node}
-                agents={node.local ? agents : []}
+                agents={node.agents ?? []}
+                onDetect={handleDetect}
+                detecting={detectingNode === node.nodeId}
               />
             ))}
 

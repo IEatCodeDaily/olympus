@@ -99,6 +99,9 @@ export interface NodeInfo {
   version: string;
   local: boolean;
   lastHeartbeatAgoSecs: number;
+  // Agents this node's envoy discovered on its host (per-node, not global).
+  // Optional: a remote node may not have reported yet.
+  agents?: AgentInfo[];
 }
 
 export interface NodesResponse {

@@ -9,7 +9,6 @@
 //! the block shape is stable and this avoids the deprecated serde_yaml.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -19,8 +18,6 @@ use serde::Serialize;
 
 const CLAUDE_CODE_AGENT_ID: &str = "claude-code";
 const CODEX_AGENT_ID: &str = "codex";
-
-static DISCOVERED_HARNESSES: OnceLock<Vec<AgentInfo>> = OnceLock::new();
 
 /// One drivable agent (Hermes profile or local CLI harness) as the UI consumes it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -183,30 +180,26 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
     out
 }
 
-fn cached_cli_harnesses() -> Vec<AgentInfo> {
-    DISCOVERED_HARNESSES
-        .get_or_init(|| {
-            std::env::var_os("PATH")
-                .and_then(|p| p.into_string().ok())
-                .map(|path| discover_cli_harnesses(&path))
-                .unwrap_or_default()
-        })
-        .clone()
+/// Probe the local host's PATH for CLI harnesses (claude, codex), fresh each
+/// call. This is the local envoy's job — no process-lifetime cache, so a manual
+/// "detect agents" refresh picks up newly-installed CLIs.
+fn discover_cli_harnesses_now() -> Vec<AgentInfo> {
+    std::env::var_os("PATH")
+        .and_then(|p| p.into_string().ok())
+        .map(|path| discover_cli_harnesses(&path))
+        .unwrap_or_default()
 }
 
-/// List all drivable agents: the root profile (as `default`) plus every
-/// `~/.hermes/profiles/<name>/`, followed by locally discovered CLI harnesses.
-/// Hermes profiles are sorted with `default` first, then by id. CLI harness
-/// probing is cached for the process lifetime so GET /api/agents is cheap.
-pub fn list_agents() -> Vec<AgentInfo> {
+/// Discover every agent available on THIS host — the local node's envoy view:
+/// the root Hermes profile (as `default`), each `~/.hermes/profiles/<name>/`,
+/// and any installed CLI harnesses (claude, codex). Probed fresh (no cache) so
+/// a manual refresh reflects installs/uninstalls. This is what the local node
+/// reports; a remote envoy runs the equivalent on its own host.
+pub fn discover_local_agents() -> Vec<AgentInfo> {
     let Some(home) = hermes_home() else {
-        return cached_cli_harnesses();
+        return discover_cli_harnesses_now();
     };
-    let mut out = vec![agent_from_config(
-        "default",
-        &home.join("config.yaml"),
-        true,
-    )];
+    let mut out = vec![agent_from_config("default", &home.join("config.yaml"), true)];
 
     if let Ok(entries) = std::fs::read_dir(home.join("profiles")) {
         let mut profiles: Vec<AgentInfo> = entries
@@ -225,8 +218,15 @@ pub fn list_agents() -> Vec<AgentInfo> {
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
         out.extend(profiles);
     }
-    out.extend(cached_cli_harnesses());
+    out.extend(discover_cli_harnesses_now());
     out
+}
+
+/// List all drivable agents. DEPRECATED as fleet truth — this probes the
+/// control-plane host directly. The registry (per-node, envoy-reported) is the
+/// real source; kept only as a fallback + for the flat model list.
+pub fn list_agents() -> Vec<AgentInfo> {
+    discover_local_agents()
 }
 
 /// Distinct models across all agents, for the model picker. Each entry pairs

@@ -28,6 +28,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::server::agents::AgentInfo;
+
 /// Node status as the control plane tracks it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -60,6 +62,11 @@ pub struct NodeInfo {
     pub local: bool,
     /// Seconds since last heartbeat.
     pub last_heartbeat_ago_secs: u64,
+    /// Agents this node's envoy has discovered on its host (Hermes profiles +
+    /// installed CLI harnesses). Populated by the node's envoy — for the local
+    /// node, by in-process discovery at boot and on manual refresh. Empty until
+    /// a remote envoy reports its agents.
+    pub agents: Vec<AgentInfo>,
 }
 
 /// Internal tracking entry (not serialized directly; `NodeInfo` is the wire shape).
@@ -72,6 +79,7 @@ struct NodeEntry {
     version: String,
     local: bool,
     last_heartbeat: Instant,
+    agents: Vec<AgentInfo>,
 }
 
 /// Heartbeat timeout: a node is `offline` if no heartbeat for this long.
@@ -93,6 +101,8 @@ impl NodeRegistry {
     }
 
     /// Register or re-register a node (hello handshake). Updates all fields.
+    /// `agents` is the node's envoy-discovered agent list (empty for a remote
+    /// node until it reports; the local node passes its in-process discovery).
     pub async fn register(
         &self,
         node_id: &str,
@@ -100,6 +110,7 @@ impl NodeRegistry {
         slots_total: u32,
         version: &str,
         local: bool,
+        agents: Vec<AgentInfo>,
     ) {
         let now = Instant::now();
         let mut nodes = self.nodes.write().await;
@@ -114,8 +125,47 @@ impl NodeRegistry {
                 version: version.to_string(),
                 local,
                 last_heartbeat: now,
+                agents,
             },
         );
+    }
+
+    /// Replace a node's discovered agent list (manual "detect agents" refresh,
+    /// or a remote envoy re-reporting). Returns the updated list, or an error if
+    /// the node is unknown.
+    pub async fn set_agents(
+        &self,
+        node_id: &str,
+        agents: Vec<AgentInfo>,
+    ) -> Result<Vec<AgentInfo>, NodeError> {
+        let mut nodes = self.nodes.write().await;
+        let entry = nodes
+            .get_mut(node_id)
+            .ok_or(NodeError::UnknownNode(node_id.to_string()))?;
+        entry.agents = agents.clone();
+        Ok(agents)
+    }
+
+    /// Get a node's discovered agents.
+    pub async fn agents(&self, node_id: &str) -> Result<Vec<AgentInfo>, NodeError> {
+        let nodes = self.nodes.read().await;
+        nodes
+            .get(node_id)
+            .map(|e| e.agents.clone())
+            .ok_or(NodeError::UnknownNode(node_id.to_string()))
+    }
+
+    /// All agents across every node, deduped by (node_id is dropped) agent id.
+    /// Used by the flat /api/agents list for backward compatibility.
+    pub async fn all_agents(&self) -> Vec<AgentInfo> {
+        let nodes = self.nodes.read().await;
+        let mut seen = std::collections::BTreeMap::new();
+        for e in nodes.values() {
+            for a in &e.agents {
+                seen.entry(a.id.clone()).or_insert_with(|| a.clone());
+            }
+        }
+        seen.into_values().collect()
     }
 
     /// Update a node's heartbeat and slot usage.
@@ -190,6 +240,7 @@ impl NodeRegistry {
                 version: e.version.clone(),
                 local: e.local,
                 last_heartbeat_ago_secs: now.duration_since(e.last_heartbeat).as_secs(),
+                agents: e.agents.clone(),
             })
             .collect()
     }
@@ -206,6 +257,7 @@ impl NodeRegistry {
             version: e.version.clone(),
             local: e.local,
             last_heartbeat_ago_secs: Instant::now().duration_since(e.last_heartbeat).as_secs(),
+            agents: e.agents.clone(),
         })
     }
 
@@ -349,7 +401,7 @@ async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry)
             } => {
                 tracing::info!(node = %node_id, hostname = %hostname, "node registered");
                 registry
-                    .register(&node_id, &hostname, slots_total, &version, false)
+                    .register(&node_id, &hostname, slots_total, &version, false, Vec::new())
                     .await;
                 connected_node = Some(node_id);
                 NodeResponse::Welcome { status: "ok" }
@@ -397,7 +449,7 @@ mod tests {
     #[tokio::test]
     async fn register_and_list() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -409,7 +461,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_updates_slots() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
 
         reg.heartbeat("node-1", 2).await.unwrap();
 
@@ -427,7 +479,7 @@ mod tests {
     #[tokio::test]
     async fn deregister_removes_node() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
         assert_eq!(reg.list().await.len(), 1);
 
         reg.deregister("node-1").await;
@@ -437,9 +489,9 @@ mod tests {
     #[tokio::test]
     async fn re_register_updates_fields() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 2, "0.1", false).await;
+        reg.register("node-1", "host-1", 2, "0.1", false, vec![]).await;
         // Re-register with updated capacity
-        reg.register("node-1", "host-1", 8, "0.2", false).await;
+        reg.register("node-1", "host-1", 8, "0.2", false, vec![]).await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -450,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn local_node_never_evicted() {
         let reg = NodeRegistry::new();
-        reg.register("local", "localhost", 4, "0.1", true).await;
+        reg.register("local", "localhost", 4, "0.1", true, vec![]).await;
 
         // Even after a long wait, local node stays.
         sleep(Duration::from_millis(50)).await;
@@ -462,7 +514,7 @@ mod tests {
     #[tokio::test]
     async fn set_draining_changes_status() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
 
         reg.set_draining("node-1").await.unwrap();
         let nodes = reg.list().await;
@@ -472,8 +524,8 @@ mod tests {
     #[tokio::test]
     async fn online_count() {
         let reg = NodeRegistry::new();
-        reg.register("n1", "h1", 4, "0.1", false).await;
-        reg.register("n2", "h2", 4, "0.1", false).await;
+        reg.register("n1", "h1", 4, "0.1", false, vec![]).await;
+        reg.register("n2", "h2", 4, "0.1", false, vec![]).await;
         reg.set_draining("n2").await.unwrap();
 
         assert_eq!(reg.online_count().await, 1);
@@ -482,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn get_single_node() {
         let reg = NodeRegistry::new();
-        reg.register("n1", "h1", 4, "0.1", false).await;
+        reg.register("n1", "h1", 4, "0.1", false, vec![]).await;
 
         let node = reg.get("n1").await.unwrap();
         assert_eq!(node.node_id, "n1");
