@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
 use crate::vault::{NoteDocument, NoteTreeEntry, NoteTreeEntryKind, VaultSummary};
-use crate::views::{CardRow, MessageRow, RegistryEntry, SessionRow, SetupRow};
+use crate::views::{CardRow, MessageRow, RegistryEntry, RepoRow, SessionRow, SetupRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -418,6 +418,28 @@ impl From<NoteDocument> for NoteDocumentDto {
             markdown: note.markdown,
             frontmatter: note.frontmatter,
             linked_notes: note.linked_notes,
+        }
+    }
+}
+
+/// `Repo` as the UI consumes it (api-contract.md §Repos).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoDto {
+    pub slug: String,
+    pub url: String,
+    pub default_branch: String,
+    pub registered_at: f64,
+}
+
+impl RepoDto {
+    /// Map a view row → wire DTO.
+    pub fn from_row(row: &RepoRow) -> Self {
+        Self {
+            slug: row.slug.clone(),
+            url: row.url.clone(),
+            default_branch: row.default_branch.clone(),
+            registered_at: row.registered_at,
         }
     }
 }

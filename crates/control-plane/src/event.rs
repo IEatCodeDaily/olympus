@@ -197,6 +197,22 @@ pub enum Event {
         definition: String, // JSON string (harness-agnostic)
         registered_at: f64,
     },
+    // ---- Repo management events ----
+    /// A git repo was registered in the repo registry.
+    RepoRegistered {
+        slug: String,
+        url: String,
+        default_branch: String,
+        registered_at: f64,
+    },
+    /// A repo was removed from the registry.
+    RepoRemoved { slug: String, removed_at: f64 },
+    /// A repo was attached to a session's jj workspace.
+    SessionRepoAttached {
+        session_id: String,
+        slug: String,
+        attached_at: f64,
+    },
 }
 
 #[cfg(test)]
@@ -432,6 +448,44 @@ mod tests {
             to_agent_kind: "ClaudeCode".into(),
             translated_message_count: 15,
             handed_over_at: 1_700_000_020.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    // ---- Repo management event roundtrips ----
+
+    #[test]
+    fn repo_registered_roundtrips() {
+        let e = Event::RepoRegistered {
+            slug: "olympus".into(),
+            url: "https://github.com/user/olympus".into(),
+            default_branch: "main".into(),
+            registered_at: 1_700_000_100.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn repo_removed_roundtrips() {
+        let e = Event::RepoRemoved {
+            slug: "old-repo".into(),
+            removed_at: 1_700_000_200.0,
+        };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn session_repo_attached_roundtrips() {
+        let e = Event::SessionRepoAttached {
+            session_id: "sess-1".into(),
+            slug: "olympus".into(),
+            attached_at: 1_700_000_300.0,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

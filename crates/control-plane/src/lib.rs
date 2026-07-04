@@ -15,6 +15,7 @@ pub mod irc;
 pub mod log;
 pub mod node;
 pub mod proxy;
+pub mod repos;
 pub mod search;
 pub mod server;
 pub mod sync;

@@ -167,6 +167,22 @@ enum StoredVariant {
         hermes_id: Option<String>,
         pinned: Option<bool>,
     },
+    // ---- Repo management (appended AFTER SessionUpdatedV2) ----
+    RepoRegistered {
+        slug: String,
+        url: String,
+        default_branch: String,
+        registered_at: f64,
+    },
+    RepoRemoved {
+        slug: String,
+        removed_at: f64,
+    },
+    SessionRepoAttached {
+        session_id: String,
+        slug: String,
+        attached_at: f64,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -389,6 +405,30 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             to_agent_kind: to_agent_kind.clone(),
             translated_message_count: *translated_message_count,
             handed_over_at: *handed_over_at,
+        },
+        Event::RepoRegistered {
+            slug,
+            url,
+            default_branch,
+            registered_at,
+        } => StoredVariant::RepoRegistered {
+            slug: slug.clone(),
+            url: url.clone(),
+            default_branch: default_branch.clone(),
+            registered_at: *registered_at,
+        },
+        Event::RepoRemoved { slug, removed_at } => StoredVariant::RepoRemoved {
+            slug: slug.clone(),
+            removed_at: *removed_at,
+        },
+        Event::SessionRepoAttached {
+            session_id,
+            slug,
+            attached_at,
+        } => StoredVariant::SessionRepoAttached {
+            session_id: session_id.clone(),
+            slug: slug.clone(),
+            attached_at: *attached_at,
         },
     };
     Ok(StoredEvent { variant })
@@ -644,6 +684,27 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             translated_message_count,
             handed_over_at,
         },
+        StoredVariant::RepoRegistered {
+            slug,
+            url,
+            default_branch,
+            registered_at,
+        } => Event::RepoRegistered {
+            slug,
+            url,
+            default_branch,
+            registered_at,
+        },
+        StoredVariant::RepoRemoved { slug, removed_at } => Event::RepoRemoved { slug, removed_at },
+        StoredVariant::SessionRepoAttached {
+            session_id,
+            slug,
+            attached_at,
+        } => Event::SessionRepoAttached {
+            session_id,
+            slug,
+            attached_at,
+        },
     })
 }
 
@@ -753,7 +814,10 @@ impl Log {
                 | Event::CardReassigned { .. }
                 | Event::SessionForked { .. }
                 | Event::CardSessionLinked { .. }
-                | Event::SessionHandover { .. } => true,
+                | Event::SessionHandover { .. }
+                | Event::RepoRegistered { .. }
+                | Event::RepoRemoved { .. }
+                | Event::SessionRepoAttached { .. } => true,
                 Event::SessionCreated { source, .. } => source == "olympus",
                 Event::SessionUpdated { session_id, .. }
                 | Event::MessageAppended { session_id, .. }

@@ -36,8 +36,8 @@ use crate::search::SearchIndex;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
 use dto::{
-    CardDto, MessageDto, NoteDocumentDto, NoteTreeEntryDto, RegistryEntryDto, SearchHitDto,
-    SessionDto, SetupDto, VaultSummaryDto,
+    CardDto, MessageDto, NoteDocumentDto, NoteTreeEntryDto, RegistryEntryDto, RepoDto,
+    SearchHitDto, SessionDto, SetupDto, VaultSummaryDto,
 };
 use ws::ServerFrame;
 
@@ -145,6 +145,9 @@ pub fn build_router(state: AppState) -> Router {
             "/api/proxy/{slug}",
             axum::routing::delete(crate::proxy::delete_proxy_endpoint),
         )
+        .route("/api/repos", get(list_repos).post(register_repo))
+        .route("/api/repos/{slug}", get(get_repo).delete(remove_repo))
+        .route("/api/sessions/{id}/repos", post(attach_repo))
         .route("/ws", get(ws::ws_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
@@ -946,6 +949,86 @@ fn vault_error(err: anyhow::Error) -> Response {
         Json(json!({ "error": "vault_error", "message": err.to_string() })),
     )
         .into_response()
+}
+
+// ── Repo handlers ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct RegisterRepoBody {
+    slug: String,
+    url: String,
+    #[serde(default = "default_branch")]
+    default_branch: String,
+}
+
+fn default_branch() -> String {
+    "main".to_string()
+}
+
+async fn list_repos(State(state): State<AppState>) -> Response {
+    let views = state.views.read().await;
+    let dtos: Vec<RepoDto> = views
+        .repos
+        .list()
+        .iter()
+        .map(|r| RepoDto::from_row(r))
+        .collect();
+    drop(views);
+    Json(dtos).into_response()
+}
+
+async fn get_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    match state.views.read().await.repos.get(&slug) {
+        Some(row) => Json(RepoDto::from_row(row)).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn register_repo(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterRepoBody>,
+) -> Response {
+    let event = crate::event::Event::RepoRegistered {
+        slug: body.slug.clone(),
+        url: body.url.clone(),
+        default_branch: body.default_branch.clone(),
+        registered_at: now_epoch(),
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn remove_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    // Verify repo exists before emitting removal event.
+    if state.views.read().await.repos.get(&slug).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let event = crate::event::Event::RepoRemoved {
+        slug,
+        removed_at: now_epoch(),
+    };
+    append_and_apply(&state, event).await
+}
+
+#[derive(Debug, Deserialize)]
+struct AttachRepoBody {
+    slug: String,
+}
+
+async fn attach_repo(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<AttachRepoBody>,
+) -> Response {
+    // Verify session exists.
+    if state.views.read().await.sessions.get(&session_id).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let event = crate::event::Event::SessionRepoAttached {
+        session_id,
+        slug: body.slug,
+        attached_at: now_epoch(),
+    };
+    append_and_apply(&state, event).await
 }
 
 #[derive(Debug, Deserialize)]
