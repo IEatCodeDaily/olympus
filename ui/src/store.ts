@@ -38,10 +38,19 @@ interface UIState {
   setSidebarWidth: (w: number) => void;
 }
 
+/** True on phone-width screens where the sidebar renders as a fixed overlay. */
+function startCollapsed(): boolean {
+  try {
+    return window.matchMedia("(max-width: 820px)").matches;
+  } catch {
+    return false; // jsdom / SSR
+  }
+}
+
 export const useUIStore = create<UIState>((set) => ({
   view: "sessions",
   activeSessionId: null,
-  sidebarCollapsed: false,
+  sidebarCollapsed: startCollapsed(),
   bottomCollapsed: true,
   rightSidebarCollapsed: false,
   bottomTab: "events",

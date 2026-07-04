@@ -34,7 +34,6 @@ export function ForkModal({
     >
       <div
         className="ol-dialog"
-        style={{ maxWidth: 420 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="ol-dialog-head">

@@ -224,6 +224,7 @@ function HistoryRow({
     <div
       className="ol-card hist-row"
       data-session-id={session.id}
+      data-managed={session.managed ? "true" : "false"}
       style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 6 }}
       onClick={onOpen}
     >

@@ -94,6 +94,7 @@ function NodeCard({
     <div
       role="button"
       tabIndex={0}
+      data-node-id={node.nodeId}
       className={`gcard click ${selected ? "selected" : ""}`}
       style={selected ? { borderColor: "var(--border-strong)" } : undefined}
       onClick={onClick}
@@ -318,8 +319,9 @@ export default function FleetView() {
   // envoy-discovered agents (per-node, not a global control-plane probe).
   const nodes: FleetNode[] = nodesQ.data?.nodes ?? [];
 
-  const selectedNode =
-    nodes.find((n) => n.nodeId === selectedId) ?? (selectedId ? null : nodes[0] ?? null);
+  const selectedNode = selectedId
+    ? (nodes.find((n) => n.nodeId === selectedId) ?? null)
+    : null;
 
   const handleDetect = async (nodeId: string) => {
     setDetectingNode(nodeId);
@@ -358,6 +360,7 @@ export default function FleetView() {
           <div className="gv-wrap">
             <div
               className="ggrid"
+              data-testid="fleet-grid"
               style={{ gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))" }}
             >
               {nodes.map((node) => (

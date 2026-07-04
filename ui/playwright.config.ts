@@ -14,12 +14,19 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:5188",
     trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
     viewport: { width: 1280, height: 800 },
   },
   projects: [
     {
-      name: "chromium",
+      name: "chromium-desktop",
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "mobile-chrome",
+      use: { ...devices["Pixel 7"] },
+      grepInvert: /@desktop-only/,
     },
   ],
   webServer: {

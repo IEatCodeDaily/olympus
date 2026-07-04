@@ -255,7 +255,7 @@
 .ol-overlay { position: fixed; inset: 0; background: var(--overlay); backdrop-filter: blur(2px); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: var(--space-16); }
 .ol-dialog { background: var(--bg-elev); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-modal); width: 100%; max-width: 460px; overflow: hidden; }
+  box-shadow: var(--shadow-modal); width: 100%; max-width: min(460px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
 .ol-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-8);
   padding: var(--panel-pad-lg); border-bottom: var(--border-w) solid var(--border); }
 .ol-dialog-title { font-family: var(--font-sans); font-size: var(--fs-16); font-weight: var(--fw-semibold); color: var(--text); }

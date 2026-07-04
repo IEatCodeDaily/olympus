@@ -17,6 +17,7 @@ import { useState, useCallback } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Icon } from "../../../components/Icon";
 import { useSessions, useUpdateSession } from "../../../hooks/queries";
+import { useUIStore } from "../../../store";
 import { createSession } from "../../../api";
 import type { Session } from "../../../types";
 import { timeAgo } from "../helpers";
@@ -24,6 +25,16 @@ import { AgentPicker } from "./AgentPicker";
 
 /** Max rows in the RECENT section; the rest live in the History page. */
 const RECENT_LIMIT = 5;
+
+/** On phone-width screens the sidebar is a fixed overlay — close it after
+ *  navigation so the destination is actually visible (drawer pattern). */
+function isPhoneViewport(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 820px)").matches
+  );
+}
 
 export function SessionSidebar({
   width,
@@ -37,6 +48,12 @@ export function SessionSidebar({
   const navigate = useNavigate();
   const { data: sessionData } = useSessions({ managed: true, archived: false });
   const sessions = sessionData?.sessions ?? [];
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+
+  // Close the overlay sidebar after navigating on phone screens.
+  const closeIfPhone = useCallback(() => {
+    if (isPhoneViewport()) toggleSidebar();
+  }, [toggleSidebar]);
 
   // PINNED = user-pinned only. Liveness NEVER moves a session here.
   const pinned = sessions.filter((s) => s.pinned);
@@ -71,8 +88,9 @@ export function SessionSidebar({
   const handleSelectSession = useCallback(
     (id: string) => {
       void navigate({ to: "/sessions/$sessionId", params: { sessionId: id } });
+      closeIfPhone();
     },
-    [navigate],
+    [navigate, closeIfPhone],
   );
 
   return (

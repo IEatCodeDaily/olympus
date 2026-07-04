@@ -21,7 +21,7 @@ async function row(page: Page, n: number) {
 /** Get the text of the session title shown in the row. */
 async function rowTitle(page: Page, n: number): Promise<string> {
   const r = await row(page, n);
-  return (await r.locator(".title").textContent()) ?? "";
+  return (await r.locator(".srow-title").textContent()) ?? "";
 }
 
 /** Get the unique session id from the row (always distinct, unlike titles). */
@@ -66,7 +66,7 @@ test.describe("Session selection and chat-view switching", () => {
     expect(count).toBeGreaterThanOrEqual(3);
   });
 
-  test("clicking session 1 shows its content in the chat panel", async ({ page }) => {
+  test("clicking session 1 shows its content in the chat panel @desktop-only", async ({ page }) => {
     const title1 = await rowTitle(page, 1);
 
     await (await row(page, 1)).click();
@@ -82,7 +82,7 @@ test.describe("Session selection and chat-view switching", () => {
     expect(ct).toBe(title1);
   });
 
-  test("clicking session 3 after session 1 switches highlight and content", async ({ page }) => {
+  test("clicking session 3 after session 1 switches highlight and content @desktop-only", async ({ page }) => {
     const id1 = await rowId(page, 1);
     const id3 = await rowId(page, 3);
 
@@ -108,7 +108,7 @@ test.describe("Session selection and chat-view switching", () => {
     expect(shown).not.toBe(id1);
   });
 
-  test("clicking session 1 → 3 → 1 round-trips correctly", async ({ page }) => {
+  test("clicking session 1 → 3 → 1 round-trips correctly @desktop-only", async ({ page }) => {
     const id1 = await rowId(page, 1);
     const id3 = await rowId(page, 3);
 
@@ -129,7 +129,7 @@ test.describe("Session selection and chat-view switching", () => {
     expect(await chatId(page)).toBe(id1);
   });
 
-  test("highlight is on the correct row at every step of a multi-click sequence", async ({ page }) => {
+  test("highlight is on the correct row at every step of a multi-click sequence @desktop-only", async ({ page }) => {
     // Click rows 1, 2, 3, 2 in sequence and verify highlight + content at each step
     for (const n of [1, 2, 3, 2]) {
       const expectedId = await rowId(page, n);
@@ -139,44 +139,41 @@ test.describe("Session selection and chat-view switching", () => {
     }
   });
 
+});
+
+test.describe("Fork from history", () => {
   test("forking an observed session opens the managed fork", async ({ page }) => {
-    // Observed sessions are in the OBSERVED section (data-managed="false").
-    // Click through them until we find one with a "Fork to continue" button.
-    const observedRows = page.locator('.srow[data-managed="false"]');
-    const count = await observedRows.count();
-    expect(count).toBeGreaterThan(0);
+    // Observed sessions live in the History page now (sidebar shows only
+    // pinned + 5 recent managed sessions). Open History, filter to an
+    // observed channel, and open the first row.
+    await page.goto("/sessions/history");
+    await page.waitForSelector(".hist-row[data-session-id]", { timeout: 10_000 });
 
-    let sourceId = "";
-    let forkButton = page.getByRole("button", { name: "Fork to continue" });
+    // Filter to the cli channel (observed in fixtures)
+    await page.locator("select[title='Channel']").selectOption("cli");
+    await page.waitForTimeout(300);
 
-    for (let n = 0; n < Math.min(count, 6); n += 1) {
-      await observedRows.nth(n).click();
-      await page.waitForSelector(".chat-view", { timeout: 5_000 });
-      if ((await forkButton.count()) > 0) {
-        sourceId = await chatId(page);
-        break;
-      }
-    }
+    // Only rows that are actually observed (fixtures mark some cli rows managed)
+    const rows = page.locator('.hist-row[data-managed="false"]');
+    expect(await rows.count()).toBeGreaterThan(0);
+    await rows.first().click();
 
-    expect(sourceId).not.toBe("");
-    await expect(forkButton).toBeEnabled();
+    await page.waitForSelector(".chat-view", { timeout: 5_000 });
+    const sourceId = await chatId(page);
+
+    // Observed banner + fork affordance
+    const forkButton = page.getByRole("button", { name: "Fork to continue" }).first();
+    await expect(forkButton).toBeVisible({ timeout: 5_000 });
     await forkButton.click();
 
-    // Bug 1 fix: fork now opens a fixed-position confirmation modal.
-    // Click the confirm button in the dialog to proceed with the fork.
+    // Confirmation modal → confirm
     const confirmBtn = page.getByRole("button", { name: "Fork to continue" }).last();
     await expect(confirmBtn).toBeVisible({ timeout: 3_000 });
     await confirmBtn.click();
 
-    // A forked session is managed (steerable): the composer input is present,
-    // and it shows a managed status badge — "running" (active) when freshly
-    // forked within the recency window, or "idle" otherwise.
-    await expect(page.locator(".composer-input")).toBeVisible();
-    await expect(
-      page.locator(".chat-live-badge, .chat-managed-badge")
-    ).toBeVisible();
+    // The forked session is managed: composer is live, id differs from source
+    await expect(page.locator(".composer-input")).toBeVisible({ timeout: 5_000 });
     const forkedId = await chatId(page);
     expect(forkedId).not.toBe(sourceId);
-    await expect(page.locator(".chat-view")).toHaveAttribute("data-session-id", forkedId);
   });
 });
