@@ -188,8 +188,9 @@ button {
 .plusbtn { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; background: none; border: none; border-radius: var(--radius); color: var(--dim); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .plusbtn:hover { background: var(--hover); color: var(--text); }
 .pluspop { flex-direction: column; min-width: 168px; bottom: calc(100% + 6px); left: 0; }
-/* Meta row — node · agent, inside the composer box below the bar */
-.comp-meta { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-2) 0; font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); }
+/* Meta row — node · agent. Outside/below the composer box, same width bound
+   (matches .comp-box max-width + centering) so it hugs the box's left edge. */
+.comp-meta { max-width: var(--measure); margin: 0 auto; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-2) 0; font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); }
 .cm-item { display: flex; align-items: center; gap: var(--space-2); }
 .cm-item span { color: var(--faint); }
 .cm-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--border-strong); flex-shrink: 0; }
