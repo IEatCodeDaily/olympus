@@ -343,15 +343,15 @@ button {
 .proj-badge { display: flex; align-items: center; padding: 2px var(--space-5); background: var(--silver-subtle); border: var(--border-w) solid var(--silver-line); border-radius: var(--radius-full); font-family: var(--font-mono); font-size: var(--fs-9); font-weight: var(--fw-medium); letter-spacing: var(--tracking-caps); color: var(--silver); }
 
 /* ── Toolcard (tool call output) ─────────────────── */
-.toolcard { max-width: var(--measure-msg); background: var(--elev); border: var(--border-w) solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.toolcard.muted { background: var(--bg-elev); border-color: var(--border-faint); opacity: 0.7; }
-.toolcard.muted:hover { opacity: 1; border-color: var(--border); }
-.tc-head { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-6); font-family: var(--font-mono); font-size: var(--fs-12); }
+.toolcard { max-width: var(--measure-msg); background: none; border: none; border-radius: 0; overflow: hidden; }
+.toolcard.muted { background: none; border: none; opacity: 0.55; }
+.toolcard.muted:hover { opacity: 0.85; }
+.tc-head { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) 0; font-family: var(--font-mono); font-size: var(--fs-12); cursor: pointer; }
 .toolcard.muted .tc-head .nm { color: var(--text-dim); font-weight: var(--fw-regular); }
 .tc-head .nm { color: var(--text); font-weight: var(--fw-medium); }
 .tc-head .st { color: var(--green); }
 .tc-head .sp { flex: 1; }
-.tc-body { border-top: var(--border-w) solid var(--border); padding: var(--space-4-5) var(--space-6); }
+.tc-body { padding: var(--space-2) 0 var(--space-4); }
 .tc-out { font-family: var(--font-mono); font-size: var(--fs-11-5); line-height: var(--lh-normal); color: var(--dim); white-space: pre-wrap; }
 
 /* ── Message action bar ──────────────────────────── */

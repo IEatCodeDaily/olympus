@@ -59,13 +59,18 @@ export function ChatPage({
     serverMessages.some(
       (m) => m.role === "user" && m.content === optimisticMsg.content,
     );
+  // Only show optimistic if no server messages with the same content exist.
+  // The old check used `echoed` but a race could show both briefly.
+  const hasServerEcho = serverMessages.some(
+    (m) => m.role === "user" && m.content === optimisticMsg?.content && m.messageId >= 0,
+  );
   const messages =
-    optimisticMsg && !echoed ? [...serverMessages, optimisticMsg] : serverMessages;
+    optimisticMsg && !hasServerEcho ? [...serverMessages, optimisticMsg] : serverMessages;
 
   // Clear the optimistic copy as soon as the server echo lands.
   useEffect(() => {
-    if (echoed) setOptimisticMsg(null);
-  }, [echoed]);
+    if (hasServerEcho) setOptimisticMsg(null);
+  }, [hasServerEcho]);
 
   const isObserved = session?.managed === false;
 
@@ -124,7 +129,7 @@ export function ChatPage({
   }, [messages.length, streamingText, agentStatus]);
 
   // ── Send (Bug 7b: optimistic + thinking status) ──────────────────
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(async (model?: string) => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
 
@@ -149,7 +154,7 @@ export function ChatPage({
     setOptimisticMsg(optimistic);
 
     try {
-      await sendMessage(sessionId, trimmed);
+      await sendMessage(sessionId, trimmed, model);
       // The server returns 202; the agent status stays "thinking" until
       // the first /ws delta arrives (handled by the effect above).
     } catch {

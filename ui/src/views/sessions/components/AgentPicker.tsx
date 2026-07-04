@@ -122,6 +122,7 @@ export function AgentPicker({
                     {/* Bug 3: id + provider only, no ACP/CLI dual-label */}
                     {a.provider ?? "—"}
                     {a.model ? ` · ${a.model}` : ""}
+                    <span style={{ color: "var(--silver)", marginLeft: 4 }}>· olympus</span>
                   </div>
                 </span>
               </button>

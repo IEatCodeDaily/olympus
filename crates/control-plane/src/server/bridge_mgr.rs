@@ -221,7 +221,7 @@ impl BridgeManager {
     /// `hermes_id` is empty until the runtime actually starts and captures it;
     /// it is backfilled via a `SessionUpdated{hermes_id}` event on first send.
     pub fn create_draft(&self, spec: &RuntimeSpec) -> Result<NewSession> {
-        let now = chrono_epoch();
+        let now = chrono_epoch_pub();
         // A durable id, stable from birth: `<utc>-<node>-<hash>`. There is no
         // draft→real rename — only the space and agent session are lazy.
         let session_id = self.new_session_id();
@@ -321,7 +321,7 @@ impl BridgeManager {
         // A fork is a real managed session — give it its own space too.
         let _ = self.ensure_space(&session_id);
 
-        let now = chrono_epoch();
+        let now = chrono_epoch_pub();
         self.log.append(&Event::SessionCreated {
             session_id: session_id.clone(),
             hermes_id: hermes_id.clone(),
@@ -401,7 +401,7 @@ impl BridgeManager {
         message_id: u64,
         text: &str,
     ) -> Result<Event> {
-        let now = chrono_epoch();
+        let now = chrono_epoch_pub();
         let event = Event::MessageAppended {
             session_id: session_id.to_string(),
             hermes_session_id: hermes_id.to_string(),
@@ -430,7 +430,7 @@ impl BridgeManager {
         tool_calls: &Option<String>,
         finish_reason: Option<&str>,
     ) -> Result<Event> {
-        let now = chrono_epoch();
+        let now = chrono_epoch_pub();
         let event = Event::MessageAppended {
             session_id: session_id.to_string(),
             hermes_session_id: hermes_id.to_string(),
@@ -459,7 +459,7 @@ impl BridgeManager {
         text: &str,
         finish_reason: Option<&str>,
     ) -> Result<Event> {
-        let now = chrono_epoch();
+        let now = chrono_epoch_pub();
         let event = Event::MessageAppended {
             session_id: session_id.to_string(),
             hermes_session_id: hermes_id.to_string(),
@@ -479,7 +479,7 @@ impl BridgeManager {
 }
 
 /// Current epoch seconds as f64.
-fn chrono_epoch() -> f64 {
+pub fn chrono_epoch_pub() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())

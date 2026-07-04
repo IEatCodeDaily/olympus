@@ -1715,6 +1715,38 @@ async fn post_message(
             Ok(pair) => pair,
             Err(e) => {
                 tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
+                // PERSIST the error as a system message so the user sees it in
+                // the transcript — the old code only broadcast a transient WS
+                // frame, so if the user wasn't watching it vanished silently.
+                let err_msg = format!("⚠ Failed to start agent: {e}");
+                let hid = resume_hermes.clone().unwrap_or_default();
+                if let Ok(event) = bridge.append_system_message(
+                    &session_id,
+                    &hid,
+                    assistant_seed_id,
+                    &err_msg,
+                    Some("error"),
+                ) {
+                    {
+                        let mut v = views.write().await;
+                        v.apply(&event);
+                    }
+                    let _ = deltas.send(ServerFrame::MessageAppended {
+                        session_id: session_id.clone(),
+                        message: crate::server::dto::MessageDto {
+                            message_id: assistant_seed_id,
+                            session_id: session_id.clone(),
+                            role: "system".into(),
+                            content: Some(err_msg.clone()),
+                            tool_name: None,
+                            tool_calls: None,
+                            reasoning: None,
+                            timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+                            token_count: None,
+                            finish_reason: Some("error".into()),
+                        },
+                    });
+                }
                 let _ = deltas.send(ServerFrame::MessageDone {
                     session_id: session_id.clone(),
                     message_id: assistant_seed_id,

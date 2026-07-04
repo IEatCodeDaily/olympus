@@ -204,7 +204,7 @@ function SessionRow({
 
   const isRunning = session.liveness === "running" || session.liveness === "active";
   const needsInput = session.liveness === "input-required";
-  const showIcon = (isRunning || needsInput) && !active;
+  const showIcon = isRunning || needsInput;
 
   return (
     <div

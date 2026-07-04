@@ -52,7 +52,7 @@ export function Composer({
   text: string;
   onTextChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onSend: () => void;
+  onSend: (model?: string) => void;
   sending: boolean;
   sessionModel: string | null;
   sessionAgent: string | null;
@@ -233,7 +233,7 @@ export function Composer({
             <button
               type="button"
               className="send"
-              onClick={onSend}
+              onClick={() => onSend(selectedModel)}
               disabled={!text.trim() || sending}
               title="Send"
             >
