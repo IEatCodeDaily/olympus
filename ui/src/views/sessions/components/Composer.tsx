@@ -165,15 +165,8 @@ export function Composer({
             </div>
           </div>
 
-          {/* RIGHT: locked agent icon + model selector + thinking + send */}
+          {/* RIGHT: model selector + thinking + send */}
           <div className="comp-r">
-            <span
-              className="agent-lock"
-              title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
-            >
-              <BrandIcon name={agentIcon} size={16} />
-            </span>
-
             <div className="selwrap" ref={modelRef} style={{ position: "relative" }}>
               <button
                 type="button"
@@ -248,12 +241,21 @@ export function Composer({
             </button>
           </div>
         </div>
-      </div>
-
-      {/* Node indicator — auxiliary, below the composer */}
-      <div className="comp-node" title={`Running on node: ${nodeLabel}`}>
-        <Icon name="server" size={11} />
-        <span>{nodeLabel}</span>
+        {/* Meta row — node + agent, inside the composer box (bounded width) */}
+        <div className="comp-meta">
+          <span className="cm-item" title={`Running on node: ${nodeLabel}`}>
+            <Icon name="server" size={11} />
+            <span>{nodeLabel}</span>
+          </span>
+          <span className="cm-dot" />
+          <span
+            className="cm-item"
+            title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
+          >
+            <BrandIcon name={agentIcon} size={12} />
+            <span>{agentName}</span>
+          </span>
+        </div>
       </div>
     </div>
   );
