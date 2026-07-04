@@ -542,6 +542,65 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-04 — Repoint the `.ol-*` primitive library onto the `--space-*` half-step tier — carry the odd-pixel-spacing fix into the source-of-truth component CSS (extends the earlier `index.css` sweep)
+
+- **The debt this closes:** on an earlier 2026-07-04 run the odd-pixel half-step
+  spacing tier (`--space-3-5`=7px / `--space-4-5`=9px / `--space-5-5`=11px) was
+  formalized in `design/tokens/spacing.css` and every off-scale `7/9/11px`
+  padding+gap site in **`index.css`** was repointed to it. But the sweep stopped
+  at the app-shell CSS — the **canonical `.ol-*` primitive library**
+  (`design/styles/components.css`), which §8.A documents as the source-of-truth
+  primitive set ("Every rule reads from tokens; no raw hex"), still shipped the
+  **identical** raw `2px/4px/7px/8px/9px/11px` padding+gap literals it was built
+  with. The library that view workers are meant to copy from carried the exact
+  debt that had just been fixed downstream — a consistency inversion.
+- **Fix (system-level, `design/styles/components.css` only — no view internals,
+  no token definitions changed; all tokens already existed):**
+  - `.ol-badge` — `padding: 2px 7px` → `var(--space-1) var(--space-3-5)`.
+  - `.ol-live` — `padding: 2px 7px` → `var(--space-1) var(--space-3-5)`.
+  - `.ol-tag` — `padding: 4px 8px` → `var(--space-2) var(--space-4)`.
+  - `.ol-tab` — `padding: 0 11px` → `0 var(--space-5-5)`.
+  - `.ol-menu-item` — `gap: 9px; padding: 7px 9px` → `var(--space-4-5)` /
+    `var(--space-3-5) var(--space-4-5)`.
+- **Behavior:** **exactly zero pixels move** — every new token equals the literal
+  it replaced (2→2, 4→4, 7→7, 8→8, 9→9, 11→11). Pure tokenization: the primitive
+  library's padding/gap axes are now scale-addressable like the rest of the system,
+  so a future density or spacing rescale flows through `.ol-*` from one place. The
+  handful of remaining raw values in `components.css` are element-**dimension**
+  primitives on purpose (control heights 26/28/30px, dot/thumb/box sizes, the 5px
+  `gap` on `.ol-live`, spinner geometry, the 2px tab underline) — geometry, not
+  spacing steps, exactly as §4/§5 leave `.gbar`/`.spin` dimensions raw.
+- **Verified:** `cd ui && bun run typecheck` (exit 0) and `bun run build` (exit 0,
+  CSS 65.72 kB). The edit is color-token-agnostic and zero-pixel-delta, so both
+  `obsidian` and `light` are unaffected by construction (the zero-delta shortcut).
+  `components.css` was confirmed **clean at HEAD** before the edit and is the only
+  code file staged (plus this doc).
+- **Blocked this run (noted for the view worker, not swept in):** `index.css` is
+  currently **dirty** with a session view worker's uncommitted work (SessionSidebar
+  needs-input dot + permission-prompt), which added **two new hardcoded-hex
+  violations** — `.srow-dot.needs-input` and `.perm-prompt` both use
+  `var(--amber, #e0a030)`. That `#e0a030` fallback is a raw hex (violates the §10
+  hard rule) **and wrong-valued** — `--amber` always resolves (aliased to `--warn`
+  = `#FCD34D`/`#A16207`), so the fallback is dead code that would render an
+  off-palette orange if it ever fired. The fix is trivial (drop the `, #e0a030`
+  fallback in both sites, leaving bare `var(--amber)`), but committing it would
+  sweep the worker's in-flight view work into a design commit — deferred until
+  `index.css` is clean at HEAD. **Flagged to the SessionSidebar/ChatPage owner.**
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Two hardcoded `#e0a030` hexes in `index.css`** (`.srow-dot.needs-input`,
+     `.perm-prompt`) — drop the dead `, #e0a030` fallback → bare `var(--amber)`.
+     Blocked only by the dirty tree; do it the moment `index.css` is clean at HEAD.
+  2. **Adoption gap (the big one).** The `.ol-*` primitive library + `shell.tsx`
+     React primitives exist but live views still lean on bespoke `index.css`
+     classes — the largest remaining consistency win; a view-worker task to
+     *spec + spot-fix*, not rewrite wholesale.
+  3. **`.ol-*` visual QA in-browser** in both themes — the primitive library was
+     built to spec but hasn't been screenshot-verified rule-by-rule against the
+     live views.
+  4. **Full automated axe/WAVE sweep** across every live surface (token-level
+     ratios are done; per-surface DOM audit — focus order, ARIA, component-state
+     contrast — remains).
+
 ### 2026-07-04 — Consolidate the two app-shell spinners onto the canonical `olympus-spin` keyframe + `--loop-spin` token; kill the last local keyframes, raw `0.7s` duration, and raw `border-radius: 50%` in `index.css`
 
 - **The debt this closes (the residual of debt #2, "`index.css` still carries
