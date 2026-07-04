@@ -98,7 +98,7 @@ button {
 .sb-pad { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
 .newbtn { display: flex; align-items: center; gap: var(--space-4); padding: 6px var(--space-5); background: var(--silver); border-radius: var(--radius); color: var(--on-silver); font-size: var(--fs-12); font-weight: var(--fw-medium); transition: background var(--dur) var(--ease); }
 .newbtn:hover { background: var(--accent-bright); }
-.navitem { display: flex; align-items: center; gap: var(--space-4); padding: var(--nav-pad-y) var(--nav-pad-x); border-radius: var(--radius); color: var(--dim); font-size: var(--fs-12); font-weight: var(--fw-medium); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.navitem { display: flex; align-items: center; gap: var(--space-4); padding: var(--nav-pad-y) var(--nav-pad-x); border-radius: var(--radius); color: var(--dim); font-size: var(--fs-12); font-weight: var(--fw-medium); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); cursor: pointer; background: none; border: none; width: 100%; text-align: left; }
 .navitem:hover { background: var(--hover); color: var(--text); }
 .navitem.on { background: var(--silver-wash); color: var(--silver); }
 .sb-scroll { flex: 1; overflow-y: auto; }
@@ -121,7 +121,7 @@ button {
 .srow-icon { display: flex; align-items: center; justify-content: center; width: 12px; flex-shrink: 0; }
 .srow-spinner { width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: var(--radius-full); animation: olympus-spin var(--loop-spin) linear infinite; }
 .srow-dot.done { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--ok); }
-.srow-dot.needs-input { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--amber, #e0a030); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber, #e0a030) 25%, transparent); }
+.srow-dot.needs-input { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--amber); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 25%, transparent); }
 .srow-title { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .srow-time { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); flex-shrink: 0; }
 .srow-actions { display: none; align-items: center; gap: 1px; position: absolute; right: var(--space-4); background: linear-gradient(90deg, transparent, var(--hover) 30%); padding-left: 20px; }
@@ -195,7 +195,7 @@ button {
 .thinking-dots i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes thinking-bounce { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 /* Permission prompt — agent blocked on a gated tool call */
-.perm-prompt { max-width: var(--measure-msg); background: var(--elev); border: var(--border-w) solid var(--amber, #e0a030); border-radius: var(--radius); padding: var(--space-5) var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); }
+.perm-prompt { max-width: var(--measure-msg); background: var(--elev); border: var(--border-w) solid var(--amber); border-radius: var(--radius); padding: var(--space-5) var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); }
 .perm-head { display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-12); color: var(--text); }
 .perm-head strong { font-family: var(--font-mono); font-weight: var(--fw-medium); }
 .perm-opts { display: flex; gap: var(--space-3); flex-wrap: wrap; }
@@ -623,17 +623,6 @@ div[data-view="sessions"].view.on { display: flex; flex: 1; min-height: 0; }
 
 /* ── S2 additions: NavItem, dot-spacer, agent/usage pages ─────────── */
 
-/* NavItem — left-sidebar page links (Agents, Usage) */
-.navitem {
-  display: flex; align-items: center; gap: var(--space-4);
-  padding: 5px var(--space-4); border-radius: var(--radius);
-  font-size: var(--fs-12); color: var(--dim);
-  cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
-  background: none; border: none; width: 100%; text-align: left;
-}
-.navitem:hover { background: var(--hover); color: var(--text); }
-.navitem.on { background: var(--silver-wash); color: var(--text); }
-
 /* Bug 5: spacer replacing the idle dot so session rows stay aligned */
 .dot-spacer { width: 6px; height: 6px; flex-shrink: 0; }
 
@@ -660,8 +649,5 @@ div[data-view="sessions"].view.on { display: flex; flex: 1; min-height: 0; }
 .usage-row { padding: var(--space-5) var(--space-6); display: flex; align-items: center; justify-content: space-between; }
 .usage-model { display: flex; align-items: center; gap: var(--space-4); }
 
-/* gv-head / gv-body — generic view page header + body */
-.gv-head { height: var(--toolbar-h); flex-shrink: 0; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-8); border-bottom: var(--border-w) solid var(--border); }
-.gv-title { font-size: var(--fs-16); font-weight: var(--fw-semibold); color: var(--text); }
-.gv-body { flex: 1; overflow-y: auto; padding: var(--space-8) 0; }
+/* gv-head / gv-body — generic view page header + body (canonical: see app-shell section above) */
 
