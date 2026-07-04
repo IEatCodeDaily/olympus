@@ -4,6 +4,7 @@
 // viewport layout (tabbed note editor), and the right sidebar (vault agent).
 // The viewport pages live under views/vaults/pages/*.
 
+import type { ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon } from "../components/Icon";
@@ -201,7 +202,7 @@ function renderEntry(
   activeNotePath: string | null,
   onOpenNote: (path: string) => void,
   depth = 0,
-): JSX.Element {
+): ReactNode {
   const isFolder = entry.kind === "folder";
   return (
     <div key={entry.path} style={{ paddingLeft: depth * 14 }}>
