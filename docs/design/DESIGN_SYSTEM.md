@@ -542,6 +542,43 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-04 — Kill last hardcoded hexes + deduplicate conflicting CSS rules (3 fixes in `index.css`)
+
+- **The debt this closes (top of the visible list — blocked since 2026-07-04):**
+  two hardcoded `#e0a030` hex fallbacks in `.srow-dot.needs-input` and
+  `.perm-prompt`. The fallback was dead code (`--amber` always resolves to
+  `#FCD34D`/`#A16207`) and violated the §10 hard rule ("never hardcode a
+  hex"). Also fixed: **two duplicate rule blocks** that were shadowing
+  canonical definitions with conflicting values.
+- **Fix 1 — hex cleanup:** dropped `, #e0a030` from both sites → bare
+  `var(--amber)`. Zero visual change; `--amber` always resolves.
+- **Fix 2 — `.navitem` dedup:** merged S2 override into canonical L101
+  definition (absorbs button-reset props: `cursor:pointer`, `background:none`,
+  `border:none`, `width:100%`, `text-align:left`). Deleted 11-line duplicate
+  at L627 that was **breaking** `.navitem.on` accent color (rendered
+  `color:var(--text)` instead of `color:var(--silver)`). The active nav item
+  now correctly reads silver/accent in both themes.
+- **Fix 3 — `.gv-head`/`.gv-title`/`.gv-body` dedup:** removed S2
+  overrides that shadowed canonical app-shell definitions with different
+  sizing (`gap: var(--space-3)` vs `var(--space-4)`, `padding: 0 var(--space-8)`
+  vs `var(--space-10)`, `font-size: var(--fs-16)` vs `var(--fs-12-5)`).
+  All views using `PageHeader` now get consistent header geometry.
+- **Net: −2 hex literals, −14 lines of dead-duplicate CSS, 1 file.**
+- **Verified:** `cd ui && bun run typecheck` (exit 0), `bun run build`
+  (exit 0, CSS 65.09 kB). Grep confirms **zero** remaining hardcoded hexes
+  in `index.css` (only a comment reference to `#efefef`). Fully reversible.
+- **Top design debts now visible (next runs, in priority order):**
+  1. **Adoption gap (the big one).** Live views still lean on bespoke
+     `index.css` classes rather than `.ol-*` primitives / `shell.tsx`
+     components. A view-worker task to spec + spot-fix.
+  2. **Full automated axe/WAVE sweep** across every live surface.
+  3. **`.ol-*` visual QA in-browser** in both themes — rule-by-rule
+     screenshot verification against live views.
+  4. **`index.css` structural hygiene** — the file is 650+ lines of
+     mixed concerns (app-shell, view-specific, S2 additions). A future
+     refactor could split view-specific rules into per-view CSS modules,
+     leaving index.css as pure shell layout.
+
 ### 2026-07-04 — Repoint the `.ol-*` primitive library onto the `--space-*` half-step tier — carry the odd-pixel-spacing fix into the source-of-truth component CSS (extends the earlier `index.css` sweep)
 
 - **The debt this closes:** on an earlier 2026-07-04 run the odd-pixel half-step

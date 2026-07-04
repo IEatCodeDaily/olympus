@@ -1,8 +1,9 @@
 /**
  * BrandIcons — real harness/provider brand marks, sourced from
  * simpleicons.org (Claude, OpenAI) and lobehub/lobe-icons (Codex, Nous
- * Research, Z.ai). All render as filled paths with currentColor so they
- * follow the theme, viewBox 0 0 24 24.
+ * Research, Z.ai). Rendered in their official brand color (see BRAND_COLORS)
+ * — not monochromed — so they read as true logos; marks with no distinct hue
+ * (Codex, Nous griffin) fall back to currentColor. viewBox 0 0 24 24.
  *
  * Kept separate from Icon.tsx: these are verbatim brand paths (the Nous
  * griffin alone is ~18KB) and should not bloat the hand-drawn stroke-icon map.
@@ -20,7 +21,21 @@ const BRAND_PATHS: Record<BrandName, React.ReactElement> = {
   "zai": <path d="M12.105 2L9.927 4.953H.653L2.83 2h9.276zM23.254 19.048L21.078 22h-9.242l2.174-2.952h9.244zM24 2L9.264 22H0L14.736 2H24z" fillRule="evenodd" />,
 };
 
-/** A brand logo, filled with currentColor. */
+/**
+ * Official brand colors. These render the marks in their real brand color
+ * (not monochrome) so they read as true logos in both themes. Codex/Nous are
+ * mostly black-on-white marks with no distinct brand hue, so they follow the
+ * theme text color via `currentColor`.
+ */
+const BRAND_COLORS: Record<BrandName, string> = {
+  claude: "#D97757", // Anthropic Claude clay
+  openai: "#10A37F", // OpenAI green
+  zai: "#3859FF", // Z.ai blue
+  codex: "currentColor", // black/white mark — follow theme
+  nous: "currentColor", // griffin mark — follow theme
+};
+
+/** A brand logo, filled with its official brand color (not monochromed). */
 export function BrandIcon({
   name,
   size = 14,
@@ -39,7 +54,7 @@ export function BrandIcon({
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="currentColor"
+      fill={BRAND_COLORS[name]}
       stroke="none"
       className={className}
       style={style}
