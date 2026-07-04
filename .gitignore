@@ -29,3 +29,8 @@ ui/node_modules/
 ui/dist/
 ui/bun.lock
 .worktrees/
+
+# E2E artifacts
+ui/test-results/
+ui/playwright-report/
+ui/test-evidence/
