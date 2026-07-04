@@ -326,4 +326,204 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
     }
+
+    // ---- SessionHandover ----
+
+    #[test]
+    fn handover_stamps_parent_link_on_target() {
+        let mut v = SessionView::new();
+        v.apply(&created("src", "cli", 1.0));
+        v.apply(&created("tgt", "cli", 2.0));
+        v.apply(&Event::SessionHandover {
+            source_session_id: "src".into(),
+            target_session_id: "tgt".into(),
+            from_agent_kind: "Hermes".into(),
+            to_agent_kind: "ClaudeCode".into(),
+            translated_message_count: 5,
+            handed_over_at: 3.0,
+        });
+        let tgt = v.get("tgt").unwrap();
+        assert_eq!(tgt.parent_session_id.as_deref(), Some("src"));
+    }
+
+    #[test]
+    fn handover_inherits_card_id_from_source() {
+        let mut v = SessionView::new();
+        v.apply(&created("src", "cli", 1.0));
+        v.apply(&created("tgt", "cli", 2.0));
+        // Link a card to the source before the handover.
+        v.apply(&Event::CardSessionLinked {
+            card_id: "card-1".into(),
+            session_id: "src".into(),
+            linked_at: 1.5,
+        });
+        v.apply(&Event::SessionHandover {
+            source_session_id: "src".into(),
+            target_session_id: "tgt".into(),
+            from_agent_kind: "Hermes".into(),
+            to_agent_kind: "ClaudeCode".into(),
+            translated_message_count: 3,
+            handed_over_at: 3.0,
+        });
+        let tgt = v.get("tgt").unwrap();
+        assert_eq!(tgt.card_id.as_deref(), Some("card-1"));
+    }
+
+    #[test]
+    fn handover_to_unknown_target_is_silent() {
+        // Should not panic or create a phantom row.
+        let mut v = SessionView::new();
+        v.apply(&created("src", "cli", 1.0));
+        v.apply(&Event::SessionHandover {
+            source_session_id: "src".into(),
+            target_session_id: "ghost".into(),
+            from_agent_kind: "Hermes".into(),
+            to_agent_kind: "ClaudeCode".into(),
+            translated_message_count: 0,
+            handed_over_at: 2.0,
+        });
+        assert!(v.get("ghost").is_none());
+    }
+
+    // ---- SessionForked ----
+
+    #[test]
+    fn fork_stamps_parent_link_on_child() {
+        let mut v = SessionView::new();
+        v.apply(&created("parent", "cli", 1.0));
+        v.apply(&created("child", "cli", 2.0));
+        v.apply(&Event::SessionForked {
+            parent_session_id: "parent".into(),
+            child_session_id: "child".into(),
+            fork_type: "sub".into(),
+            fork_point: Some(7),
+            forked_at: 2.5,
+        });
+        let child = v.get("child").unwrap();
+        assert_eq!(child.parent_session_id.as_deref(), Some("parent"));
+    }
+
+    #[test]
+    fn fork_inherits_card_id_from_parent() {
+        let mut v = SessionView::new();
+        v.apply(&created("parent", "cli", 1.0));
+        v.apply(&created("child", "cli", 2.0));
+        v.apply(&Event::CardSessionLinked {
+            card_id: "card-99".into(),
+            session_id: "parent".into(),
+            linked_at: 1.5,
+        });
+        v.apply(&Event::SessionForked {
+            parent_session_id: "parent".into(),
+            child_session_id: "child".into(),
+            fork_type: "fork".into(),
+            fork_point: None,
+            forked_at: 3.0,
+        });
+        let child = v.get("child").unwrap();
+        assert_eq!(child.card_id.as_deref(), Some("card-99"));
+    }
+
+    // ---- CardSessionLinked ----
+
+    #[test]
+    fn card_link_propagates_to_existing_forks() {
+        let mut v = SessionView::new();
+        v.apply(&created("root", "cli", 1.0));
+        v.apply(&created("fork1", "cli", 2.0));
+        // Fork happened before the card was linked.
+        v.apply(&Event::SessionForked {
+            parent_session_id: "root".into(),
+            child_session_id: "fork1".into(),
+            fork_type: "sub".into(),
+            fork_point: None,
+            forked_at: 2.5,
+        });
+        // Linking the card now — fork1 should receive it retroactively.
+        v.apply(&Event::CardSessionLinked {
+            card_id: "card-42".into(),
+            session_id: "root".into(),
+            linked_at: 5.0,
+        });
+        assert_eq!(v.get("root").unwrap().card_id.as_deref(), Some("card-42"));
+        assert_eq!(v.get("fork1").unwrap().card_id.as_deref(), Some("card-42"));
+    }
+
+    // ---- SessionUpdated ----
+
+    #[test]
+    fn session_updated_patches_in_place() {
+        let mut v = SessionView::new();
+        v.apply(&created("s1", "cli", 1.0));
+        v.apply(&Event::SessionUpdated {
+            session_id: "s1".into(),
+            title: Some("new title".into()),
+            model: None,
+            archived: Some(true),
+            message_count: Some(10),
+            agent: None,
+            node: None,
+            hermes_id: None,
+        });
+        let row = v.get("s1").unwrap();
+        assert_eq!(row.title.as_deref(), Some("new title"));
+        assert!(row.archived);
+        assert_eq!(row.message_count, 10);
+        // Fields not included in the update must remain unchanged.
+        assert_eq!(row.model.as_deref(), Some("glm-5.2"));
+    }
+
+    #[test]
+    fn session_updated_for_unknown_session_does_not_create_phantom() {
+        let mut v = SessionView::new();
+        v.apply(&Event::SessionUpdated {
+            session_id: "ghost".into(),
+            title: Some("oops".into()),
+            model: None,
+            archived: None,
+            message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
+        });
+        assert!(v.get("ghost").is_none());
+    }
+
+    // ---- Filters ----
+
+    #[test]
+    fn filters_by_source() {
+        let mut v = SessionView::new();
+        v.apply(&created("a", "cli", 1.0));
+        v.apply(&created("b", "telegram", 2.0));
+        let rows = v.list(&Filters {
+            source: Some("cli".into()),
+            archived: None,
+        });
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "a");
+    }
+
+    #[test]
+    fn filters_by_archived() {
+        let mut v = SessionView::new();
+        v.apply(&created("live", "cli", 1.0));
+        v.apply(&created("dead", "cli", 2.0));
+        v.apply(&Event::SessionUpdated {
+            session_id: "dead".into(),
+            title: None,
+            model: None,
+            archived: Some(true),
+            message_count: None,
+            agent: None,
+            node: None,
+            hermes_id: None,
+        });
+        let active = v.list(&Filters {
+            source: None,
+            archived: Some(false),
+        });
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].session_id, "live");
+    }
 }

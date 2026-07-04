@@ -115,6 +115,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/search", get(search))
         .route("/api/models", get(models))
         .route("/api/agents", get(list_agents_handler))
+        .route("/api/agents/{id}/models", get(agent_models))
         .route("/api/cards", get(list_cards).post(create_card))
         .route("/api/cards/{id}", get(get_card))
         .route("/api/cards/{id}/assign", post(assign_card))
@@ -781,8 +782,23 @@ async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> 
 }
 
 async fn models(State(_state): State<AppState>) -> impl IntoResponse {
-    // Models discovered from the configured Hermes agents (profiles), deduped.
+    // All models across every configured agent (deduped). For an agent-specific
+    // list use GET /api/agents/:id/models.
     Json(json!({ "models": agents::list_models() }))
+}
+
+/// GET /api/agents/:id/models — models the given agent can actually run
+/// (scoped to that agent's provider). This is what keeps the composer's model
+/// selector agent-specific — a Codex agent is never offered Claude models.
+async fn agent_models(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let provider = agents::list_agents()
+        .into_iter()
+        .find(|a| a.id == id)
+        .and_then(|a| a.provider);
+    Json(json!({ "models": agents::list_models_for(provider.as_deref()) }))
 }
 
 /// GET /api/agents — list the drivable Hermes agents (profiles) with their

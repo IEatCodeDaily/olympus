@@ -239,10 +239,18 @@ pub struct ModelInfo {
 }
 
 /// Build the model list from the agents' configured models (deduped by id).
-pub fn list_models() -> Vec<ModelInfo> {
+/// When `provider_filter` is `Some`, only models served by that provider are
+/// returned — this is what makes the model selector agent-specific (a Codex
+/// agent must not be offered Claude Opus, etc.).
+pub fn list_models_for(provider_filter: Option<&str>) -> Vec<ModelInfo> {
     let mut seen = std::collections::BTreeMap::new();
     for a in list_agents() {
         if let Some(model) = a.model {
+            if let Some(want) = provider_filter {
+                if a.provider.as_deref() != Some(want) {
+                    continue;
+                }
+            }
             seen.entry(model.clone()).or_insert(ModelInfo {
                 id: model,
                 provider: a.provider,
@@ -250,6 +258,12 @@ pub fn list_models() -> Vec<ModelInfo> {
         }
     }
     seen.into_values().collect()
+}
+
+/// All models across every agent (deduped). Prefer `list_models_for` with the
+/// session's agent provider so the selector stays agent-specific.
+pub fn list_models() -> Vec<ModelInfo> {
+    list_models_for(None)
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ export const qk = {
   session: (id: string) => ["session", id] as const,
   messages: (id: string) => ["messages", id] as const,
   agents: () => ["agents"] as const,
-  models: () => ["models"] as const,
+  models: (agentId?: string | null) => ["models", agentId ?? "all"] as const,
   health: () => ["health"] as const,
   cards: (params?: Record<string, unknown>) => ["cards", params] as const,
   vaults: () => ["vaults"] as const,
@@ -90,9 +90,13 @@ export function useNodes() {
   });
 }
 
-/** Models list. */
-export function useModels() {
-  return useQuery({ queryKey: qk.models(), queryFn: fetchModels, staleTime: 60_000 });
+/** Models list, scoped to an agent's provider when `agentId` is given. */
+export function useModels(agentId?: string | null) {
+  return useQuery({
+    queryKey: qk.models(agentId),
+    queryFn: () => fetchModels(agentId ?? undefined),
+    staleTime: 60_000,
+  });
 }
 
 /** Health check. */

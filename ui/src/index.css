@@ -184,8 +184,13 @@ button {
 /* Icon-only locked agent indicator (harness fixed) */
 .agent-lock { display: flex; align-items: center; justify-content: center; padding: var(--space-2); color: var(--text); cursor: default; }
 /* Node indicator — bottom-left of composer */
-.noderef { display: flex; align-items: center; gap: var(--space-2); color: var(--faint); }
-.noderef .nm { font-family: var(--font-mono); font-size: var(--fs-10); color: var(--dim); }
+/* + menu button (bottom-left of composer) */
+.plusbtn { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; background: none; border: none; border-radius: var(--radius); color: var(--dim); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.plusbtn:hover { background: var(--hover); color: var(--text); }
+.pluspop { flex-direction: column; min-width: 168px; bottom: calc(100% + 6px); left: 0; }
+/* Node indicator — auxiliary, sits BELOW the composer box */
+.comp-node { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-2) 0; color: var(--faint); font-family: var(--font-mono); font-size: var(--fs-9); }
+.comp-node span { color: var(--faint); }
 /* Thinking indicator */
 .thinking-row { display: flex; align-items: center; gap: var(--space-3); opacity: 0.8; }
 .thinking-label { font-family: var(--font-mono); font-size: var(--fs-10); color: var(--faint); font-style: italic; }

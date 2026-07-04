@@ -119,8 +119,13 @@ export async function searchSessions(
   return res.json() as Promise<SearchResponse>;
 }
 
-export async function fetchModels(): Promise<ModelsResponse> {
-  const res = await fetch(`${BASE}/api/models`, { headers: authHeaders() });
+export async function fetchModels(agentId?: string | null): Promise<ModelsResponse> {
+  // Agent-scoped list (only models that agent's provider serves) when an id is
+  // given; otherwise the full deduped list.
+  const path = agentId
+    ? `/api/agents/${encodeURIComponent(agentId)}/models`
+    : `/api/models`;
+  const res = await fetch(`${BASE}${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`models ${res.status}`);
   return res.json() as Promise<ModelsResponse>;
 }

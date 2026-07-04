@@ -1,9 +1,16 @@
 /**
  * Composer — the chat input bar.
  *
- * The model configuration is a single pill: ( agent_icon | model | thinking ).
- * Agent is LOCKED from session creation — only model + thinking are configurable
- * here. One popup controls model + thinking level.
+ * Layout:
+ *   [ textarea …………………………………………………………………… ]
+ *   [ (+)                          agent-icon · model · thinking · send ]
+ *   running on <node>                        ← auxiliary, below the bar
+ *
+ * - Bottom-LEFT: a "+" menu for attachments, session mentions, etc.
+ * - Bottom-RIGHT: the locked agent's brand icon (harness fixed at creation) +
+ *   an agent-scoped model selector (only models the agent's provider serves) +
+ *   thinking level + send.
+ * - Node indicator sits BELOW the composer (auxiliary, non-critical info).
  */
 
 import React, { useState, useEffect, useRef } from "react";
@@ -52,11 +59,9 @@ export function Composer({
   sessionNode: string | null;
 }) {
   const { data: agentsData } = useAgents();
-  const { data: modelsData } = useModels();
   const agents = agentsData?.agents ?? [];
-  const models = modelsData?.models ?? [];
 
-  // The agent is locked from the session — find it to get provider + icon
+  // The agent is locked from the session — find it for icon + provider.
   const lockedAgent = agents.find(
     (a) => a.id === sessionAgent || (sessionAgent == null && a.isDefault),
   );
@@ -65,29 +70,47 @@ export function Composer({
   // The main in-process node reports as "local"; show it as "olympus".
   const nodeLabel = !sessionNode || sessionNode === "local" ? "olympus" : sessionNode;
 
-  const [popupOpen, setPopupOpen] = useState(false);
+  // Models are AGENT-SPECIFIC: only what this agent's provider can serve.
+  const { data: modelsData } = useModels(lockedAgent?.id ?? sessionAgent);
+  const models = modelsData?.models ?? [];
+
+  const [modelOpen, setModelOpen] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
   const [thinking, setThinking] = useState<ThinkingLevel>(loadThinking);
   const [selectedModel, setSelectedModel] = useState<string>(
-    sessionModel ?? lockedAgent?.model ?? models[0]?.id ?? "",
+    sessionModel ?? lockedAgent?.model ?? "",
   );
-  const popupRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<HTMLDivElement>(null);
+  const plusRef = useRef<HTMLDivElement>(null);
 
-  // Sync when session data arrives
+  // Keep the selected model valid for the agent: prefer session model, else the
+  // agent's default, else the first model the provider offers.
   useEffect(() => {
-    if (sessionModel) setSelectedModel(sessionModel);
-  }, [sessionModel]);
+    if (sessionModel) {
+      setSelectedModel(sessionModel);
+      return;
+    }
+    const valid = models.some((m) => m.id === selectedModel);
+    if (!valid) {
+      setSelectedModel(lockedAgent?.model ?? models[0]?.id ?? "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionModel, lockedAgent?.id, models.length]);
 
-  // Close popup on outside click
+  // Close popups on outside click.
   useEffect(() => {
-    if (!popupOpen) return;
+    if (!modelOpen && !plusOpen) return;
     const handler = (e: MouseEvent) => {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
-        setPopupOpen(false);
+      if (modelOpen && modelRef.current && !modelRef.current.contains(e.target as Node)) {
+        setModelOpen(false);
+      }
+      if (plusOpen && plusRef.current && !plusRef.current.contains(e.target as Node)) {
+        setPlusOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [popupOpen]);
+  }, [modelOpen, plusOpen]);
 
   const setThink = (v: ThinkingLevel) => {
     setThinking(v);
@@ -111,15 +134,39 @@ export function Composer({
           autoFocus
         />
         <div className="comp-bar">
+          {/* LEFT: + menu — attachments, mentions, etc. */}
           <div className="comp-l">
-            {/* Node indicator — where the agent runs */}
-            <span className="noderef" title={`Running on node: ${nodeLabel}`}>
-              <Icon name="server" size={12} />
-              <span className="nm">{nodeLabel}</span>
-            </span>
+            <div className="selwrap" ref={plusRef} style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="plusbtn"
+                title="Attach, mention…"
+                aria-label="Add attachment or mention"
+                onClick={() => setPlusOpen((v) => !v)}
+              >
+                <Icon name="plus" size={16} />
+              </button>
+              {plusOpen && (
+                <div className="menu pluspop" style={{ display: "flex" }}>
+                  <button type="button" className="mi" onClick={() => setPlusOpen(false)}>
+                    <Icon name="paperclip" size={13} />
+                    <span>Attach file</span>
+                  </button>
+                  <button type="button" className="mi" onClick={() => setPlusOpen(false)}>
+                    <Icon name="at" size={13} />
+                    <span>Mention session</span>
+                  </button>
+                  <button type="button" className="mi" onClick={() => setPlusOpen(false)}>
+                    <Icon name="file" size={13} />
+                    <span>Reference file</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* RIGHT: locked agent icon + model selector + thinking + send */}
           <div className="comp-r">
-            {/* Locked agent — harness fixed at creation; icon only, no name */}
             <span
               className="agent-lock"
               title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
@@ -127,13 +174,12 @@ export function Composer({
               <BrandIcon name={agentIcon} size={16} />
             </span>
 
-            {/* Model + thinking picker — editable */}
-            <div className="selwrap" ref={popupRef} style={{ position: "relative" }}>
+            <div className="selwrap" ref={modelRef} style={{ position: "relative" }}>
               <button
                 type="button"
                 className="modelpill"
                 title="Model & thinking"
-                onClick={() => setPopupOpen((v) => !v)}
+                onClick={() => setModelOpen((v) => !v)}
               >
                 <span className="nm">{modelLabel}</span>
                 {thinkingLabel && (
@@ -145,10 +191,16 @@ export function Composer({
                 <Icon name="chevron-down" size={10} />
               </button>
 
-              {popupOpen && (
+              {modelOpen && (
                 <div className="menu selpop" style={{ display: "flex" }}>
-                  {/* Model selector */}
-                  <div className="gk" style={{ padding: "5px 8px 2px" }}>model</div>
+                  <div className="gk" style={{ padding: "5px 8px 2px" }}>
+                    model · {lockedAgent?.provider ?? "—"}
+                  </div>
+                  {models.length === 0 && (
+                    <div className="gk" style={{ padding: "4px 8px", opacity: 0.6 }}>
+                      no models for this provider
+                    </div>
+                  )}
                   {models.map((m) => (
                     <button
                       key={m.id}
@@ -156,7 +208,7 @@ export function Composer({
                       className={`mi${selectedModel === m.id ? " on" : ""}`}
                       onClick={() => {
                         setSelectedModel(m.id);
-                        setPopupOpen(false);
+                        setModelOpen(false);
                       }}
                     >
                       <span>{m.id}</span>
@@ -166,7 +218,6 @@ export function Composer({
 
                   <div className="cp-div" />
 
-                  {/* Thinking level */}
                   <div className="gk" style={{ padding: "5px 8px 2px" }}>thinking</div>
                   {(["off", "low", "medium", "high"] as ThinkingLevel[]).map((lvl) => (
                     <button
@@ -175,7 +226,7 @@ export function Composer({
                       className={`mi${thinking === lvl ? " on" : ""}`}
                       onClick={() => {
                         setThink(lvl);
-                        setPopupOpen(false);
+                        setModelOpen(false);
                       }}
                     >
                       <span>{lvl === "off" ? "Off" : lvl.charAt(0).toUpperCase() + lvl.slice(1)}</span>
@@ -197,6 +248,12 @@ export function Composer({
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Node indicator — auxiliary, below the composer */}
+      <div className="comp-node" title={`Running on node: ${nodeLabel}`}>
+        <Icon name="server" size={11} />
+        <span>{nodeLabel}</span>
       </div>
     </div>
   );
