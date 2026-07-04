@@ -7,7 +7,8 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { Icon, providerLogoIcon } from "../../../components/Icon";
+import { Icon } from "../../../components/Icon";
+import { BrandIcon, agentBrand } from "../../../components/BrandIcons";
 import { useAgents, useModels } from "../../../hooks/queries";
 
 const THINKING_KEY = "olympus-thinking";
@@ -59,7 +60,7 @@ export function Composer({
   const lockedAgent = agents.find(
     (a) => a.id === sessionAgent || (sessionAgent == null && a.isDefault),
   );
-  const agentIcon = providerLogoIcon(lockedAgent?.provider);
+  const agentIcon = agentBrand(lockedAgent?.kind, lockedAgent?.provider);
   const agentName = lockedAgent?.id ?? sessionAgent ?? "agent";
   // The main in-process node reports as "local"; show it as "olympus".
   const nodeLabel = !sessionNode || sessionNode === "local" ? "olympus" : sessionNode;
@@ -123,7 +124,7 @@ export function Composer({
               className="agent-lock"
               title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
             >
-              <Icon name={agentIcon} size={16} />
+              <BrandIcon name={agentIcon} size={16} />
             </span>
 
             {/* Model + thinking picker — editable */}

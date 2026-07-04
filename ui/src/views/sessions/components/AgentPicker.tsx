@@ -11,6 +11,7 @@
  */
 
 import { Icon } from "../../../components/Icon";
+import { BrandIcon, agentBrand } from "../../../components/BrandIcons";
 import { useAgents } from "../../../hooks/queries";
 
 export function AgentPicker({
@@ -86,7 +87,7 @@ export function AgentPicker({
                 }}
                 onClick={() => onSelect(a.id)}
               >
-                <Icon name="bot" size={14} />
+                <BrandIcon name={agentBrand(a.kind, a.provider)} size={15} />
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>
                     {a.id}

@@ -12,7 +12,8 @@
 // and show an honest "no other nodes registered" empty state. When the fleet
 // endpoint ships, swap `useFleetNodes()` for the real hook.
 import { useState } from "react";
-import { Icon, providerLogoIcon } from "../components/Icon";
+import { Icon } from "../components/Icon";
+import { BrandIcon, agentBrand } from "../components/BrandIcons";
 import { useAgents, useNodes } from "../hooks/queries";
 import { relativeTime } from "../lib/format";
 import type { AgentInfo, NodeInfo, NodeStatus } from "../types";
@@ -239,7 +240,7 @@ function Drawer({
 function AgentRow({ agent }: { agent: AgentInfo }) {
   return (
     <div className="agrow" title={`${agent.provider ?? agent.kind} · ${agent.model ?? "—"}`}>
-      <Icon name={providerLogoIcon(agent.provider)} size={15} />
+      <BrandIcon name={agentBrand(agent.kind, agent.provider)} size={15} />
       <span className="nm">{agent.id}</span>
       <span className="sp" />
       <span className="gk">{agent.model ?? "—"}</span>

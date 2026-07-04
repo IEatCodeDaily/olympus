@@ -35,7 +35,8 @@
 
 import React, { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Icon, providerLogoIcon } from "../components/Icon";
+import { Icon } from "../components/Icon";
+import { BrandIcon, agentBrand } from "../components/BrandIcons";
 import { useUIStore } from "../store";
 import { useSession, useMessages, useAgents } from "../hooks/queries";
 import { useResizable } from "../hooks/useResizable";
@@ -168,7 +169,7 @@ function SessionChatLayout({
   const sessionAgentInfo = agentsData?.agents.find(
     (a) => a.id === session?.agent,
   );
-  const agentLogo = providerLogoIcon(sessionAgentInfo?.provider);
+  const agentLogo = agentBrand(sessionAgentInfo?.kind, sessionAgentInfo?.provider);
 
   // Derived artifact list from messages
   const artifacts = React.useMemo(() => {
@@ -213,7 +214,7 @@ function SessionChatLayout({
           <span className="vp-title chat-title">{session?.title ?? "Untitled"}</span>
           {session?.agent && (
             <span className="proj-badge">
-              <Icon name={agentLogo} size={11} />
+              <BrandIcon name={agentLogo} size={11} />
               {session.agent.toUpperCase()}
             </span>
           )}
