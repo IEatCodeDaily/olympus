@@ -89,9 +89,9 @@ export function VaultsView() {
             onNavigateNote={handleOpenNote}
           />
         ) : vaultPage === "tables" ? (
-          <TablesPage />
+          <TablesPage vaultId={activeVaultId ?? ""} />
         ) : (
-          <GraphPage />
+          <GraphPage vaultId={activeVaultId ?? ""} />
         )}
         <VaultAgentPanel vaultId={activeVaultId} />
       </div>

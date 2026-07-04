@@ -37,7 +37,7 @@ import type {
 const BASE = import.meta.env.VITE_API_BASE as string;
 const T = import.meta.env.VITE_API_TOKEN as string;
 
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   return { Authorization: "Bearer " + T };
 }
 

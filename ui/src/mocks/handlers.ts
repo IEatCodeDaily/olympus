@@ -391,6 +391,68 @@ export const handlers = [
       return new HttpResponse(null, { status: 204 });
     },
   ),
+
+  // GET /api/vaults/:id/graph
+  http.get<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/graph",
+    ({ params }: { params: { id: string } }) => {
+      const store = VAULT_NOTES_MUTABLE[params.id];
+      const nodes = store
+        ? Object.entries(store).map(([path, md]) => {
+            const titleMatch = md.match(/^# (.+)$/m);
+            const title = titleMatch ? titleMatch[1] : path.replace(/\.md$/, "");
+            return { id: title, title, path, cid: null, linkCount: (md.match(/\[\[/g) ?? []).length };
+          })
+        : [];
+      const edges: Array<{ source: string; target: string }> = [];
+      if (store) {
+        for (const [, md] of Object.entries(store)) {
+          const titleMatch = md.match(/^# (.+)$/m);
+          const title = titleMatch ? titleMatch[1] : "";
+          const linkMatches = md.matchAll(/\[\[([^\]]+)\]\]/g);
+          for (const m of linkMatches) {
+            const target = m[1]?.split("|")[0]?.split("#")[0]?.trim();
+            if (target) edges.push({ source: title, target });
+          }
+        }
+      }
+      return HttpResponse.json({ nodes, edges });
+    },
+  ),
+
+  // GET /api/vaults/:id/collections
+  http.get<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/collections",
+    ({ params }: { params: { id: string } }) => {
+      const store = VAULT_NOTES_MUTABLE[params.id];
+      const collections = store
+        ? Object.entries(store)
+            .filter(([, md]) => md.includes("collection: true"))
+            .map(([path, md]) => ({
+              name: path,
+              path,
+              rowCount: 3,
+            }))
+        : [];
+      return HttpResponse.json({ collections });
+    },
+  ),
+
+  // GET /api/vaults/:id/collections/:path
+  http.get<{ id: string; path: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/collections/:path",
+    ({ params }: { params: { id: string; path: string } }) => {
+      // Mock: return a few sample rows
+      return HttpResponse.json({
+        columns: ["status", "priority", "tags"],
+        rows: [
+          { title: "Row 1", path: "row-1.md", status: "active", priority: "high", tags: "a,b" },
+          { title: "Row 2", path: "row-2.md", status: "done", priority: "low", tags: "c" },
+          { title: "Row 3", path: "row-3.md", status: "active", priority: "med", tags: "d,e" },
+        ],
+      });
+    },
+  ),
 ];
 
 /**
