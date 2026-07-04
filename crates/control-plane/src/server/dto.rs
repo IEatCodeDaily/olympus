@@ -61,27 +61,24 @@ pub const ACTIVE_WINDOW_SECS: f64 = 90.0;
 
 /// Derive a session's live state, honest by construction:
 ///
-/// - **Managed** sessions (Olympus drives the turn): state is the authoritative
-///   in-flight flag. `in_flight` → "running" (a turn is actively streaming),
-///   otherwise "idle" (resting / ready for the next message). We do NOT use the
-///   recency window here — a completed turn is idle the instant it finishes, not
-///   90s later. This fixes sessions appearing "active" long after they replied.
-/// - **Observed** sessions (imported; Olympus does not drive them, so there is
-///   no in-flight signal): fall back to recency — "active" if something wrote
-///   within the window, else "idle". This reflects *recent activity*, not a
-///   confirmed live process.
+/// - **Managed** sessions (Olympus drives the turn): `awaiting` (blocked on a
+///   permission decision) → "input-required"; else `in_flight` → "running";
+///   else "idle". No recency window — a completed turn is idle the instant it
+///   finishes.
+/// - **Observed** sessions: recency-based "active"/"idle" (no in-flight signal).
 ///
-/// Returns "running" | "active" | "idle". ("input-required" is intentionally not
-/// synthesized — the bridge does not yet track ACP permission requests, and a
-/// fake value would be worse than an honest "running".)
+/// Returns "input-required" | "running" | "active" | "idle".
 pub fn compute_liveness(
     last_activity: f64,
     now: f64,
     in_flight: bool,
     managed: bool,
+    awaiting: bool,
 ) -> &'static str {
     if managed {
-        if in_flight {
+        if awaiting {
+            "input-required"
+        } else if in_flight {
             "running"
         } else {
             "idle"
@@ -430,7 +427,16 @@ mod tests {
     #[test]
     fn liveness_managed_in_flight_is_running() {
         // A managed turn streaming right now is "running" regardless of age.
-        assert_eq!(compute_liveness(0.0, 1_000_000.0, true, true), "running");
+        assert_eq!(compute_liveness(0.0, 1_000_000.0, true, true, false), "running");
+    }
+
+    #[test]
+    fn liveness_managed_awaiting_is_input_required() {
+        // Awaiting a permission decision beats in-flight → "input-required".
+        assert_eq!(
+            compute_liveness(0.0, 1_000_000.0, true, true, true),
+            "input-required"
+        );
     }
 
     #[test]
@@ -438,13 +444,13 @@ mod tests {
         // A managed session with no in-flight turn is idle the instant it
         // finishes — no 90s recency fudge (fixes "active" lingering after reply).
         let now = 1_000_000.0;
-        assert_eq!(compute_liveness(now - 5.0, now, false, true), "idle");
+        assert_eq!(compute_liveness(now - 5.0, now, false, true, false), "idle");
     }
 
     #[test]
     fn liveness_observed_recent_activity_is_active() {
         let now = 1_000_000.0;
-        assert_eq!(compute_liveness(now - 10.0, now, false, false), "active");
+        assert_eq!(compute_liveness(now - 10.0, now, false, false, false), "active");
     }
 
     #[test]
@@ -453,7 +459,7 @@ mod tests {
         // Older than the recency window and nothing in-flight → idle (honest:
         // could be walked-away or crashed; we don't claim "dead").
         assert_eq!(
-            compute_liveness(now - (ACTIVE_WINDOW_SECS + 30.0), now, false, false),
+            compute_liveness(now - (ACTIVE_WINDOW_SECS + 30.0), now, false, false, false),
             "idle"
         );
     }

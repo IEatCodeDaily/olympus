@@ -240,6 +240,20 @@ export async function cancelSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error(`cancel failed (${res.status})`);
 }
 
+/** Answer a pending permission request. Pass optionId to allow/select, or
+ *  omit it to cancel the request (ACP "cancelled" outcome). */
+export async function respondPermission(
+  sessionId: string,
+  optionId: string | null,
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/sessions/${sessionId}/permission`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ optionId }),
+  });
+  if (!res.ok) throw new Error(`permission response failed (${res.status})`);
+}
+
 export async function createCard(body: CreateCardBody): Promise<Card> {
   return postJson<Card, CreateCardBody>("/api/cards", body, "create card failed");
 }

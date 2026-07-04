@@ -57,6 +57,15 @@ pub enum ServerFrame {
     SyncStatus { connected: bool },
     #[serde(rename = "cards.changed")]
     CardsChanged,
+    /// The agent is blocked awaiting a permission decision for a gated tool
+    /// call (ACP `session/request_permission`). The UI shows the options and
+    /// POSTs the choice to `/api/sessions/:id/permission`.
+    #[serde(rename = "permission.required", rename_all = "camelCase")]
+    PermissionRequired {
+        session_id: String,
+        tool_call: String,
+        options: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

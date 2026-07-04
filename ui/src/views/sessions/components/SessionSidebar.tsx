@@ -218,10 +218,11 @@ function SessionRow({
   // Status icon logic:
   //   running = a turn is in-flight (managed) → spinner
   //   active  = recent activity (observed) → spinner
+  //   input-required = agent blocked on a permission decision → orange dot
   //   idle    = no icon
-  //   TODO: when backend exposes "waiting for input" → orange ! icon
   const isRunning = session.liveness === "running" || session.liveness === "active";
-  const showIcon = isRunning && !active;
+  const needsInput = session.liveness === "input-required";
+  const showIcon = (isRunning || needsInput) && !active;
 
   return (
     <div
@@ -236,7 +237,7 @@ function SessionRow({
           {isRunning ? (
             <span className="srow-spinner" />
           ) : (
-            <span className="srow-dot done" />
+            <span className="srow-dot needs-input" title="Waiting for your input" />
           )}
         </span>
       )}

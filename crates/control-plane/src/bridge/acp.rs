@@ -247,6 +247,55 @@ impl AgentEvent {
         }
     }
 
+    /// Map an incoming agent→client **request** into an [`AgentEvent`].
+    ///
+    /// The only request Olympus surfaces is `session/request_permission` (the
+    /// agent blocks waiting for a permission decision on a gated tool call).
+    /// Other requests (fs/*, terminal/*) are handled elsewhere or ignored.
+    pub fn from_request(req: &AcpRequest) -> Option<Self> {
+        if req.method != "session/request_permission" {
+            return None;
+        }
+        // Echo the exact JSON-RPC id back in the response, so serialize it.
+        let request_id = serde_json::to_string(&req.id).ok()?;
+        let tool_call = req
+            .params
+            .get("toolCall")
+            .and_then(|tc| tc.get("title").or_else(|| tc.get("toolCallId")))
+            .and_then(|v| v.as_str())
+            .unwrap_or("tool call")
+            .to_string();
+        let options = req
+            .params
+            .get("options")
+            .and_then(|o| o.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|o| {
+                        Some(super::PermissionOption {
+                            option_id: o.get("optionId")?.as_str()?.to_string(),
+                            name: o
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            kind: o
+                                .get("kind")
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(AgentEvent::AwaitingInput {
+            request_id,
+            tool_call,
+            options,
+        })
+    }
+
     /// Map a final prompt response (the reply to a `session/prompt` request)
     /// into a [`AgentEvent::Done`], carrying `stopReason` as `finish_reason`.
     pub fn from_response(resp: &AcpResponse) -> Option<Self> {

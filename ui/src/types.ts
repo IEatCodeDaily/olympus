@@ -25,7 +25,7 @@ export interface Session {
   managed: boolean;           // true = Olympus-driven (steerable); false = observed/read-only
   agent: string | null;       // Hermes profile bound to this session (assignable)
   node: string | null;        // node the runtime runs on ("local" for now)
-  liveness?: "running" | "active" | "idle"; // managed: running=turn in-flight; observed: active=recent activity; else idle
+  liveness?: "running" | "input-required" | "active" | "idle"; // managed: running/input-required from bridge; observed: active from recency; else idle
 }
 
 export type SessionSource =
@@ -114,7 +114,13 @@ export type ServerFrame =
   | { kind: "message.delta"; sessionId: string; messageId: number; textDelta: string }
   | { kind: "message.done"; sessionId: string; messageId: number; finishReason: string | null }
   | { kind: "sync.status"; connected: boolean }
-  | { kind: "cards.changed" };
+  | { kind: "cards.changed" }
+  | {
+      kind: "permission.required";
+      sessionId: string;
+      toolCall: string;
+      options: Array<{ optionId: string; name: string; kind: string }>;
+    };
 
 export type ClientFrame =
   | { kind: "subscribe"; sessionId: string }

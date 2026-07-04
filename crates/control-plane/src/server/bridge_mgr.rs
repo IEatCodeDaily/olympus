@@ -75,6 +75,10 @@ pub struct BridgeManager {
     /// Sessions with a turn currently in-flight (prompt sent, awaiting Done).
     /// Authoritative liveness signal for Olympus-managed sessions.
     in_flight: RwLock<HashSet<String>>,
+    /// Sessions blocked on a permission decision, keyed by session id → the
+    /// pending ACP `session/request_permission` request id to respond to. A
+    /// session in this map has liveness "input-required".
+    awaiting_input: RwLock<HashMap<String, String>>,
     /// Root directory under which per-session spaces are materialized
     /// (`<spaces_root>/<session_id>/`), i.e. `~/.olympus/<org>/sessions/` per
     /// ADR 0005 §4. `None` disables space creation — used by tests so they never
@@ -90,6 +94,7 @@ impl BridgeManager {
             factory,
             runtimes: RwLock::new(HashMap::new()),
             in_flight: RwLock::new(HashSet::new()),
+            awaiting_input: RwLock::new(HashMap::new()),
             spaces_root: None,
         }
     }
@@ -159,6 +164,52 @@ impl BridgeManager {
     /// Snapshot of all session ids with a turn currently in-flight.
     pub async fn in_flight_set(&self) -> HashSet<String> {
         self.in_flight.read().await.clone()
+    }
+
+    /// Mark a session as blocked awaiting a permission decision, storing the
+    /// ACP request id to respond to later.
+    pub async fn mark_awaiting_input(&self, session_id: &str, request_id: &str) {
+        self.awaiting_input
+            .write()
+            .await
+            .insert(session_id.to_string(), request_id.to_string());
+    }
+
+    /// Clear the awaiting-input flag (permission answered or turn ended).
+    pub async fn clear_awaiting_input(&self, session_id: &str) {
+        self.awaiting_input.write().await.remove(session_id);
+    }
+
+    /// Snapshot of session ids currently blocked awaiting a permission decision.
+    pub async fn awaiting_input_set(&self) -> HashSet<String> {
+        self.awaiting_input.read().await.keys().cloned().collect()
+    }
+
+    /// Respond to a session's pending permission request with the chosen option
+    /// (or `None` to cancel). Looks up the stored request id, forwards it to the
+    /// runtime, and clears the awaiting flag. Errors if no pending request.
+    pub async fn respond_permission(
+        &self,
+        session_id: &str,
+        option_id: Option<&str>,
+    ) -> Result<()> {
+        let request_id = self
+            .awaiting_input
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no pending permission request for session"))?;
+        let runtime = self
+            .runtimes
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no runtime for session"))?;
+        runtime.respond_permission(&request_id, option_id).await?;
+        self.clear_awaiting_input(session_id).await;
+        Ok(())
     }
 
     /// Create a new managed session **optimistically** — no agent runtime is

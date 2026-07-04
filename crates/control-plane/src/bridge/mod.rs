@@ -43,6 +43,18 @@ pub enum AgentCommand {
     Stop,
 }
 
+/// A permission option the agent offers for a gated tool call (ACP
+/// `session/request_permission`). Mirrors the ACP `PermissionOption` shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionOption {
+    /// Unique id echoed back in the response outcome.
+    pub option_id: String,
+    /// Human-readable label ("Allow once", "Reject", …).
+    pub name: String,
+    /// Hint: allow_once | allow_always | reject_once | reject_always.
+    pub kind: String,
+}
+
 /// A streaming event emitted by the agent runtime, derived from
 /// `session/update` notifications and final prompt responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +69,15 @@ pub enum AgentEvent {
     },
     /// A reasoning chunk (from `agent_thought_chunk`).
     Reasoning(String),
+    /// The agent is blocked awaiting a permission decision for a gated tool call
+    /// (ACP `session/request_permission`). The turn is paused until the client
+    /// responds with a chosen `option_id`. `request_id` is the JSON-serialized
+    /// JSON-RPC id to echo in the response.
+    AwaitingInput {
+        request_id: String,
+        tool_call: String,
+        options: Vec<PermissionOption>,
+    },
     /// The turn finished. `finish_reason` mirrors ACP `stopReason`
     /// (e.g. "end_turn", "cancelled").
     Done { finish_reason: Option<String> },
@@ -78,6 +99,17 @@ pub trait AgentRuntime: Send + Sync {
     async fn fork_session(&self, session_id: &str) -> anyhow::Result<()>;
     /// Send a command to the active session.
     async fn send(&self, cmd: AgentCommand) -> anyhow::Result<()>;
+    /// Respond to a pending `session/request_permission` request by echoing the
+    /// JSON-RPC `request_id` with the user's chosen `option_id` (or a
+    /// `cancelled` outcome when `option_id` is None). Default impl is a no-op so
+    /// runtimes that never gate tool calls (e.g. the mock) need not implement it.
+    async fn respond_permission(
+        &self,
+        _request_id: &str,
+        _option_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Borrow the stream of agent events.
     fn events(&self) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>>;
     /// Stop the runtime (close the child).
@@ -114,6 +146,51 @@ mod tests {
         let body = &frame[header_end + 4..];
         let decoded = Frame::decode(body).expect("decode");
         assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn request_permission_maps_to_awaiting_input() {
+        // An incoming session/request_permission request → AwaitingInput with
+        // the JSON-RPC id echoed and the options parsed.
+        let req = AcpRequest {
+            jsonrpc: "2.0".into(),
+            id: 5.into(),
+            method: "session/request_permission".into(),
+            params: json!({
+                "sessionId": "s-1",
+                "toolCall": { "toolCallId": "call_1", "title": "Write config.json" },
+                "options": [
+                    { "optionId": "allow-once", "name": "Allow once", "kind": "allow_once" },
+                    { "optionId": "reject-once", "name": "Reject", "kind": "reject_once" }
+                ]
+            }),
+        };
+        let event = AgentEvent::from_request(&req).expect("maps to event");
+        match event {
+            AgentEvent::AwaitingInput {
+                request_id,
+                tool_call,
+                options,
+            } => {
+                assert_eq!(request_id, "5");
+                assert_eq!(tool_call, "Write config.json");
+                assert_eq!(options.len(), 2);
+                assert_eq!(options[0].option_id, "allow-once");
+                assert_eq!(options[1].kind, "reject_once");
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_permission_request_maps_to_none() {
+        let req = AcpRequest {
+            jsonrpc: "2.0".into(),
+            id: 1.into(),
+            method: "fs/read_text_file".into(),
+            params: json!({}),
+        };
+        assert_eq!(AgentEvent::from_request(&req), None);
     }
 
     #[test]

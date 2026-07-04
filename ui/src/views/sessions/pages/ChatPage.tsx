@@ -18,7 +18,7 @@ import remarkGfm from "remark-gfm";
 
 import { Icon } from "../../../components/Icon";
 import { useSession, useMessages } from "../../../hooks/queries";
-import { sendMessage, forkSession, onFrame } from "../../../api";
+import { sendMessage, forkSession, onFrame, respondPermission } from "../../../api";
 import type { Message, ServerFrame } from "../../../types";
 import { MessageBubble } from "../components/MessageBubble";
 import { Composer } from "../components/Composer";
@@ -43,6 +43,11 @@ export function ChatPage({
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("idle");
   const [text, setText] = useState("");
   const [optimisticMsg, setOptimisticMsg] = useState<Message | null>(null);
+  // Pending permission request (ACP session/request_permission) for this session.
+  const [permission, setPermission] = useState<{
+    toolCall: string;
+    options: Array<{ optionId: string; name: string; kind: string }>;
+  } | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   const serverMessages = msgData?.messages ?? [];
@@ -89,10 +94,27 @@ export function ChatPage({
         setAgentStatus("done");
         // Clear optimistic message once the server message arrives
         setOptimisticMsg(null);
+        setPermission(null);
+      }
+      // Agent is blocked awaiting a permission decision for a gated tool call.
+      if (frame.kind === "permission.required" && frame.sessionId === sessionId) {
+        setPermission({ toolCall: frame.toolCall, options: frame.options });
       }
     });
     return unsub;
   }, [sessionId]);
+
+  const handlePermission = useCallback(
+    async (optionId: string | null) => {
+      setPermission(null);
+      try {
+        await respondPermission(sessionId, optionId);
+      } catch {
+        // If it fails the WS will re-emit or the turn errors; nothing to retry here.
+      }
+    },
+    [sessionId],
+  );
 
   // ── Auto-scroll ──────────────────────────────────────────────────
   useEffect(() => {
@@ -217,10 +239,38 @@ export function ChatPage({
                 <span className="thinking-label">thinking…</span>
               </div>
             )}
+            {/* Permission prompt — agent blocked on a gated tool call */}
+            {permission && (
+              <div className="perm-prompt">
+                <div className="perm-head">
+                  <Icon name="shield" size={13} />
+                  <span>
+                    Agent wants to run: <strong>{permission.toolCall}</strong>
+                  </span>
+                </div>
+                <div className="perm-opts">
+                  {permission.options.map((o) => (
+                    <button
+                      key={o.optionId}
+                      type="button"
+                      className={`btn${o.kind.startsWith("allow") ? " pri" : ""}`}
+                      onClick={() => void handlePermission(o.optionId)}
+                    >
+                      {o.name}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void handlePermission(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
-
-      {/* Composer — observed sessions show Fork CTA instead */}
       {isObserved ? (
         <div className="composer">
           <div className="obsbanner">

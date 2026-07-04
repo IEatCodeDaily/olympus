@@ -108,6 +108,10 @@ pub fn build_router(state: AppState) -> Router {
             get(get_messages).post(post_message),
         )
         .route("/api/sessions/{id}/cancel", post(cancel_session))
+        .route(
+            "/api/sessions/{id}/permission",
+            post(respond_permission_handler),
+        )
         .route("/api/search", get(search))
         .route("/api/models", get(models))
         .route("/api/agents", get(list_agents_handler))
@@ -612,8 +616,9 @@ async fn list_sessions(
     drop(views);
 
     // Stamp derived liveness. Managed sessions use the authoritative in-flight
-    // flag ("running"/"idle"); observed sessions fall back to activity recency.
+    // + awaiting-input flags; observed sessions fall back to activity recency.
     let in_flight = state.bridge.in_flight_set().await;
+    let awaiting = state.bridge.awaiting_input_set().await;
     let now = now_epoch();
     for r in rows.iter_mut() {
         let managed = r.source == "acp" || r.source == "olympus";
@@ -622,6 +627,7 @@ async fn list_sessions(
             now,
             in_flight.contains(&r.id),
             managed,
+            awaiting.contains(&r.id),
         )
         .to_string();
     }
@@ -665,12 +671,14 @@ async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> R
             let mut dto = SessionDto::from_row(row);
             drop(views);
             let in_flight = state.bridge.in_flight_set().await;
+            let awaiting = state.bridge.awaiting_input_set().await;
             let managed = dto.source == "acp" || dto.source == "olympus";
             dto.liveness = crate::server::dto::compute_liveness(
                 dto.last_activity,
                 now_epoch(),
                 in_flight.contains(&dto.id),
                 managed,
+                awaiting.contains(&dto.id),
             )
             .to_string();
             Json(dto).into_response()
@@ -1168,7 +1176,7 @@ async fn create_session(
             let mut dto = dto;
             let managed = dto.source == "acp" || dto.source == "olympus";
             dto.liveness =
-                crate::server::dto::compute_liveness(dto.last_activity, now_epoch(), false, managed)
+                crate::server::dto::compute_liveness(dto.last_activity, now_epoch(), false, managed, false)
                     .to_string();
 
             let _ = state.deltas.send(ServerFrame::SessionAdded {
@@ -1799,6 +1807,40 @@ async fn post_message(
                 AgentEvent::Reasoning(_) => {
                     // Accumulate silently for now; reasoning rendering is separate.
                 }
+                AgentEvent::AwaitingInput {
+                    request_id,
+                    tool_call,
+                    options,
+                } => {
+                    // The agent is blocked on a permission decision. Record the
+                    // pending request (so /permission can answer it) and flip
+                    // liveness to "input-required" via the awaiting set. Do NOT
+                    // end the turn — the stream continues once the client
+                    // responds and the agent resumes the tool call.
+                    bridge.mark_awaiting_input(&session_id, &request_id).await;
+                    let options_json = serde_json::Value::Array(
+                        options
+                            .iter()
+                            .map(|o| {
+                                serde_json::json!({
+                                    "optionId": o.option_id,
+                                    "name": o.name,
+                                    "kind": o.kind,
+                                })
+                            })
+                            .collect(),
+                    );
+                    let _ = deltas.send(ServerFrame::PermissionRequired {
+                        session_id: session_id.clone(),
+                        tool_call,
+                        options: options_json,
+                    });
+                    // Also nudge the session list so the row shows input-required.
+                    let _ = deltas.send(ServerFrame::SessionUpdated {
+                        session_id: session_id.clone(),
+                        changes: serde_json::json!({ "liveness": "input-required" }),
+                    });
+                }
             }
             // NOTE: assistant_msg_id must NOT increment per event. One prompt
             // produces one assistant message (text + accumulated tool calls),
@@ -1846,8 +1888,10 @@ async fn post_message(
             });
         }
         // Turn finished (Done, Error, or stream closed): clear the in-flight flag
-        // so liveness drops back to idle.
+        // so liveness drops back to idle. Also clear any dangling awaiting-input
+        // flag (e.g. the turn was cancelled while a permission was pending).
         bridge.clear_in_flight(&session_id).await;
+        bridge.clear_awaiting_input(&session_id).await;
     });
 
     (StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response()
@@ -1870,6 +1914,44 @@ async fn cancel_session(State(state): State<AppState>, Path(id): Path<String>) -
         changes: json!({ "liveness": "idle" }),
     });
     (StatusCode::OK, Json(json!({ "cancelled": true }))).into_response()
+}
+
+/// Body for POST /api/sessions/:id/permission — the user's decision on a
+/// pending `session/request_permission`. `optionId` selects an option; omit it
+/// (or send null) to cancel the request.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionBody {
+    option_id: Option<String>,
+}
+
+/// POST /api/sessions/:id/permission — answer a pending permission request.
+/// Forwards the decision to the runtime (which unblocks the agent's gated tool
+/// call), clears the awaiting flag, and nudges liveness back to "running".
+async fn respond_permission_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PermissionBody>,
+) -> Response {
+    match state
+        .bridge
+        .respond_permission(&id, body.option_id.as_deref())
+        .await
+    {
+        Ok(()) => {
+            // The agent resumes; it's running again until the next Done.
+            let _ = state.deltas.send(ServerFrame::SessionUpdated {
+                session_id: id.clone(),
+                changes: json!({ "liveness": "running" }),
+            });
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]

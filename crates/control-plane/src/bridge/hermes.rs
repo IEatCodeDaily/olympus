@@ -36,7 +36,7 @@ use tracing::debug;
 
 use super::{AgentCommand, AgentEvent, AgentRuntime};
 use crate::adapter::AgentKind;
-use crate::bridge::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest, Frame};
+use crate::bridge::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest, AcpResponse, Frame};
 
 const CLAUDE_CODE_ACP_PACKAGE: &str = "@zed-industries/claude-code-acp@0.16.2";
 const CODEX_ACP_PACKAGE: &str = "@zed-industries/codex-acp@0.16.0";
@@ -201,7 +201,7 @@ pub fn map_message_to_event(msg: &AcpMessage) -> Option<AgentEvent> {
     match msg {
         AcpMessage::Notification(notif) => AgentEvent::from_notification(notif),
         AcpMessage::Response(resp) => AgentEvent::from_response(resp),
-        AcpMessage::Request(_) => None,
+        AcpMessage::Request(req) => AgentEvent::from_request(req),
     }
 }
 
@@ -619,6 +619,30 @@ impl AgentRuntime for HermesAgentRuntime {
                 self.write_message(&AcpMessage::Request(req)).await?;
             }
         }
+        Ok(())
+    }
+
+    async fn respond_permission(
+        &self,
+        request_id: &str,
+        option_id: Option<&str>,
+    ) -> Result<()> {
+        // The agent's request_id was captured as serialized JSON; parse it back
+        // so we echo the exact id shape (integer or string) the agent used.
+        let id_value: Value = serde_json::from_str(request_id)
+            .with_context(|| format!("parsing permission request id {request_id:?}"))?;
+        // ACP RequestPermissionOutcome: "selected" with optionId, or "cancelled".
+        let outcome = match option_id {
+            Some(opt) => json!({ "outcome": "selected", "optionId": opt }),
+            None => json!({ "outcome": "cancelled" }),
+        };
+        let resp = AcpResponse {
+            jsonrpc: "2.0".into(),
+            id: AcpId(id_value),
+            result: json!({ "outcome": outcome }),
+            error: None,
+        };
+        self.write_message(&AcpMessage::Response(resp)).await?;
         Ok(())
     }
 
