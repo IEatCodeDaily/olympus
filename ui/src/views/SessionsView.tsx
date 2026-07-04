@@ -49,13 +49,14 @@ import { BottomPanel, type BpTab } from "./sessions/components/BottomPanel";
 import { ChatPage } from "./sessions/pages/ChatPage";
 import { AgentsPage } from "./sessions/pages/AgentsPage";
 import { UsagePage } from "./sessions/pages/UsagePage";
+import { HistoryPage } from "./sessions/pages/HistoryPage";
 
 export function SessionsView({
   sessionId,
   page,
 }: {
   sessionId: string | null;
-  page: "chat" | "agents" | "usage" | null;
+  page: "chat" | "agents" | "usage" | "history" | null;
 }) {
   const { sidebarCollapsed } = useUIStore();
   const [rsCollapsed, setRsCollapsed] = useState(false);
@@ -97,6 +98,10 @@ export function SessionsView({
         ) : page === "usage" ? (
           <div className="view on" data-view="sessions" style={{ flexDirection: "column" }}>
             <UsagePage />
+          </div>
+        ) : page === "history" ? (
+          <div className="view on" data-view="sessions" style={{ flexDirection: "column" }}>
+            <HistoryPage />
           </div>
         ) : sessionId ? (
           <SessionChatLayout

@@ -308,6 +308,7 @@ export const SESSIONS: Session[] = Array.from({ length: 32 }, (_, i) => {
     inputTokens: Math.floor(inputTokens),
     outputTokens: Math.floor(outputTokens),
     archived: i > 28, // last few archived
+    pinned: i === 2, // one pinned session for UI testing
     forkedFrom: i === 7 ? uid("sess") : null,
     forkPoint: i === 7 ? 12 : null,
     forkType: i === 7 ? "sub" : null,

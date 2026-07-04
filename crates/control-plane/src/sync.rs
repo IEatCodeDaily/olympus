@@ -503,6 +503,7 @@ pub fn reconcile_session(
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
     }
 
@@ -638,6 +639,7 @@ fn apply_events(
                 agent,
                 node,
                 hermes_id,
+                pinned: _,
             } => {
                 let mut changes = serde_json::Map::new();
                 if let Some(title) = title {

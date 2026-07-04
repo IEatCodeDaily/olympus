@@ -40,6 +40,12 @@ const sessionsIndexRoute = createRoute({
   component: () => null,
 });
 
+const sessionsHistoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions/history",
+  component: () => null,
+});
+
 const sessionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
@@ -103,6 +109,7 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   sessionsIndexRoute,
+  sessionsHistoryRoute,
   sessionRoute,
   vaultsRoute,
   vaultDetailRoute,
@@ -128,7 +135,7 @@ declare module "@tanstack/react-router" {
 export type SurfaceName = "sessions" | "vaults" | "projects" | "fleet" | "settings";
 
 /** The Sessions-view pages (left-sidebar NavItems inside the View). */
-export type SessionsPage = "chat" | "agents" | "usage";
+export type SessionsPage = "chat" | "agents" | "usage" | "history";
 
 /** Which sub-page is active within the Vaults surface. */
 export type VaultPage = "note" | "tables" | "graph";
@@ -151,6 +158,9 @@ export function parseRoute(pathname: string): {
   }
   if (pathname === "/sessions/usage") {
     return { surface: "sessions", ...base, page: "usage" };
+  }
+  if (pathname === "/sessions/history") {
+    return { surface: "sessions", ...base, page: "history" };
   }
   if (pathname.startsWith("/sessions/")) {
     const id = pathname.split("/sessions/")[1];

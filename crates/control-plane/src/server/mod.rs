@@ -233,6 +233,7 @@ async fn auth_gate(
 struct SessionsQuery {
     source: Option<String>,
     archived: Option<bool>,
+    pinned: Option<bool>,
     /// Filter by managed status: `true` → Olympus-driven sessions (your active
     /// workspace), `false` → imported agent history (read-only, fork-to-use).
     /// Absent → both. This is the basis of the Sessions/History nav split.
@@ -588,6 +589,7 @@ async fn list_sessions(
     let filters = Filters {
         source: None,
         archived: q.archived,
+        pinned: q.pinned,
     };
     let mut rows: Vec<SessionDto> = views
         .sessions
@@ -792,10 +794,7 @@ async fn models(State(_state): State<AppState>) -> impl IntoResponse {
 /// GET /api/agents/:id/models — models the given agent can actually run
 /// (scoped to that agent's provider). This is what keeps the composer's model
 /// selector agent-specific — a Codex agent is never offered Claude models.
-async fn agent_models(
-    State(_state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn agent_models(State(_state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let provider = agents::list_agents()
         .into_iter()
         .find(|a| a.id == id)
@@ -814,7 +813,11 @@ async fn list_agents_handler(State(state): State<AppState>) -> impl IntoResponse
 async fn node_agents(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.nodes.agents(&id).await {
         Ok(agents) => Json(json!({ "agents": agents })).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -836,7 +839,11 @@ async fn refresh_node_agents(State(state): State<AppState>, Path(id): Path<Strin
     let fresh = agents::discover_local_agents();
     match state.nodes.set_agents(&id, fresh).await {
         Ok(agents) => Json(json!({ "agents": agents })).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -973,6 +980,10 @@ struct PatchSessionBody {
     model: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    archived: Option<bool>,
+    #[serde(default)]
+    pinned: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1118,6 +1129,7 @@ async fn handover_session(
         agent: None,
         node: None,
         hermes_id: None,
+        pinned: None,
     };
     let _ = state.log.append(&archive);
     {
@@ -1209,6 +1221,7 @@ async fn create_session(
                         input_tokens: 0,
                         output_tokens: 0,
                         archived: false,
+                        pinned: false,
                         forked_from: None,
                         fork_point: None,
                         fork_type: None,
@@ -1224,9 +1237,14 @@ async fn create_session(
             // A freshly-created managed draft has no in-flight turn yet → idle.
             let mut dto = dto;
             let managed = dto.source == "acp" || dto.source == "olympus";
-            dto.liveness =
-                crate::server::dto::compute_liveness(dto.last_activity, now_epoch(), false, managed, false)
-                    .to_string();
+            dto.liveness = crate::server::dto::compute_liveness(
+                dto.last_activity,
+                now_epoch(),
+                false,
+                managed,
+                false,
+            )
+            .to_string();
 
             let _ = state.deltas.send(ServerFrame::SessionAdded {
                 session: dto.clone(),
@@ -1265,13 +1283,16 @@ async fn patch_session(
 ) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
 
-    // The session must exist and be managed (you can't reassign observed sessions).
+    // The session must exist. Runtime rebinds (agent/node/model) are managed-
+    // only; pin/archive/title are metadata and work on ANY session (observed
+    // sessions can be pinned or archived without being steerable).
     {
         let views = state.views.read().await;
         let Some(row) = views.sessions.get(&id) else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         };
-        if !(row.source == "olympus" || row.source == "acp") {
+        let wants_rebind = body.agent.is_some() || body.node.is_some() || body.model.is_some();
+        if wants_rebind && !(row.source == "olympus" || row.source == "acp") {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
@@ -1287,11 +1308,12 @@ async fn patch_session(
         session_id: id.clone(),
         title: body.title.clone(),
         model: body.model.clone(),
-        archived: None,
+        archived: body.archived,
         message_count: None,
         agent: body.agent.clone(),
         node: body.node.clone(),
         hermes_id: None,
+        pinned: body.pinned,
     };
     if let Err(e) = state.log.append(&event) {
         return (
@@ -1319,6 +1341,12 @@ async fn patch_session(
     }
     if let Some(t) = &body.title {
         changes.insert("title".into(), serde_json::Value::String(t.clone()));
+    }
+    if let Some(a) = body.archived {
+        changes.insert("archived".into(), serde_json::Value::Bool(a));
+    }
+    if let Some(p) = body.pinned {
+        changes.insert("pinned".into(), serde_json::Value::Bool(p));
     }
     let _ = state.deltas.send(ServerFrame::SessionUpdated {
         session_id: id.clone(),
@@ -1427,6 +1455,7 @@ async fn fork_session(
                 input_tokens: 0,
                 output_tokens: 0,
                 archived: false,
+                pinned: false,
                 forked_from: None,
                 fork_point: None,
                 fork_type: None,
@@ -1709,6 +1738,7 @@ async fn post_message(
                 agent: None,
                 node: None,
                 hermes_id: Some(captured_hermes_id.clone()),
+                pinned: None,
             });
             captured_hermes_id
         } else {
@@ -2779,6 +2809,65 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["agent"], "glm52");
         assert_eq!(v["model"], "glm-5.2");
+    }
+
+    #[tokio::test]
+    async fn patch_session_pins_and_archives() {
+        // PATCH /api/sessions/:id with pinned/archived persists both flags.
+        let (state, _d) = test_state();
+        let ns = state
+            .bridge
+            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default())
+            .unwrap();
+        {
+            let mut views = state.views.write().await;
+            if let Ok(events) = state.log.read_all() {
+                for (_s, e) in events {
+                    views.apply(&e);
+                }
+            }
+        }
+        let app = build_router(state.clone());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/sessions/{}", ns.session_id))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"pinned":true,"archived":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["pinned"], true);
+        assert_eq!(v["archived"], true);
+        // Unpin only — archived must be left unchanged.
+        let app2 = build_router(state);
+        let res2 = app2
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/sessions/{}", ns.session_id))
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"pinned":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res2.status(), StatusCode::OK);
+        let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(v2["pinned"], false);
+        assert_eq!(v2["archived"], true, "archived untouched by pin-only patch");
     }
 
     #[tokio::test]

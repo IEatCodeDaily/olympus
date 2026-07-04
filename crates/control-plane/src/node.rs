@@ -401,7 +401,14 @@ async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry)
             } => {
                 tracing::info!(node = %node_id, hostname = %hostname, "node registered");
                 registry
-                    .register(&node_id, &hostname, slots_total, &version, false, Vec::new())
+                    .register(
+                        &node_id,
+                        &hostname,
+                        slots_total,
+                        &version,
+                        false,
+                        Vec::new(),
+                    )
                     .await;
                 connected_node = Some(node_id);
                 NodeResponse::Welcome { status: "ok" }
@@ -449,7 +456,8 @@ mod tests {
     #[tokio::test]
     async fn register_and_list() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
+            .await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -461,7 +469,8 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_updates_slots() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
+            .await;
 
         reg.heartbeat("node-1", 2).await.unwrap();
 
@@ -479,7 +488,8 @@ mod tests {
     #[tokio::test]
     async fn deregister_removes_node() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
+            .await;
         assert_eq!(reg.list().await.len(), 1);
 
         reg.deregister("node-1").await;
@@ -489,9 +499,11 @@ mod tests {
     #[tokio::test]
     async fn re_register_updates_fields() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 2, "0.1", false, vec![]).await;
+        reg.register("node-1", "host-1", 2, "0.1", false, vec![])
+            .await;
         // Re-register with updated capacity
-        reg.register("node-1", "host-1", 8, "0.2", false, vec![]).await;
+        reg.register("node-1", "host-1", 8, "0.2", false, vec![])
+            .await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -502,7 +514,8 @@ mod tests {
     #[tokio::test]
     async fn local_node_never_evicted() {
         let reg = NodeRegistry::new();
-        reg.register("local", "localhost", 4, "0.1", true, vec![]).await;
+        reg.register("local", "localhost", 4, "0.1", true, vec![])
+            .await;
 
         // Even after a long wait, local node stays.
         sleep(Duration::from_millis(50)).await;
@@ -514,7 +527,8 @@ mod tests {
     #[tokio::test]
     async fn set_draining_changes_status() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![]).await;
+        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
+            .await;
 
         reg.set_draining("node-1").await.unwrap();
         let nodes = reg.list().await;

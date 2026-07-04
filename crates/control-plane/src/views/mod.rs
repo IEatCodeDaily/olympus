@@ -294,6 +294,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -317,6 +318,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -337,6 +339,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -357,6 +360,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
 
         let row = mgr.sessions.get("sess-1").unwrap();
@@ -376,6 +380,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
         assert!(mgr.sessions.get("ghost").is_none());
         assert_eq!(mgr.sessions.list(&Filters::default()).len(), 0);
@@ -397,6 +402,7 @@ mod tests {
         let cli_only = mgr.sessions.list(&Filters {
             source: Some("cli".into()),
             archived: None,
+            pinned: None,
         });
         assert_eq!(cli_only.len(), 2);
         let cli_ids: Vec<&str> = cli_only.iter().map(|r| r.session_id.as_str()).collect();
@@ -419,11 +425,13 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
 
         let active = mgr.sessions.list(&Filters {
             source: None,
             archived: Some(false),
+            pinned: None,
         });
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].session_id, "a");
@@ -431,6 +439,7 @@ mod tests {
         let archived = mgr.sessions.list(&Filters {
             source: None,
             archived: Some(true),
+            pinned: None,
         });
         assert_eq!(archived.len(), 1);
         assert_eq!(archived[0].session_id, "b");
@@ -451,11 +460,13 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
 
         let result = mgr.sessions.list(&Filters {
             source: Some("cli".into()),
             archived: Some(false),
+            pinned: None,
         });
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].session_id, "b");

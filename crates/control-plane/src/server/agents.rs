@@ -33,6 +33,11 @@ pub struct AgentInfo {
     pub kind: String,
     /// Whether this is the implicit root profile the server runs as by default.
     pub is_default: bool,
+    /// Auth readiness for CLI harnesses: Some(true) = credentials found,
+    /// Some(false) = installed but logged out ("needs login"), None = not
+    /// probed (Hermes profiles carry their own credentials).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready: Option<bool>,
 }
 
 /// Resolve the Hermes home dir (`~/.hermes`), honoring `HERMES_HOME`.
@@ -94,6 +99,7 @@ fn agent_from_config(id: &str, path: &PathBuf, is_default: bool) -> AgentInfo {
         model,
         kind: "hermes".to_string(),
         is_default,
+        ready: None,
     }
 }
 
@@ -118,6 +124,34 @@ fn which_in_path(binary: &str, path_env: &str) -> Option<PathBuf> {
     std::env::split_paths(path_env)
         .map(|dir| dir.join(binary))
         .find(|path| is_executable(path))
+}
+
+/// Probe whether a CLI harness has stored credentials — binary-exists is not
+/// enough (an installed-but-logged-out codex lists as usable, then fails the
+/// first message with `Authentication required`). Cheap filesystem checks
+/// only; no subprocess, no network.
+fn probe_cli_auth(kind: &str) -> Option<bool> {
+    let home = std::env::var("HOME").ok()?;
+    let home = Path::new(&home);
+    match kind {
+        // Codex stores ChatGPT/API credentials at ~/.codex/auth.json.
+        "codex" => Some(nonempty_file(&home.join(".codex/auth.json"))),
+        // Claude Code stores OAuth creds at ~/.claude/.credentials.json;
+        // an API key via env also counts.
+        "claude-code" => Some(
+            nonempty_file(&home.join(".claude/.credentials.json"))
+                || std::env::var("ANTHROPIC_API_KEY")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false),
+        ),
+        _ => None,
+    }
+}
+
+fn nonempty_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
 }
 
 fn command_version_with_timeout(binary: &Path, timeout: Duration) -> Option<String> {
@@ -166,6 +200,7 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
             model: command_version_with_timeout(&claude, Duration::from_secs(2)),
             kind: CLAUDE_CODE_AGENT_ID.to_string(),
             is_default: false,
+            ready: probe_cli_auth(CLAUDE_CODE_AGENT_ID),
         });
     }
     if let Some(codex) = which_in_path("codex", path_env) {
@@ -175,6 +210,7 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
             model: command_version_with_timeout(&codex, Duration::from_secs(2)),
             kind: CODEX_AGENT_ID.to_string(),
             is_default: false,
+            ready: probe_cli_auth(CODEX_AGENT_ID),
         });
     }
     out
@@ -199,7 +235,11 @@ pub fn discover_local_agents() -> Vec<AgentInfo> {
     let Some(home) = hermes_home() else {
         return discover_cli_harnesses_now();
     };
-    let mut out = vec![agent_from_config("default", &home.join("config.yaml"), true)];
+    let mut out = vec![agent_from_config(
+        "default",
+        &home.join("config.yaml"),
+        true,
+    )];
 
     if let Ok(entries) = std::fs::read_dir(home.join("profiles")) {
         let mut profiles: Vec<AgentInfo> = entries

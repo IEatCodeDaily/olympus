@@ -104,6 +104,19 @@ export function AgentPicker({
                         default
                       </span>
                     )}
+                    {a.ready === false && (
+                      <span
+                        className="tag"
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 9,
+                          color: "var(--warn, orange)",
+                        }}
+                        title="CLI installed but no credentials found — log in first"
+                      >
+                        needs login
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 10, color: "var(--faint)", fontFamily: "var(--font-mono)" }}>
                     {/* Bug 3: id + provider only, no ACP/CLI dual-label */}

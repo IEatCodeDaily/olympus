@@ -153,6 +153,20 @@ enum StoredVariant {
         translated_message_count: u64,
         handed_over_at: f64,
     },
+    /// V2 of SessionUpdated adding `pinned`. Appended at the END of the enum:
+    /// postcard is positional, so legacy `SessionUpdated` records keep their
+    /// variant index and still decode. New writes use this variant.
+    SessionUpdatedV2 {
+        session_id: String,
+        title: Option<String>,
+        model: Option<String>,
+        archived: Option<bool>,
+        message_count: Option<u64>,
+        agent: Option<String>,
+        node: Option<String>,
+        hermes_id: Option<String>,
+        pinned: Option<bool>,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -235,7 +249,8 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             agent,
             node,
             hermes_id,
-        } => StoredVariant::SessionUpdated {
+            pinned,
+        } => StoredVariant::SessionUpdatedV2 {
             session_id: session_id.clone(),
             title: title.clone(),
             model: model.clone(),
@@ -244,6 +259,7 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             agent: agent.clone(),
             node: node.clone(),
             hermes_id: hermes_id.clone(),
+            pinned: *pinned,
         },
         Event::CardCreated {
             card_id,
@@ -476,6 +492,28 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             agent,
             node,
             hermes_id,
+            pinned: None,
+        },
+        StoredVariant::SessionUpdatedV2 {
+            session_id,
+            title,
+            model,
+            archived,
+            message_count,
+            agent,
+            node,
+            hermes_id,
+            pinned,
+        } => Event::SessionUpdated {
+            session_id,
+            title,
+            model,
+            archived,
+            message_count,
+            agent,
+            node,
+            hermes_id,
+            pinned,
         },
         StoredVariant::CardCreated {
             card_id,

@@ -72,6 +72,7 @@ export async function fetchSessions(
   if (params?.source) q.set("source", params.source);
   if (params?.model) q.set("model", params.model);
   if (params?.archived !== undefined) q.set("archived", String(params.archived));
+  if (params?.pinned !== undefined) q.set("pinned", String(params.pinned));
   if (params?.managed !== undefined) q.set("managed", String(params.managed));
   if (params?.node) q.set("node", params.node);
   if (params?.q) q.set("q", params.q);
@@ -204,7 +205,14 @@ export async function createSession(opts?: {
  */
 export async function updateSession(
   sessionId: string,
-  patch: { agent?: string; node?: string; model?: string; title?: string }
+  patch: {
+    agent?: string;
+    node?: string;
+    model?: string;
+    title?: string;
+    archived?: boolean;
+    pinned?: boolean;
+  }
 ): Promise<Session> {
   const res = await fetch(`${BASE}/api/sessions/${sessionId}`, {
     method: "PATCH",

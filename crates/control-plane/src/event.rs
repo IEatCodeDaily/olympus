@@ -67,6 +67,9 @@ pub enum Event {
         /// Backfill the real Hermes session id once a lazily-spawned runtime
         /// captures it from `session/new`. `None` = leave unchanged.
         hermes_id: Option<String>,
+        /// Manual pin flag (sidebar PINNED section). `None` = leave unchanged.
+        #[serde(default)]
+        pinned: Option<bool>,
     },
     // ---- Card lifecycle events (C1, ADR §6) ----
     /// A card was created on a board.
@@ -279,6 +282,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         };
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: Event = postcard::from_bytes(&bytes).unwrap();

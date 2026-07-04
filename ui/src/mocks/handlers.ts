@@ -58,6 +58,9 @@ export const handlers = [
     }
     if (model) filtered = filtered.filter((s) => s.model === model);
     if (!showArchived) filtered = filtered.filter((s) => !s.archived);
+    const pinnedParam = url.searchParams.get("pinned");
+    if (pinnedParam === "true") filtered = filtered.filter((s) => s.pinned);
+    if (pinnedParam === "false") filtered = filtered.filter((s) => !s.pinned);
     if (q) {
       const ql = q.toLowerCase();
       filtered = filtered.filter(
@@ -108,6 +111,7 @@ export const handlers = [
       inputTokens: 0,
       outputTokens: 0,
       archived: false,
+      pinned: false,
       forkedFrom: null,
       forkPoint: null,
       forkType: null,
@@ -132,11 +136,15 @@ export const handlers = [
         node?: string;
         model?: string;
         title?: string;
+        archived?: boolean;
+        pinned?: boolean;
       };
       if (patch.agent !== undefined) sess.agent = patch.agent;
       if (patch.node !== undefined) sess.node = patch.node;
       if (patch.model !== undefined) sess.model = patch.model;
       if (patch.title !== undefined) sess.title = patch.title;
+      if (patch.archived !== undefined) sess.archived = patch.archived;
+      if (patch.pinned !== undefined) sess.pinned = patch.pinned;
       return HttpResponse.json(sess);
     }
   ),

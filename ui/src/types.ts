@@ -17,6 +17,7 @@ export interface Session {
   inputTokens: number;
   outputTokens: number;
   archived: boolean;
+  pinned: boolean;            // manual pin (sidebar PINNED section); user-set, never derived
   // fork lineage (ADR §6.6) — null for non-forked sessions
   forkedFrom: string | null;  // source session id
   forkPoint: number | null;   // message index the fork branched at
@@ -80,6 +81,8 @@ export interface AgentInfo {
   provider: string | null;
   model: string | null;
   kind: "hermes" | "claude-code" | "codex";
+  /** CLI harness auth readiness: true = credentials found, false = needs login, undefined = n/a (hermes profiles). */
+  ready?: boolean;
   /** True for the implicit root profile the server runs as by default. */
   isDefault: boolean;
 }
@@ -253,6 +256,7 @@ export interface SessionListParams {
   source?: string;        // comma-separated SessionSource values
   model?: string;
   archived?: boolean;
+  pinned?: boolean;
   /** true → Olympus-managed sessions only; false → imported history only. */
   managed?: boolean;
   /** Filter to sessions running on a specific node by nodeId. */

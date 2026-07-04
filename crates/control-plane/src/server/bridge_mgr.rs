@@ -366,6 +366,7 @@ impl BridgeManager {
             agent: None,
             node: None,
             hermes_id: Some(hermes_id.to_string()),
+            pinned: None,
         })?;
         Ok(())
     }
@@ -384,6 +385,7 @@ impl BridgeManager {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         };
         self.log.append(&event)?;
         Ok(event)

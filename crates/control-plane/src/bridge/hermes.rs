@@ -622,11 +622,7 @@ impl AgentRuntime for HermesAgentRuntime {
         Ok(())
     }
 
-    async fn respond_permission(
-        &self,
-        request_id: &str,
-        option_id: Option<&str>,
-    ) -> Result<()> {
+    async fn respond_permission(&self, request_id: &str, option_id: Option<&str>) -> Result<()> {
         // The agent's request_id was captured as serialized JSON; parse it back
         // so we echo the exact id shape (integer or string) the agent used.
         let id_value: Value = serde_json::from_str(request_id)

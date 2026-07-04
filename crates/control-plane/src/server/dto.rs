@@ -29,6 +29,8 @@ pub struct SessionDto {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub archived: bool,
+    /// Manual pin flag (sidebar PINNED section) — user-set, never derived.
+    pub pinned: bool,
     pub forked_from: Option<String>,
     pub fork_point: Option<u64>,
     pub fork_type: Option<String>,
@@ -113,6 +115,7 @@ impl SessionDto {
             input_tokens: row.input_tokens,
             output_tokens: row.output_tokens,
             archived: row.archived,
+            pinned: row.pinned,
             forked_from: None,
             fork_point: None,
             fork_type: None,
@@ -427,7 +430,10 @@ mod tests {
     #[test]
     fn liveness_managed_in_flight_is_running() {
         // A managed turn streaming right now is "running" regardless of age.
-        assert_eq!(compute_liveness(0.0, 1_000_000.0, true, true, false), "running");
+        assert_eq!(
+            compute_liveness(0.0, 1_000_000.0, true, true, false),
+            "running"
+        );
     }
 
     #[test]
@@ -450,7 +456,10 @@ mod tests {
     #[test]
     fn liveness_observed_recent_activity_is_active() {
         let now = 1_000_000.0;
-        assert_eq!(compute_liveness(now - 10.0, now, false, false, false), "active");
+        assert_eq!(
+            compute_liveness(now - 10.0, now, false, false, false),
+            "active"
+        );
     }
 
     #[test]
@@ -506,6 +515,7 @@ mod tests {
             input_tokens: 5,
             output_tokens: 7,
             archived: false,
+            pinned: false,
             last_activity: 200.0,
             agent: None,
             node: None,

@@ -1,23 +1,29 @@
 /**
  * SessionSidebar — the View-owned left sidebar for Sessions.
  *
- * Moved out of AppShell per the View/Page architecture: the View owns the
- * left sidebar (session list + NavItems).
+ * Sections:
+ *  - PINNED  = sessions the USER pinned (session.pinned) — never derived from
+ *    liveness. A running session gets a spinner icon, not a section move.
+ *  - RECENT  = managed, non-pinned, non-archived sessions, capped at 5 most
+ *    recent. Anything older lives in the History page ("View all" NavItem).
  *
  * Bug fixes:
- *  - Bug 5: Liveness dot shown ONLY when liveness === "active"; no dot for idle.
- *  - Bug 10: "New session" opens an agent picker (list from /api/agents);
- *    selecting an agent creates the managed session bound to that profile.
+ *  - Bug 5: Liveness dot shown ONLY when a turn is live; no dot for idle.
+ *  - Bug 10: "New session" opens an agent picker (list from /api/agents).
+ *  - Pin/archive hover actions actually PATCH the session now.
  */
 
 import { useState, useCallback } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Icon } from "../../../components/Icon";
-import { useSessions } from "../../../hooks/queries";
+import { useSessions, useUpdateSession } from "../../../hooks/queries";
 import { createSession } from "../../../api";
 import type { Session } from "../../../types";
 import { timeAgo } from "../helpers";
 import { AgentPicker } from "./AgentPicker";
+
+/** Max rows in the RECENT section; the rest live in the History page. */
+const RECENT_LIMIT = 5;
 
 export function SessionSidebar({
   width,
@@ -29,18 +35,13 @@ export function SessionSidebar({
   onResizeStart?: (e: React.MouseEvent) => void;
 }) {
   const navigate = useNavigate();
-  const { data: sessionData } = useSessions({ managed: true });
-  const { data: historyData } = useSessions({ managed: false, limit: 20 });
+  const { data: sessionData } = useSessions({ managed: true, archived: false });
   const sessions = sessionData?.sessions ?? [];
-  const history = historyData?.sessions ?? [];
 
-  // PINNED = a turn is live (running) or recently active
-  const isLive = (s: Session) => s.liveness === "running" || s.liveness === "active";
-  const pinned = sessions.filter(isLive);
-  // RECENT = managed + not live
-  const recent = sessions.filter((s) => !isLive(s));
-  // OBSERVED = not managed (imported from hermes)
-  const observed = history;
+  // PINNED = user-pinned only. Liveness NEVER moves a session here.
+  const pinned = sessions.filter((s) => s.pinned);
+  // RECENT = managed, not pinned, capped at the most recent 5.
+  const recent = sessions.filter((s) => !s.pinned).slice(0, RECENT_LIMIT);
 
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -83,16 +84,9 @@ export function SessionSidebar({
             New session
           </button>
           {/* NavItems — Pages inside the Sessions View */}
-          <NavItem
-            label="Agents"
-            icon="bot"
-            path="/sessions/agents"
-          />
-          <NavItem
-            label="Usage"
-            icon="activity"
-            path="/sessions/usage"
-          />
+          <NavItem label="Agents" icon="bot" path="/sessions/agents" />
+          <NavItem label="Usage" icon="activity" path="/sessions/usage" />
+          <NavItem label="History" icon="clock" path="/sessions/history" />
         </div>
         <div className="sb-scroll">
           {pinned.length > 0 && (
@@ -109,14 +103,6 @@ export function SessionSidebar({
             activeSessionId={activeSessionId}
             onSelect={handleSelectSession}
           />
-          {observed.length > 0 && (
-            <SessionSection
-              label="OBSERVED"
-              sessions={observed}
-              activeSessionId={activeSessionId}
-              onSelect={handleSelectSession}
-            />
-          )}
         </div>
       </aside>
       <div className="rz-x" onMouseDown={onResizeStart} />
@@ -177,7 +163,7 @@ function SessionSection({
         <span className="ct">{sessions.length}</span>
       </div>
       <div className="sec-content">
-        {sessions.slice(0, 50).map((s) => (
+        {sessions.map((s) => (
           <SessionRow
             key={s.id}
             session={s}
@@ -191,8 +177,8 @@ function SessionSection({
 }
 
 /** A clean session row: title left, time right, hover reveals pin/archive.
- *  Status icon (left): spinner when agent running, green dot when completed,
- *  orange ! when waiting for input, nothing when idle/opened. */
+ *  Status icon (left): spinner when agent running, orange ! when waiting for
+ *  input, nothing when idle. */
 function SessionRow({
   session,
   active,
@@ -204,6 +190,7 @@ function SessionRow({
 }) {
   const title = session.title || "Untitled";
   const time = timeAgo(session.lastActivity);
+  const update = useUpdateSession();
 
   // Tooltip: agent · node · model · summary
   const tooltip = [
@@ -215,11 +202,6 @@ function SessionRow({
     .filter(Boolean)
     .join(" · ");
 
-  // Status icon logic:
-  //   running = a turn is in-flight (managed) → spinner
-  //   active  = recent activity (observed) → spinner
-  //   input-required = agent blocked on a permission decision → orange dot
-  //   idle    = no icon
   const isRunning = session.liveness === "running" || session.liveness === "active";
   const needsInput = session.liveness === "input-required";
   const showIcon = (isRunning || needsInput) && !active;
@@ -229,6 +211,7 @@ function SessionRow({
       className={`srow ${active ? "on" : ""}`}
       data-session-id={session.id}
       data-managed={session.managed ? "true" : "false"}
+      data-pinned={session.pinned ? "true" : "false"}
       title={tooltip}
       onClick={() => onSelect(session.id)}
     >
@@ -248,8 +231,11 @@ function SessionRow({
         <button
           type="button"
           className="srow-act"
-          title="Pin"
-          onClick={(e) => e.stopPropagation()}
+          title={session.pinned ? "Unpin" : "Pin"}
+          onClick={(e) => {
+            e.stopPropagation();
+            update.mutate({ id: session.id, patch: { pinned: !session.pinned } });
+          }}
         >
           <Icon name="pin" size={11} />
         </button>
@@ -257,7 +243,10 @@ function SessionRow({
           type="button"
           className="srow-act"
           title="Archive"
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            update.mutate({ id: session.id, patch: { archived: true } });
+          }}
         >
           <Icon name="archive" size={11} />
         </button>

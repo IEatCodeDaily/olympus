@@ -30,6 +30,8 @@ pub struct Filters {
     pub source: Option<String>,
     /// Restrict to sessions with this archived flag.
     pub archived: Option<bool>,
+    /// Restrict to sessions with this pinned flag.
+    pub pinned: Option<bool>,
 }
 
 /// A row in the session-list projection.
@@ -49,6 +51,8 @@ pub struct SessionRow {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub archived: bool,
+    /// Manual pin flag (sidebar PINNED section). Never derived from liveness.
+    pub pinned: bool,
     /// Most recent activity timestamp known for this session. Seeded from
     /// `started_at` on creation, advanced on each `MessageAppended`.
     pub last_activity: f64,
@@ -120,6 +124,7 @@ impl SessionView {
                         input_tokens: *input_tokens,
                         output_tokens: *output_tokens,
                         archived: false,
+                        pinned: false,
                         last_activity: *started_at,
                         agent: agent.clone(),
                         node: node.clone(),
@@ -137,6 +142,7 @@ impl SessionView {
                 agent,
                 node,
                 hermes_id,
+                pinned,
             } => {
                 // Patch in place; ignore unknown sessions (no phantom rows).
                 if let Some(row) = self.sessions.get_mut(session_id) {
@@ -160,6 +166,9 @@ impl SessionView {
                     }
                     if let Some(h) = hermes_id {
                         row.hermes_id = h.clone();
+                    }
+                    if let Some(p) = pinned {
+                        row.pinned = *p;
                     }
                 }
             }
@@ -265,11 +274,14 @@ impl SessionView {
         let mut rows: Vec<&SessionRow> = self
             .sessions
             .values()
-            .filter(|row| match (&filters.source, filters.archived) {
-                (Some(src), _) if row.source != *src => false,
-                (_, Some(a)) if row.archived != a => false,
-                _ => true,
-            })
+            .filter(
+                |row| match (&filters.source, filters.archived, filters.pinned) {
+                    (Some(src), _, _) if row.source != *src => false,
+                    (_, Some(a), _) if row.archived != a => false,
+                    (_, _, Some(p)) if row.pinned != p => false,
+                    _ => true,
+                },
+            )
             .collect();
         // started_at desc; session_id asc as a stable tiebreaker.
         rows.sort_by(|a, b| {
@@ -464,6 +476,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
         let row = v.get("s1").unwrap();
         assert_eq!(row.title.as_deref(), Some("new title"));
@@ -485,6 +498,7 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
         assert!(v.get("ghost").is_none());
     }
@@ -499,6 +513,7 @@ mod tests {
         let rows = v.list(&Filters {
             source: Some("cli".into()),
             archived: None,
+            pinned: None,
         });
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].session_id, "a");
@@ -518,10 +533,12 @@ mod tests {
             agent: None,
             node: None,
             hermes_id: None,
+            pinned: None,
         });
         let active = v.list(&Filters {
             source: None,
             archived: Some(false),
+            pinned: None,
         });
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].session_id, "live");

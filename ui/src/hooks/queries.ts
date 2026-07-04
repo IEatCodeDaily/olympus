@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useCallback } from "react";
 import {
   fetchSessions,
@@ -12,6 +12,7 @@ import {
   fetchVaults,
   fetchVaultNotes,
   fetchVaultNote,
+  updateSession,
   onFrame,
   connectWs,
 } from "../api";
@@ -78,6 +79,34 @@ export function useMessages(sessionId: string | null) {
 /** Agents list. */
 export function useAgents() {
   return useQuery({ queryKey: qk.agents(), queryFn: fetchAgents, staleTime: 60_000 });
+}
+
+/**
+ * Mutate session metadata (pin, archive, title, agent/node/model rebind).
+ * Invalidates the session lists + the single-session cache on success.
+ */
+export function useUpdateSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      patch,
+    }: {
+      id: string;
+      patch: {
+        agent?: string;
+        node?: string;
+        model?: string;
+        title?: string;
+        archived?: boolean;
+        pinned?: boolean;
+      };
+    }) => updateSession(id, patch),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+      void qc.invalidateQueries({ queryKey: qk.session(id) });
+    },
+  });
 }
 
 /** Fleet nodes — connected envoys + the local node. */
