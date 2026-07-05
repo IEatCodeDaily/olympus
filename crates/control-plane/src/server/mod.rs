@@ -2593,6 +2593,15 @@ async fn post_message(
                 AgentEvent::Reasoning(_) => {} // too noisy for the log panel
                 AgentEvent::Text(_) => {}      // streamed to the chat bubble, not logs
                 AgentEvent::Done { finish_reason } => {
+                    // Skip the Done ack from a /steer slash command. The Hermes
+                    // adapter processes /steer as a slash command that returns
+                    // immediately with stop_reason="end_turn", which would
+                    // terminate the original turn early. Only the genuine
+                    // end-of-turn Done should break the drain loop.
+                    if bridge.take_steer_pending(&session_id).await {
+                        tracing::debug!(session = %session_id, "skipped steer-ack Done");
+                        continue;
+                    }
                     terminal_event_seen = true;
                     emit_log(
                         "info",
@@ -2846,6 +2855,12 @@ async fn steer_session(
     let Some(runtime) = state.bridge.get_runtime(&id).await else {
         return (StatusCode::CONFLICT, "no runtime for session").into_response();
     };
+    // Mark that a steer ack is pending BEFORE sending it — the drain loop in
+    // post_message is concurrently consuming the shared ACP event stream and
+    // must skip the `Done` this steer produces (the Hermes adapter returns
+    // end_turn for the /steer slash-command ack, which would otherwise
+    // terminate the original turn early with an empty reply).
+    state.bridge.mark_steer_pending(&id).await;
     if let Err(e) = runtime
         .send(AgentCommand::Steer { text: text.clone() })
         .await

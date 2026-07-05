@@ -75,6 +75,12 @@ pub struct BridgeManager {
     /// Sessions with a turn currently in-flight (prompt sent, awaiting Done).
     /// Authoritative liveness signal for Olympus-managed sessions.
     in_flight: RwLock<HashSet<String>>,
+    /// Number of steer commands sent but not yet ack'd for each session.
+    /// Each `/steer` produces its own `end_turn` ack (from the Hermes slash-
+    /// command handler) that the drain loop must IGNORE — only the original
+    /// prompt's `Done` should terminate the turn. Incremented in
+    /// `mark_steer_pending`, decremented/skipped in the drain loop.
+    steer_pending: RwLock<HashMap<String, u32>>,
     /// Sessions blocked on a permission decision, keyed by session id → the
     /// pending ACP `session/request_permission` request id to respond to. A
     /// session in this map has liveness "input-required".
@@ -94,6 +100,7 @@ impl BridgeManager {
             factory,
             runtimes: RwLock::new(HashMap::new()),
             in_flight: RwLock::new(HashSet::new()),
+            steer_pending: RwLock::new(HashMap::new()),
             awaiting_input: RwLock::new(HashMap::new()),
             spaces_root: None,
         }
@@ -172,6 +179,34 @@ impl BridgeManager {
     /// Snapshot of all session ids with a turn currently in-flight.
     pub async fn in_flight_set(&self) -> HashSet<String> {
         self.in_flight.read().await.clone()
+    }
+
+    /// Record that a `/steer` command was sent for this session. The drain
+    /// loop must skip the `Done` ack it produces (see `take_steer_pending`).
+    pub async fn mark_steer_pending(&self, session_id: &str) {
+        *self
+            .steer_pending
+            .write()
+            .await
+            .entry(session_id.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// If a steer ack is pending, decrement the counter and return true so the
+    /// drain loop can skip this `Done` event. Returns false when the `Done` is
+    /// the genuine end-of-turn.
+    pub async fn take_steer_pending(&self, session_id: &str) -> bool {
+        let mut map = self.steer_pending.write().await;
+        if let Some(c) = map.get_mut(session_id) {
+            if *c > 0 {
+                *c -= 1;
+                if *c == 0 {
+                    map.remove(session_id);
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// Mark a session as blocked awaiting a permission decision, storing the
