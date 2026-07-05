@@ -462,6 +462,34 @@ impl BridgeManager {
         Ok(event)
     }
 
+    /// Append a steer (interrupt) as a user-role message with
+    /// finish_reason="steer" so the transcript renders it as a distinct
+    /// bubble — visually marking it as an interrupt, not a new turn.
+    pub fn append_steer_message(
+        &self,
+        session_id: &str,
+        hermes_id: &str,
+        message_id: u64,
+        text: &str,
+    ) -> Result<Event> {
+        let now = chrono_epoch_pub();
+        let event = Event::MessageAppended {
+            session_id: session_id.to_string(),
+            hermes_session_id: hermes_id.to_string(),
+            message_id,
+            role: "user".into(),
+            content: Some(text.to_string()),
+            tool_name: None,
+            tool_calls: None,
+            reasoning: None,
+            timestamp: now,
+            token_count: None,
+            finish_reason: Some("steer".into()),
+        };
+        self.log.append(&event)?;
+        Ok(event)
+    }
+
     /// Append the final assistant message to the log, returning the event so the
     /// caller can apply it to the views.
     pub fn append_assistant_message(

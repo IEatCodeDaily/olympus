@@ -16,7 +16,7 @@
  *    auto-drains head-first as the next prompt.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -142,6 +142,37 @@ export function ChatPage({
   // text yet (thinking) — cleared once streaming text or the final reply lands.
   const showThinking =
     (agentStatus === "thinking" || sending) && !streamingText;
+
+  // ── Rotating thinking hints (Claude Code-style) ──────────────────
+  const hints = useMemo(
+    () => [
+      "thinking…",
+      "pondering the impossible…",
+      "connecting the dots…",
+      "channeling the spirits…",
+      "consulting the silicon oracle…",
+      "bending spacetime…",
+      "untangling the thread…",
+      "you can queue follow-ups while you wait",
+      "tip: Steer on a queued card injects it mid-turn",
+      "tip: drag queue cards to reorder",
+      "did you know? this server boots in <1s now",
+      "pro tip: Shift+Enter for a newline",
+    ],
+    [],
+  );
+  const [hintIndex, setHintIndex] = useState(0);
+  useEffect(() => {
+    if (!showThinking) {
+      setHintIndex(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setHintIndex((i) => (i + 1) % hints.length);
+    }, 3500);
+    return () => clearInterval(timer);
+  }, [showThinking, hints.length]);
+  const thinkingHint = hints[hintIndex];
 
   // ── Send (used by composer AND queue auto-drain) ──────────────────
   const doSend = useCallback(
@@ -409,13 +440,14 @@ export function ChatPage({
                 </ReactMarkdown>
               </div>
             )}
-            {/* Thinking indicator — agent is working, no text streamed yet */}
+            {/* Thinking indicator — agent is working, no text streamed yet.
+                Rotating hints/tips in place of a static "thinking…" label. */}
             {showThinking && (
               <div className="msg-ai thinking-row">
                 <span className="thinking-dots" aria-label="thinking">
                   <i /><i /><i />
                 </span>
-                <span className="thinking-label">thinking…</span>
+                <span className="thinking-label">{thinkingHint}</span>
               </div>
             )}
             {/* Permission prompt — agent blocked on a gated tool call */}
@@ -478,7 +510,6 @@ export function ChatPage({
             onSend={handleSend}
             onStop={handleStop}
             sending={sending}
-            queueCount={queue.length}
             sessionModel={session?.model ?? null}
             sessionAgent={session?.agent ?? null}
             sessionNode={session?.node ?? null}

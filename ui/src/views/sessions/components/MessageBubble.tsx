@@ -26,6 +26,7 @@ export const MessageBubble = React.memo(function MessageBubble({
   onFork: () => void;
 }) {
   const isUser = msg.role === "user";
+  const isSteer = msg.role === "user" && msg.finishReason === "steer";
   const isSystem = msg.role === "system" || msg.role === "session_meta";
   const ts = fmtTime(msg.timestamp);
   const [copied, setCopied] = useState(false);
@@ -63,7 +64,15 @@ export const MessageBubble = React.memo(function MessageBubble({
   }
 
   return (
-    <div className={isUser ? "msg-user" : "msg-ai"} data-ts={ts}>
+    <div className={isSteer ? "msg-user msg-steer" : isUser ? "msg-user" : "msg-ai"} data-ts={ts}>
+      {isSteer && (
+        <span className="steer-badge">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />
+          </svg>
+          steer
+        </span>
+      )}
       {/* Bug 9: removed the .who ASSISTANT/TOOL header line entirely. */}
 
       {/* Reasoning block */}

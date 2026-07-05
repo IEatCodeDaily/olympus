@@ -154,6 +154,9 @@ button {
 .transcript { flex: 1; overflow-y: auto; padding: var(--space-12) var(--space-12); }
 .tcol { width: 100%; max-width: var(--measure); margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-12); }
 .msg-user { position: relative; align-self: flex-end; max-width: 80%; background: var(--elev); border: var(--border-w) solid var(--border); border-radius: var(--radius-lg) var(--radius-lg) var(--radius) var(--radius-lg); padding: var(--space-5) var(--space-6); font-size: var(--fs-13-5); line-height: var(--lh-normal); color: var(--text); }
+/* Steer — a user interrupt injected mid-turn. Distinct border + badge. */
+.msg-steer { border-color: var(--silver); border-style: dashed; }
+.steer-badge { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: var(--fs-9); letter-spacing: 0.5px; text-transform: uppercase; color: var(--silver); margin-bottom: var(--space-2); }
 .msg-ai { position: relative; max-width: var(--measure-msg); font-size: var(--fs-14); line-height: var(--lh-relaxed); color: var(--text); padding: 2px 0; }
 .msg-ai .who { font-family: var(--font-mono); font-size: var(--fs-9); letter-spacing: var(--tracking-caps); color: var(--faint); margin-bottom: var(--space-3); }
 .msg-ai p { margin-bottom: var(--space-5); }

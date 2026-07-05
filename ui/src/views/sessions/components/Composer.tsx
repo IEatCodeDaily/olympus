@@ -47,7 +47,6 @@ export function Composer({
   onSend,
   onStop,
   sending,
-  queueCount = 0,
   sessionModel,
   sessionAgent,
   sessionNode,
@@ -58,7 +57,6 @@ export function Composer({
   onSend: (model?: string, thinking?: string) => void;
   onStop: () => void;
   sending: boolean;
-  queueCount?: number;
   sessionModel: string | null;
   sessionAgent: string | null;
   sessionNode: string | null;
@@ -273,39 +271,27 @@ export function Composer({
         </div>
       </div>
 
-      {/* Meta row — node · agent. OUTSIDE the composer box, below it, but
-          inside .composer so it stays bounded to the composer's width. */}
+      {/* Meta row — node · agent only. */}
       <div className="comp-meta">
-        {sending ? (
-          <span className="cm-item cm-steer" title="Messages queue while the turn runs; use Steer on a card to inject now">
-            <Icon name="zap" size={11} />
-            <span>
-              turn running{queueCount > 0 ? ` · ${queueCount} queued` : " — Enter queues"}
-            </span>
-          </span>
-        ) : (
+        <span className="cm-item" title={`Running on node: ${nodeLabel}`}>
+          <Icon name="server" size={11} />
+          <span>{nodeLabel}</span>
+        </span>
+        <span className="cm-dot" />
+        <span
+          className="cm-item"
+          title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
+        >
+          <BrandIcon name={agentIcon} size={12} />
+          <span>{agentName}</span>
+        </span>
+        {thinking !== "off" && (
           <>
-            <span className="cm-item" title={`Running on node: ${nodeLabel}`}>
-              <Icon name="server" size={11} />
-              <span>{nodeLabel}</span>
-            </span>
             <span className="cm-dot" />
-            <span
-              className="cm-item"
-              title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
-            >
-              <BrandIcon name={agentIcon} size={12} />
-              <span>{agentName}</span>
+            <span className="cm-item" title={`Thinking level: ${thinkingLabel}`}>
+              <Icon name="brain" size={11} />
+              <span>{thinkingLabel}</span>
             </span>
-            {thinking !== "off" && (
-              <>
-                <span className="cm-dot" />
-                <span className="cm-item" title={`Thinking level: ${thinkingLabel}`}>
-                  <Icon name="brain" size={11} />
-                  <span>{thinkingLabel}</span>
-                </span>
-              </>
-            )}
           </>
         )}
       </div>

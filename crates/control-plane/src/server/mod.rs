@@ -2586,10 +2586,28 @@ async fn post_message(
             return;
         }
         let mut terminal_event_seen = false;
+        // While a steer-ack is being consumed (its Text + Done), suppress the
+        // ack text so it doesn't pollute the assistant reply. The ack is the
+        // adapter's "⏩ Steer queued for the active turn: …" string — useful
+        // in a CLI but noise in the transcript.
+        let mut suppressing_steer_ack = false;
 
         while let Some(event) = stream.next().await {
             match event {
                 AgentEvent::Text(chunk) => {
+                    if suppressing_steer_ack {
+                        // Drop the ack text; the real reply comes after.
+                        continue;
+                    }
+                    // Detect the start of a steer ack and begin suppressing.
+                    // The adapter emits this exact prefix in _cmd_steer.
+                    if chunk.starts_with("⏩ Steer queued")
+                        || chunk.starts_with("⚠️ Steer failed")
+                        || chunk.starts_with("No active turn — queued")
+                    {
+                        suppressing_steer_ack = true;
+                        continue;
+                    }
                     assistant_text.push_str(&chunk);
                     let _ = deltas.send(ServerFrame::MessageDelta {
                         session_id: session_id.clone(),
@@ -2617,6 +2635,7 @@ async fn post_message(
                     // end-of-turn Done should break the drain loop.
                     if bridge.take_steer_pending(&session_id).await {
                         tracing::debug!(session = %session_id, "skipped steer-ack Done");
+                        suppressing_steer_ack = false; // resume normal text capture
                         continue;
                     }
                     terminal_event_seen = true;
@@ -2894,6 +2913,43 @@ async fn steer_session(
             Json(json!({ "error": "steer_failed", "message": e.to_string() })),
         )
             .into_response();
+    }
+    // Persist the steer as a user message with finish_reason="steer" so the
+    // transcript shows it as a distinct bubble (an interrupt, not a new turn).
+    let (hermes_id, steer_msg_id) = {
+        let v = state.views.read().await;
+        let sid = v
+            .sessions
+            .get(&id)
+            .map(|r| r.hermes_id.clone())
+            .unwrap_or_default();
+        let next_id = v.messages.count(&id) + 1;
+        (sid, next_id)
+    };
+    if let Ok(event) = state
+        .bridge
+        .append_steer_message(&id, &hermes_id, steer_msg_id, &text)
+    {
+        {
+            let mut v = state.views.write().await;
+            v.apply(&event);
+        }
+        let dto = crate::server::dto::MessageDto {
+            message_id: steer_msg_id,
+            session_id: id.clone(),
+            role: "user".into(),
+            content: Some(text.clone()),
+            tool_name: None,
+            tool_calls: None,
+            reasoning: None,
+            timestamp: crate::server::event_timestamp(&event),
+            token_count: None,
+            finish_reason: Some("steer".into()),
+        };
+        let _ = state.deltas.send(ServerFrame::MessageAppended {
+            session_id: id.clone(),
+            message: dto,
+        });
     }
     let _ = state.deltas.send(ServerFrame::SessionLog {
         session_id: id.clone(),
