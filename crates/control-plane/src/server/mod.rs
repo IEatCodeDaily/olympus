@@ -160,6 +160,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/repos/{slug}", get(get_repo).delete(remove_repo))
         .route("/api/sessions/{id}/repos", axum::routing::post(attach_repo))
         .route(
+            "/api/sessions/{id}/subsessions",
+            get(list_subsessions).post(create_subsession),
+        )
+        .route(
+            "/api/sessions/{id}/complete",
+            axum::routing::post(complete_session),
+        )
+        .route(
             "/api/proxy",
             get(crate::proxy::list_proxy_endpoints).post(crate::proxy::create_proxy_endpoint),
         )
@@ -1332,6 +1340,25 @@ struct AttachRepoBody {
     slug: String,
 }
 
+/// Body for `POST /api/sessions/:id/subsessions`.
+#[derive(Debug, Default, Deserialize)]
+struct CreateSubsessionBody {
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+}
+
+/// Body for `POST /api/sessions/:id/complete` — the check gate.
+#[derive(Debug, Deserialize)]
+struct CompleteBody {
+    verdict: String,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
 async fn attach_repo(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -1346,6 +1373,231 @@ async fn attach_repo(
         attached_at: now_epoch(),
     };
     append_and_apply(&state, event).await
+}
+
+/// Best-effort: copy jj workspaces from parent to child session space.
+fn copy_jj_workspaces(parent_space: &std::path::Path, child_space: &std::path::Path) {
+    let parent_repos = match parent_space.join("repos").read_dir() {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in parent_repos.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let src = entry.path();
+        if !src.join(".jj").is_dir() { continue; }
+        let dest = child_space.join("repos").join(name);
+        let root_output = tokio::task::block_in_place(|| {
+            std::process::Command::new("jj")
+                .arg("workspace").arg("root")
+                .current_dir(&src).output()
+        });
+        let main_repo = match root_output {
+            Ok(out) if out.status.success() =>
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            _ => { continue; }
+        };
+        let _ = std::fs::create_dir_all(child_space.join("repos"));
+        let add_output = tokio::task::block_in_place(|| {
+            std::process::Command::new("jj")
+                .arg("workspace").arg("add").arg(&dest)
+                .current_dir(&main_repo).output()
+        });
+        match add_output {
+            Ok(out) if out.status.success() => {
+                tracing::info!(workspace = %dest.display(), "copied jj workspace into child");
+            }
+            Ok(out) => tracing::warn!(workspace = %dest.display(), stderr = %String::from_utf8_lossy(&out.stderr), "jj workspace add failed"),
+            Err(e) => tracing::warn!(workspace = %dest.display(), error = %e, "failed to invoke jj"),
+        }
+    }
+}
+
+/// POST /api/sessions/:id/subsessions — spawn a child managed session.
+async fn create_subsession(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<CreateSubsessionBody>>,
+) -> Response {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+
+    let (parent_agent, parent_space) = {
+        let views = state.views.read().await;
+        let Some(parent) = views.sessions.get(&id) else {
+            return (StatusCode::NOT_FOUND, "parent session not found").into_response();
+        };
+        let agent = body.agent.clone().or_else(|| parent.agent.clone());
+        let space = state.bridge.space_path(&id);
+        (agent, space)
+    };
+
+    let spec = crate::server::bridge_mgr::RuntimeSpec {
+        agent: parent_agent.clone(),
+        node: None, cwd: None, mcp_servers: vec![], env: vec![],
+    };
+
+    let ns = match state.bridge.create_draft(&spec) {
+        Ok(ns) => ns,
+        Err(e) => {
+            tracing::error!(error = %e, parent = %id, "create_subsession create_draft failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "bridge_error", "message": format!("Failed to create subsession: {e}") })))
+                .into_response();
+        }
+    };
+
+    // Best-effort jj-workspace copy.
+    if let (Some(parent_sp), Some(child_sp)) = (
+        parent_space.as_ref(),
+        state.bridge.space_path(&ns.session_id),
+    ) {
+        if parent_sp.exists() {
+            copy_jj_workspaces(parent_sp, &child_sp);
+        }
+    }
+
+    let created = crate::event::Event::SessionCreated {
+        session_id: ns.session_id.clone(),
+        hermes_id: ns.hermes_id.clone(),
+        source: "olympus".into(),
+        model: None,
+        title: body.title.clone(),
+        started_at: ns.started_at,
+        message_count: 0, input_tokens: 0, output_tokens: 0,
+        agent: parent_agent.clone(), node: None,
+    };
+    { let mut views = state.views.write().await; views.apply(&created); }
+
+    let forked_event = crate::event::Event::SessionForked {
+        parent_session_id: id.clone(),
+        child_session_id: ns.session_id.clone(),
+        fork_type: "sub".into(),
+        fork_point: None,
+        forked_at: now_epoch(),
+    };
+    if let Err(e) = state.log.append(&forked_event) {
+        tracing::warn!(error = %e, "failed to append SessionForked for subsession");
+    }
+    { let mut views = state.views.write().await; views.apply(&forked_event); }
+
+    // Optionally enqueue the first user message.
+    if let Some(prompt) = &body.prompt {
+        if !prompt.trim().is_empty() {
+            let next_id = 0u64;
+            match state.bridge.append_user_message(&ns.session_id, &ns.hermes_id, next_id, prompt) {
+                Ok(event) => {
+                    { let mut views = state.views.write().await; views.apply(&event); }
+                    let dto = crate::server::dto::MessageDto {
+                        message_id: next_id, session_id: ns.session_id.clone(),
+                        role: "user".into(), content: Some(prompt.clone()),
+                        tool_name: None, tool_calls: None, reasoning: None,
+                        timestamp: event_timestamp(&event), token_count: None, finish_reason: None,
+                    };
+                    let _ = state.deltas.send(ServerFrame::MessageAppended {
+                        session_id: ns.session_id.clone(), message: dto,
+                    });
+                }
+                Err(e) => tracing::warn!(error = %e, child = %ns.session_id, "failed to enqueue subsession prompt"),
+            }
+        }
+    }
+
+    let dto = {
+        let views = state.views.read().await;
+        match views.sessions.get(&ns.session_id) {
+            Some(row) => {
+                let mut d = SessionDto::from_row(row);
+                d.parent_session_id = Some(id.clone());
+                d.fork_type = Some("sub".into());
+                d
+            }
+            None => return (StatusCode::INTERNAL_SERVER_ERROR, "subsession view lookup failed").into_response(),
+        }
+    };
+
+    let _ = state.deltas.send(ServerFrame::SessionAdded { session: dto.clone() });
+    (StatusCode::CREATED, Json(serde_json::to_value(&dto).unwrap())).into_response()
+}
+
+/// GET /api/sessions/:id/subsessions — list direct children.
+async fn list_subsessions(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let children: Vec<SessionDto> = {
+        let views = state.views.read().await;
+        views.sessions.list(&Filters::default()).into_iter()
+            .filter(|row| row.parent_session_id.as_deref() == Some(id.as_str()))
+            .map(SessionDto::from_row)
+            .collect()
+    };
+    Json(json!({ "subsessions": children })).into_response()
+}
+
+/// POST /api/sessions/:id/complete — check gate. Only subsessions can complete.
+async fn complete_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CompleteBody>,
+) -> Response {
+    let verdict = body.verdict.as_str();
+    if verdict != "pass" && verdict != "fail" {
+        return (StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_verdict", "message": "verdict must be \"pass\" or \"fail\"" })))
+            .into_response();
+    }
+
+    let (parent_id, child_hermes_id) = {
+        let views = state.views.read().await;
+        let Some(child) = views.sessions.get(&id) else {
+            return (StatusCode::NOT_FOUND, "session not found").into_response();
+        };
+        let Some(ref parent_id) = child.parent_session_id else {
+            return (StatusCode::CONFLICT,
+                Json(json!({ "error": "not_a_subsession", "message": "Only subsessions can be completed." })))
+                .into_response();
+        };
+        (parent_id.clone(), child.hermes_id.clone())
+    };
+
+    let summary_text = body.summary.as_deref().unwrap_or("");
+    let notice = format!("[subsession {id} {verdict}] {summary_text}");
+
+    let parent_hermes_id = {
+        let views = state.views.read().await;
+        views.sessions.get(&parent_id).map(|r| r.hermes_id.clone()).unwrap_or_default()
+    };
+    let next_id = {
+        let views = state.views.read().await;
+        views.messages.recent(&parent_id, usize::MAX)
+            .iter().map(|m| m.message_id).max().map(|m| m + 1).unwrap_or(0)
+    };
+
+    match state.bridge.append_system_message(&parent_id, &parent_hermes_id, next_id, &notice, None) {
+        Ok(event) => {
+            { let mut views = state.views.write().await; views.apply(&event); }
+            let dto = crate::server::dto::MessageDto {
+                message_id: next_id, session_id: parent_id.clone(), role: "system".into(),
+                content: Some(notice.clone()), tool_name: None, tool_calls: None,
+                reasoning: None, timestamp: event_timestamp(&event), token_count: None, finish_reason: None,
+            };
+            let _ = state.deltas.send(ServerFrame::MessageAppended { session_id: parent_id.clone(), message: dto });
+        }
+        Err(e) => tracing::error!(error = %e, "failed to append complete-gate system message"),
+    }
+
+    // Archive the child.
+    let archive_event = crate::event::Event::SessionUpdated {
+        session_id: id.clone(), title: None, model: None, archived: Some(true),
+        message_count: None, agent: None, node: None,
+        hermes_id: Some(child_hermes_id), pinned: None,
+    };
+    if let Err(e) = state.log.append(&archive_event) {
+        tracing::warn!(error = %e, "failed to append archive event for completed subsession");
+    }
+    { let mut views = state.views.write().await; views.apply(&archive_event); }
+    let _ = state.deltas.send(ServerFrame::SessionUpdated {
+        session_id: id.clone(), changes: json!({ "archived": true }),
+    });
+
+    Json(json!({ "sessionId": id, "parentId": parent_id, "verdict": verdict, "archived": true })).into_response()
 }
 
 /// POST /api/sessions/:id/handover — switch this session to a different agent
@@ -4036,8 +4288,12 @@ mod tests {
             ("POST", "/api/repos", &[400, 422]),
             ("GET", "/api/repos/nonexistent", &[404]),
             ("DELETE", "/api/repos/nonexistent", &[404]),
-            ("POST", "/api/sessions/s1/repos", &[400, 404, 422]),
-            ("GET", "/api/health", &[200]),
+            ("POST",   "/api/sessions/s1/repos", &[400, 404, 422]),
+            // ── Subsessions (B-2) ──
+            ("GET",    "/api/sessions/s1/subsessions", &[200]),
+            ("POST",   "/api/sessions/s1/subsessions", &[200, 201, 400, 422]),
+            ("POST",   "/api/sessions/s1/complete", &[200, 400, 409]),
+            ("GET",    "/api/health", &[200]),
             ("GET", "/api/setup", &[200]),
             ("PUT", "/api/setup", &[400, 422]),
             ("GET", "/api/registry", &[200]),
