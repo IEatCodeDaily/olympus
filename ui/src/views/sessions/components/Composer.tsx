@@ -52,7 +52,7 @@ export function Composer({
   text: string;
   onTextChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onSend: (model?: string) => void;
+  onSend: (model?: string, thinking?: string) => void;
   sending: boolean;
   sessionModel: string | null;
   sessionAgent: string | null;
@@ -233,7 +233,7 @@ export function Composer({
             <button
               type="button"
               className="send"
-              onClick={() => onSend(selectedModel)}
+              onClick={() => onSend(selectedModel, thinking === "off" ? undefined : thinking)}
               disabled={!text.trim() || sending}
               title="Send"
             >
@@ -258,6 +258,15 @@ export function Composer({
           <BrandIcon name={agentIcon} size={12} />
           <span>{agentName}</span>
         </span>
+        {thinking !== "off" && (
+          <>
+            <span className="cm-dot" />
+            <span className="cm-item" title={`Thinking level: ${thinkingLabel}`}>
+              <Icon name="brain" size={11} />
+              <span>{thinkingLabel}</span>
+            </span>
+          </>
+        )}
       </div>
     </div>
   );

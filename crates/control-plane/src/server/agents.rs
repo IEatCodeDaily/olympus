@@ -19,6 +19,15 @@ use serde::Serialize;
 const CLAUDE_CODE_AGENT_ID: &str = "claude-code";
 const CODEX_AGENT_ID: &str = "codex";
 
+/// Curated model catalog for the Claude Code CLI harness. The CLI accepts
+/// `--model` with these slugs; the set is stable per release. (Approach
+/// borrowed from t3code/opencode-style tools which ship known harness
+/// catalogs instead of probing.)
+const CLAUDE_CODE_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
+
+/// Curated model catalog for the Codex CLI harness (`-m/--model`).
+const CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5.5-codex", "gpt-5.4", "gpt-5.4-mini"];
+
 /// One drivable agent (Hermes profile or local CLI harness) as the UI consumes it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -27,8 +36,12 @@ pub struct AgentInfo {
     pub id: String,
     /// Configured provider (e.g. "anthropic", "openai-codex", "zai").
     pub provider: Option<String>,
-    /// Configured default model, or the discovered CLI version for CLI harnesses.
+    /// Configured default model. NEVER a version string — CLI versions go in
+    /// `version`.
     pub model: Option<String>,
+    /// Discovered CLI version (CLI harnesses only, e.g. "codex-cli 0.133.0").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Agent harness kind: "hermes", "claude-code", or "codex".
     pub kind: String,
     /// Whether this is the implicit root profile the server runs as by default.
@@ -86,6 +99,82 @@ fn parse_model_block(yaml: &str) -> (Option<String>, Option<String>, Option<Stri
     (model, provider, base_url)
 }
 
+/// Parse the `fallback_providers:` block from a Hermes config.yaml. Returns
+/// a list of (model, provider) pairs from the fallback list — these are models
+/// the provider can serve beyond the default. Used to populate the model picker.
+///
+/// Handles the standard YAML list-item shape where the first key sits on the
+/// dash line:
+///   fallback_providers:
+///     - model: glm-5v-turbo
+///       provider: zai
+fn parse_fallback_models(yaml: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut in_fallback = false;
+    let (mut cur_model, mut cur_provider): (Option<String>, Option<String>) = (None, None);
+
+    let mut flush =
+        |m: &mut Option<String>, p: &mut Option<String>, out: &mut Vec<(String, String)>| {
+            if let (Some(model), Some(provider)) = (m.take(), p.take()) {
+                if is_valid_model_id(&model) {
+                    out.push((model, provider));
+                }
+            } else {
+                m.take();
+                p.take();
+            }
+        };
+
+    for line in yaml.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if !in_fallback {
+            if trimmed.starts_with("fallback_providers:") && indent == 0 {
+                in_fallback = true;
+            }
+            continue;
+        }
+        // A new top-level key ends the block.
+        if indent == 0 && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            break;
+        }
+        // A dash starts a new list entry — flush the previous one, then parse
+        // the rest of the dash line (YAML puts the first key on it).
+        let content = if let Some(rest) = trimmed.strip_prefix("- ") {
+            flush(&mut cur_model, &mut cur_provider, &mut out);
+            rest
+        } else if trimmed == "-" {
+            flush(&mut cur_model, &mut cur_provider, &mut out);
+            continue;
+        } else {
+            trimmed
+        };
+        let kv = |k: &str| {
+            content
+                .strip_prefix(k)
+                .map(|v| v.trim().trim_matches('"').trim_matches('\'').to_string())
+                .filter(|s| !s.is_empty())
+        };
+        if let Some(v) = kv("model:") {
+            cur_model = Some(v);
+        } else if let Some(v) = kv("provider:") {
+            cur_provider = Some(v);
+        }
+    }
+    flush(&mut cur_model, &mut cur_provider, &mut out);
+    out
+}
+
+/// Heuristic: a valid model id contains at least one alphanumeric, doesn't
+/// start with a digit (version numbers), and doesn't contain spaces with
+/// "cli" (version strings like "codex-cli 0.133.0").
+fn is_valid_model_id(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(char::is_numeric)
+        && !(s.contains(" cli ") || s.contains("-cli "))
+        && s.chars().any(|c| c.is_alphanumeric())
+}
+
 /// One agent built from a config file path. `id`/`is_default` are supplied by
 /// the caller; provider/model are parsed from the file (missing file → Nones).
 fn agent_from_config(id: &str, path: &PathBuf, is_default: bool) -> AgentInfo {
@@ -97,6 +186,7 @@ fn agent_from_config(id: &str, path: &PathBuf, is_default: bool) -> AgentInfo {
         id: id.to_string(),
         provider,
         model,
+        version: None,
         kind: "hermes".to_string(),
         is_default,
         ready: None,
@@ -197,7 +287,11 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
         out.push(AgentInfo {
             id: CLAUDE_CODE_AGENT_ID.to_string(),
             provider: Some(CLAUDE_CODE_AGENT_ID.to_string()),
-            model: command_version_with_timeout(&claude, Duration::from_secs(2)),
+            // Default model = first entry of the curated catalog; the CLI
+            // version string goes in `version`, NOT `model` (it used to leak
+            // into the model picker as "codex-cli 0.133.0").
+            model: CLAUDE_CODE_MODELS.first().map(|s| s.to_string()),
+            version: command_version_with_timeout(&claude, Duration::from_secs(2)),
             kind: CLAUDE_CODE_AGENT_ID.to_string(),
             is_default: false,
             ready: probe_cli_auth(CLAUDE_CODE_AGENT_ID),
@@ -207,7 +301,8 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
         out.push(AgentInfo {
             id: CODEX_AGENT_ID.to_string(),
             provider: Some("openai-codex".to_string()),
-            model: command_version_with_timeout(&codex, Duration::from_secs(2)),
+            model: CODEX_MODELS.first().map(|s| s.to_string()),
+            version: command_version_with_timeout(&codex, Duration::from_secs(2)),
             kind: CODEX_AGENT_ID.to_string(),
             is_default: false,
             ready: probe_cli_auth(CODEX_AGENT_ID),
@@ -282,19 +377,75 @@ pub struct ModelInfo {
 /// When `provider_filter` is `Some`, only models served by that provider are
 /// returned — this is what makes the model selector agent-specific (a Codex
 /// agent must not be offered Claude Opus, etc.).
+///
+/// Sources BOTH the `model.default` and `fallback_providers` blocks from each
+/// agent's config.yaml, so the picker shows all models the provider can serve —
+/// not just the one configured as default.
 pub fn list_models_for(provider_filter: Option<&str>) -> Vec<ModelInfo> {
     let mut seen = std::collections::BTreeMap::new();
+
+    // Curated CLI-harness catalogs (claude-code / codex). These CLIs accept a
+    // fixed set of --model slugs per release; there is nothing to probe.
+    let mut add_catalog = |provider: &str, catalog: &[&str]| {
+        if let Some(want) = provider_filter {
+            if want != provider {
+                return;
+            }
+        }
+        for m in catalog {
+            seen.entry(m.to_string()).or_insert(ModelInfo {
+                id: m.to_string(),
+                provider: Some(provider.to_string()),
+            });
+        }
+    };
+    add_catalog(CLAUDE_CODE_AGENT_ID, CLAUDE_CODE_MODELS);
+    add_catalog("openai-codex", CODEX_MODELS);
+
     for a in list_agents() {
-        if let Some(model) = a.model {
-            if let Some(want) = provider_filter {
-                if a.provider.as_deref() != Some(want) {
-                    continue;
+        // Include the default model
+        if let Some(ref model) = a.model {
+            if is_valid_model_id(model) {
+                if let Some(want) = provider_filter {
+                    if a.provider.as_deref() != Some(want) {
+                        continue;
+                    }
+                }
+                seen.entry(model.clone()).or_insert(ModelInfo {
+                    id: model.clone(),
+                    provider: a.provider.clone(),
+                });
+            }
+        }
+    }
+    // Also parse fallback_providers from the config files (these are models the
+    // provider serves beyond the default — the user can switch to them)
+    if let Some(home) = hermes_home() {
+        let configs = std::iter::once(home.join("config.yaml"))
+            .chain(
+                std::fs::read_dir(home.join("profiles"))
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.path().join("config.yaml")),
+            )
+            .filter(|p| p.exists());
+        for cfg_path in configs {
+            if let Ok(yaml) = std::fs::read_to_string(&cfg_path) {
+                for (model, provider) in parse_fallback_models(&yaml) {
+                    if let Some(want) = provider_filter {
+                        if provider != want {
+                            continue;
+                        }
+                    }
+                    seen.entry(model.clone()).or_insert(ModelInfo {
+                        id: model,
+                        provider: Some(provider),
+                    });
                 }
             }
-            seen.entry(model.clone()).or_insert(ModelInfo {
-                id: model,
-                provider: a.provider,
-            });
         }
     }
     seen.into_values().collect()
@@ -317,6 +468,36 @@ mod tests {
         assert_eq!(m.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(p.as_deref(), Some("anthropic"));
         assert_eq!(b, None, "empty base_url is filtered to None");
+    }
+
+    #[test]
+    fn parse_fallback_models_reads_dash_line_key_shape() {
+        // The REAL Hermes config shape: first key on the dash line.
+        let yaml = "model:\n  default: glm-5.2\n  provider: zai\nfallback_providers:\n  - model: glm-5v-turbo\n    provider: zai\n  - model: gpt-5.5\n    provider: openai-codex\ncredential_pool_strategies:\n  anthropic: fill_first\n";
+        let models = parse_fallback_models(yaml);
+        assert_eq!(
+            models,
+            vec![
+                ("glm-5v-turbo".to_string(), "zai".to_string()),
+                ("gpt-5.5".to_string(), "openai-codex".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_fallback_models_filters_version_strings() {
+        let yaml =
+            "fallback_providers:\n  - model: codex-cli 0.133.0\n    provider: openai-codex\n";
+        assert!(parse_fallback_models(yaml).is_empty());
+    }
+
+    #[test]
+    fn is_valid_model_id_rejects_versions() {
+        assert!(is_valid_model_id("glm-5.2"));
+        assert!(is_valid_model_id("claude-sonnet-4-6"));
+        assert!(!is_valid_model_id("0.133.0"));
+        assert!(!is_valid_model_id("codex-cli 0.133.0"));
+        assert!(!is_valid_model_id(""));
     }
 
     #[test]
@@ -368,14 +549,18 @@ mod tests {
             a.id == "claude-code"
                 && a.provider.as_deref() == Some("claude-code")
                 && a.kind == "claude-code"
-                && a.model.as_deref() == Some("2.1.195 (Claude Code)")
+                // model = curated catalog default; the CLI version string goes
+                // to `version` (it used to leak into the model picker).
+                && a.model.as_deref() == CLAUDE_CODE_MODELS.first().copied()
+                && a.version.as_deref() == Some("2.1.195 (Claude Code)")
                 && !a.is_default
         }));
         assert!(agents.iter().any(|a| {
             a.id == "codex"
                 && a.provider.as_deref() == Some("openai-codex")
                 && a.kind == "codex"
-                && a.model.as_deref() == Some("codex-cli 0.133.0")
+                && a.model.as_deref() == CODEX_MODELS.first().copied()
+                && a.version.as_deref() == Some("codex-cli 0.133.0")
                 && !a.is_default
         }));
     }

@@ -37,7 +37,7 @@ export function ChatPage({
   const { data: msgData, isLoading } = useMessages(sessionId);
   const navigate = useNavigate();
 
-  // streaming + status
+  // streaming + status — ALL session-scoped, reset on session change.
   const [streamingText, setStreamingText] = useState("");
   const [sending, setSending] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("idle");
@@ -49,6 +49,19 @@ export function ChatPage({
     options: Array<{ optionId: string; name: string; kind: string }>;
   } | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+
+  // ── Reset ALL transient state when switching sessions (Bug: thinking leak) ──
+  // Without this, agentStatus/streamingText/sending from the previous session
+  // persist across the route transition because React Router reuses the same
+  // component instance for /sessions/$sessionId → /sessions/$otherId.
+  useEffect(() => {
+    setStreamingText("");
+    setSending(false);
+    setAgentStatus("idle");
+    setOptimisticMsg(null);
+    setPermission(null);
+    setText("");
+  }, [sessionId]);
 
   const serverMessages = msgData?.messages ?? [];
   // Dedupe: once the server echoes the user's message (same role+content), drop
@@ -129,7 +142,7 @@ export function ChatPage({
   }, [messages.length, streamingText, agentStatus]);
 
   // ── Send (Bug 7b: optimistic + thinking status) ──────────────────
-  const handleSend = useCallback(async (model?: string) => {
+  const handleSend = useCallback(async (model?: string, thinking?: string) => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
 
@@ -154,7 +167,7 @@ export function ChatPage({
     setOptimisticMsg(optimistic);
 
     try {
-      await sendMessage(sessionId, trimmed, model);
+      await sendMessage(sessionId, trimmed, model, thinking);
       // The server returns 202; the agent status stays "thinking" until
       // the first /ws delta arrives (handled by the effect above).
     } catch {

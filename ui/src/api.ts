@@ -243,12 +243,16 @@ export async function forkSession(sessionId: string): Promise<Session> {
 export async function sendMessage(
   sessionId: string,
   text: string,
-  model?: string
+  model?: string,
+  thinking?: string
 ): Promise<void> {
+  const body: Record<string, unknown> = { text };
+  if (model) body.model = model;
+  if (thinking) body.thinking = thinking;
   const res = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ text, model }),
+    body: JSON.stringify(body),
   });
   if (res.status === 409) {
     throw new Error("This session is observed (read-only). Fork it to continue from Olympus.");

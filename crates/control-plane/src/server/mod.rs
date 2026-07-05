@@ -1247,6 +1247,11 @@ struct PostMessageBody {
     text: String,
     #[serde(default)]
     model: Option<String>,
+    /// Thinking/reasoning effort level ("low" | "medium" | "high"). Delivered
+    /// to the Hermes ACP adapter as a /thinking slash command before the
+    /// prompt. Absent/None = leave the session's current setting alone.
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 /// Body for `POST /api/sessions` — optional agent/node binding at creation. All
@@ -2410,6 +2415,10 @@ async fn post_message(
         Some(hermes_id.clone())
     };
     let prompt_text = body.text.clone();
+    let prompt_thinking = body
+        .thinking
+        .clone()
+        .filter(|t| matches!(t.as_str(), "low" | "medium" | "high"));
     let prompt_model = body.model.clone();
     let assistant_seed_id = next_id + 1;
     let log_deltas = deltas.clone();
@@ -2525,12 +2534,25 @@ async fn post_message(
         // on the assistant message (and surface in the transcript's tool UI).
         let mut tool_calls_acc: Vec<serde_json::Value> = Vec::new();
 
+        // If a thinking level was requested, prepend it as a /thinking slash
+        // command on the first line of the prompt text. Hermes processes
+        // slash commands at the start of a multi-line prompt, setting the
+        // session's reasoning effort for the current turn. (Sending /thinking
+        // as a separate ACP turn doesn't work — it's a CLI command, not an
+        // ACP primitive.)
+        let final_prompt = if let Some(ref level) = prompt_thinking {
+            emit_log("info", "bridge", &format!("Thinking level: {level}"));
+            format!("/thinking {level}\n{prompt_text}")
+        } else {
+            prompt_text
+        };
+
         // Subscribe before sending the prompt so fast runtimes cannot emit and
         // finish the whole turn before the drain loop is listening.
         emit_log("info", "bridge", "Sending prompt to agent…");
         if let Err(e) = runtime
             .send(AgentCommand::Prompt {
-                text: prompt_text,
+                text: final_prompt,
                 model: prompt_model,
             })
             .await
