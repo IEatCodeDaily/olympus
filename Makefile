@@ -4,7 +4,7 @@
 # The single source of truth for "is the tree green?" is `make verify`.
 
 SHELL := /bin/bash
-.PHONY: verify verify-rust verify-ui test lint fmt build run e2e e2e-desktop e2e-live
+.PHONY: verify verify-rust verify-ui test lint fmt build run e2e e2e-desktop e2e-live e2e-prod
 
 ## verify — run ALL canonical gates (Rust + UI). The harness's go-to command.
 verify: verify-rust verify-ui
@@ -54,3 +54,8 @@ e2e-desktop:
 ## e2e-live — smoke tests against the REAL control plane (spends tokens)
 e2e-live:
 	cd ui && npx playwright test --config=playwright.live.config.ts
+
+## e2e-prod — prod-parity: static UI served by the control plane itself
+## (same origin cloudflared sees). Requires olympus.service running.
+e2e-prod:
+	cd ui && npx playwright test --config=playwright.prod.config.ts

@@ -134,7 +134,35 @@ pub fn origin_ok(origin: Option<&str>) -> bool {
         // `host:port` or `host` → strip the port.
         authority.split(':').next().unwrap_or(authority)
     };
-    host == "127.0.0.1" || host == "localhost" || host == "::1"
+    if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+        return true;
+    }
+    // Extra allowed origins for tunnel/reverse-proxy access (cloudflared etc.).
+    // OLYMPUS_ALLOWED_ORIGINS is a comma-separated list of exact hostnames,
+    // e.g. "olympus.entelechia.cloud". HTTPS-only hosts still pass because we
+    // compare the host component, not the scheme; the tunnel terminates TLS.
+    host_in_allowlist(host, allowed_extra_hosts())
+}
+
+/// Pure comparison for testability: is `host` in the allowlist (exact,
+/// case-insensitive)?
+fn host_in_allowlist(host: &str, allowed: &[String]) -> bool {
+    allowed.iter().any(|a| host.eq_ignore_ascii_case(a))
+}
+
+/// Hostnames from OLYMPUS_ALLOWED_ORIGINS (comma-separated), cached on first
+/// read. Empty/absent → no extra origins.
+fn allowed_extra_hosts() -> &'static Vec<String> {
+    use std::sync::OnceLock;
+    static HOSTS: OnceLock<Vec<String>> = OnceLock::new();
+    HOSTS.get_or_init(|| {
+        std::env::var("OLYMPUS_ALLOWED_ORIGINS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -190,5 +218,24 @@ mod tests {
             !origin_ok(Some("ftp://127.0.0.1")),
             "non-http scheme rejected"
         );
+    }
+
+    #[test]
+    fn host_allowlist_matches_exact_and_case_insensitive() {
+        let allowed = vec!["olympus.entelechia.cloud".to_string()];
+        assert!(host_in_allowlist("olympus.entelechia.cloud", &allowed));
+        assert!(host_in_allowlist("OLYMPUS.Entelechia.Cloud", &allowed));
+        // No suffix/prefix tricks
+        assert!(!host_in_allowlist(
+            "evil-olympus.entelechia.cloud",
+            &allowed
+        ));
+        assert!(!host_in_allowlist(
+            "olympus.entelechia.cloud.evil.com",
+            &allowed
+        ));
+        assert!(!host_in_allowlist("entelechia.cloud", &allowed));
+        // Empty allowlist rejects everything
+        assert!(!host_in_allowlist("olympus.entelechia.cloud", &[]));
     }
 }

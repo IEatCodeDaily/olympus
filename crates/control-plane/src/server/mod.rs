@@ -200,8 +200,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/metrics", get(metrics))
         .merge(protected)
         .merge(proxy_forward)
+        .fallback_service(static_ui_service())
         .layer(cors_layer())
         .with_state(state)
+}
+
+/// Serve the built web UI (ui/dist) for any non-API path. SPA fallback:
+/// unknown paths get index.html so client-side routing works. The dir is
+/// resolved from OLYMPUS_UI_DIST (default "ui/dist" relative to the CWD).
+/// If the dir doesn't exist requests 404 — dev mode uses Vite on :5177.
+fn static_ui_service() -> tower_http::services::ServeDir<tower_http::services::ServeFile> {
+    use tower_http::services::{ServeDir, ServeFile};
+    let dist = std::env::var("OLYMPUS_UI_DIST").unwrap_or_else(|_| "ui/dist".to_string());
+    let index = std::path::Path::new(&dist).join("index.html");
+    ServeDir::new(&dist).fallback(ServeFile::new(index))
 }
 
 /// CORS for the local web UI. The UI is served from a different port than the
@@ -1385,30 +1397,44 @@ fn copy_jj_workspaces(parent_space: &std::path::Path, child_space: &std::path::P
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         let src = entry.path();
-        if !src.join(".jj").is_dir() { continue; }
+        if !src.join(".jj").is_dir() {
+            continue;
+        }
         let dest = child_space.join("repos").join(name);
         let root_output = tokio::task::block_in_place(|| {
             std::process::Command::new("jj")
-                .arg("workspace").arg("root")
-                .current_dir(&src).output()
+                .arg("workspace")
+                .arg("root")
+                .current_dir(&src)
+                .output()
         });
         let main_repo = match root_output {
-            Ok(out) if out.status.success() =>
-                String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            _ => { continue; }
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+            _ => {
+                continue;
+            }
         };
         let _ = std::fs::create_dir_all(child_space.join("repos"));
         let add_output = tokio::task::block_in_place(|| {
             std::process::Command::new("jj")
-                .arg("workspace").arg("add").arg(&dest)
-                .current_dir(&main_repo).output()
+                .arg("workspace")
+                .arg("add")
+                .arg(&dest)
+                .current_dir(&main_repo)
+                .output()
         });
         match add_output {
             Ok(out) if out.status.success() => {
                 tracing::info!(workspace = %dest.display(), "copied jj workspace into child");
             }
-            Ok(out) => tracing::warn!(workspace = %dest.display(), stderr = %String::from_utf8_lossy(&out.stderr), "jj workspace add failed"),
-            Err(e) => tracing::warn!(workspace = %dest.display(), error = %e, "failed to invoke jj"),
+            Ok(out) => {
+                tracing::warn!(workspace = %dest.display(), stderr = %String::from_utf8_lossy(&out.stderr), "jj workspace add failed")
+            }
+            Err(e) => {
+                tracing::warn!(workspace = %dest.display(), error = %e, "failed to invoke jj")
+            }
         }
     }
 }
@@ -1433,7 +1459,10 @@ async fn create_subsession(
 
     let spec = crate::server::bridge_mgr::RuntimeSpec {
         agent: parent_agent.clone(),
-        node: None, cwd: None, mcp_servers: vec![], env: vec![],
+        node: None,
+        cwd: None,
+        mcp_servers: vec![],
+        env: vec![],
     };
 
     let ns = match state.bridge.create_draft(&spec) {
@@ -1463,10 +1492,16 @@ async fn create_subsession(
         model: None,
         title: body.title.clone(),
         started_at: ns.started_at,
-        message_count: 0, input_tokens: 0, output_tokens: 0,
-        agent: parent_agent.clone(), node: None,
+        message_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        agent: parent_agent.clone(),
+        node: None,
     };
-    { let mut views = state.views.write().await; views.apply(&created); }
+    {
+        let mut views = state.views.write().await;
+        views.apply(&created);
+    }
 
     let forked_event = crate::event::Event::SessionForked {
         parent_session_id: id.clone(),
@@ -1478,26 +1513,44 @@ async fn create_subsession(
     if let Err(e) = state.log.append(&forked_event) {
         tracing::warn!(error = %e, "failed to append SessionForked for subsession");
     }
-    { let mut views = state.views.write().await; views.apply(&forked_event); }
+    {
+        let mut views = state.views.write().await;
+        views.apply(&forked_event);
+    }
 
     // Optionally enqueue the first user message.
     if let Some(prompt) = &body.prompt {
         if !prompt.trim().is_empty() {
             let next_id = 0u64;
-            match state.bridge.append_user_message(&ns.session_id, &ns.hermes_id, next_id, prompt) {
+            match state
+                .bridge
+                .append_user_message(&ns.session_id, &ns.hermes_id, next_id, prompt)
+            {
                 Ok(event) => {
-                    { let mut views = state.views.write().await; views.apply(&event); }
+                    {
+                        let mut views = state.views.write().await;
+                        views.apply(&event);
+                    }
                     let dto = crate::server::dto::MessageDto {
-                        message_id: next_id, session_id: ns.session_id.clone(),
-                        role: "user".into(), content: Some(prompt.clone()),
-                        tool_name: None, tool_calls: None, reasoning: None,
-                        timestamp: event_timestamp(&event), token_count: None, finish_reason: None,
+                        message_id: next_id,
+                        session_id: ns.session_id.clone(),
+                        role: "user".into(),
+                        content: Some(prompt.clone()),
+                        tool_name: None,
+                        tool_calls: None,
+                        reasoning: None,
+                        timestamp: event_timestamp(&event),
+                        token_count: None,
+                        finish_reason: None,
                     };
                     let _ = state.deltas.send(ServerFrame::MessageAppended {
-                        session_id: ns.session_id.clone(), message: dto,
+                        session_id: ns.session_id.clone(),
+                        message: dto,
                     });
                 }
-                Err(e) => tracing::warn!(error = %e, child = %ns.session_id, "failed to enqueue subsession prompt"),
+                Err(e) => {
+                    tracing::warn!(error = %e, child = %ns.session_id, "failed to enqueue subsession prompt")
+                }
             }
         }
     }
@@ -1511,19 +1564,34 @@ async fn create_subsession(
                 d.fork_type = Some("sub".into());
                 d
             }
-            None => return (StatusCode::INTERNAL_SERVER_ERROR, "subsession view lookup failed").into_response(),
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "subsession view lookup failed",
+                )
+                    .into_response()
+            }
         }
     };
 
-    let _ = state.deltas.send(ServerFrame::SessionAdded { session: dto.clone() });
-    (StatusCode::CREATED, Json(serde_json::to_value(&dto).unwrap())).into_response()
+    let _ = state.deltas.send(ServerFrame::SessionAdded {
+        session: dto.clone(),
+    });
+    (
+        StatusCode::CREATED,
+        Json(serde_json::to_value(&dto).unwrap()),
+    )
+        .into_response()
 }
 
 /// GET /api/sessions/:id/subsessions — list direct children.
 async fn list_subsessions(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let children: Vec<SessionDto> = {
         let views = state.views.read().await;
-        views.sessions.list(&Filters::default()).into_iter()
+        views
+            .sessions
+            .list(&Filters::default())
+            .into_iter()
             .filter(|row| row.parent_session_id.as_deref() == Some(id.as_str()))
             .map(SessionDto::from_row)
             .collect()
@@ -1562,42 +1630,79 @@ async fn complete_session(
 
     let parent_hermes_id = {
         let views = state.views.read().await;
-        views.sessions.get(&parent_id).map(|r| r.hermes_id.clone()).unwrap_or_default()
+        views
+            .sessions
+            .get(&parent_id)
+            .map(|r| r.hermes_id.clone())
+            .unwrap_or_default()
     };
     let next_id = {
         let views = state.views.read().await;
-        views.messages.recent(&parent_id, usize::MAX)
-            .iter().map(|m| m.message_id).max().map(|m| m + 1).unwrap_or(0)
+        views
+            .messages
+            .recent(&parent_id, usize::MAX)
+            .iter()
+            .map(|m| m.message_id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0)
     };
 
-    match state.bridge.append_system_message(&parent_id, &parent_hermes_id, next_id, &notice, None) {
+    match state
+        .bridge
+        .append_system_message(&parent_id, &parent_hermes_id, next_id, &notice, None)
+    {
         Ok(event) => {
-            { let mut views = state.views.write().await; views.apply(&event); }
+            {
+                let mut views = state.views.write().await;
+                views.apply(&event);
+            }
             let dto = crate::server::dto::MessageDto {
-                message_id: next_id, session_id: parent_id.clone(), role: "system".into(),
-                content: Some(notice.clone()), tool_name: None, tool_calls: None,
-                reasoning: None, timestamp: event_timestamp(&event), token_count: None, finish_reason: None,
+                message_id: next_id,
+                session_id: parent_id.clone(),
+                role: "system".into(),
+                content: Some(notice.clone()),
+                tool_name: None,
+                tool_calls: None,
+                reasoning: None,
+                timestamp: event_timestamp(&event),
+                token_count: None,
+                finish_reason: None,
             };
-            let _ = state.deltas.send(ServerFrame::MessageAppended { session_id: parent_id.clone(), message: dto });
+            let _ = state.deltas.send(ServerFrame::MessageAppended {
+                session_id: parent_id.clone(),
+                message: dto,
+            });
         }
         Err(e) => tracing::error!(error = %e, "failed to append complete-gate system message"),
     }
 
     // Archive the child.
     let archive_event = crate::event::Event::SessionUpdated {
-        session_id: id.clone(), title: None, model: None, archived: Some(true),
-        message_count: None, agent: None, node: None,
-        hermes_id: Some(child_hermes_id), pinned: None,
+        session_id: id.clone(),
+        title: None,
+        model: None,
+        archived: Some(true),
+        message_count: None,
+        agent: None,
+        node: None,
+        hermes_id: Some(child_hermes_id),
+        pinned: None,
     };
     if let Err(e) = state.log.append(&archive_event) {
         tracing::warn!(error = %e, "failed to append archive event for completed subsession");
     }
-    { let mut views = state.views.write().await; views.apply(&archive_event); }
+    {
+        let mut views = state.views.write().await;
+        views.apply(&archive_event);
+    }
     let _ = state.deltas.send(ServerFrame::SessionUpdated {
-        session_id: id.clone(), changes: json!({ "archived": true }),
+        session_id: id.clone(),
+        changes: json!({ "archived": true }),
     });
 
-    Json(json!({ "sessionId": id, "parentId": parent_id, "verdict": verdict, "archived": true })).into_response()
+    Json(json!({ "sessionId": id, "parentId": parent_id, "verdict": verdict, "archived": true }))
+        .into_response()
 }
 
 /// POST /api/sessions/:id/handover — switch this session to a different agent
@@ -4288,12 +4393,16 @@ mod tests {
             ("POST", "/api/repos", &[400, 422]),
             ("GET", "/api/repos/nonexistent", &[404]),
             ("DELETE", "/api/repos/nonexistent", &[404]),
-            ("POST",   "/api/sessions/s1/repos", &[400, 404, 422]),
+            ("POST", "/api/sessions/s1/repos", &[400, 404, 422]),
             // ── Subsessions (B-2) ──
-            ("GET",    "/api/sessions/s1/subsessions", &[200]),
-            ("POST",   "/api/sessions/s1/subsessions", &[200, 201, 400, 422]),
-            ("POST",   "/api/sessions/s1/complete", &[200, 400, 409]),
-            ("GET",    "/api/health", &[200]),
+            ("GET", "/api/sessions/s1/subsessions", &[200]),
+            (
+                "POST",
+                "/api/sessions/s1/subsessions",
+                &[200, 201, 400, 422],
+            ),
+            ("POST", "/api/sessions/s1/complete", &[200, 400, 409]),
+            ("GET", "/api/health", &[200]),
             ("GET", "/api/setup", &[200]),
             ("PUT", "/api/setup", &[400, 422]),
             ("GET", "/api/registry", &[200]),
