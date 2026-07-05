@@ -112,6 +112,7 @@ pub fn build_router(state: AppState) -> Router {
             get(get_messages).post(post_message),
         )
         .route("/api/sessions/{id}/cancel", post(cancel_session))
+        .route("/api/sessions/{id}/steer", post(steer_session))
         .route(
             "/api/sessions/{id}/permission",
             post(respond_permission_handler),
@@ -2811,6 +2812,62 @@ async fn cancel_session(State(state): State<AppState>, Path(id): Path<String>) -
         changes: json!({ "liveness": "idle" }),
     });
     (StatusCode::OK, Json(json!({ "cancelled": true }))).into_response()
+}
+
+/// Body for POST /api/sessions/:id/steer — inject guidance into a RUNNING turn.
+#[derive(Debug, Deserialize)]
+struct SteerBody {
+    text: String,
+}
+
+/// POST /api/sessions/:id/steer — steer the in-flight turn without stopping it.
+/// Maps to the Hermes /steer command (AgentCommand::Steer). 409 when no turn
+/// is running — steering an idle session is a normal message, use POST
+/// /messages instead.
+async fn steer_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SteerBody>,
+) -> Response {
+    let text = body.text.trim().to_string();
+    if text.is_empty() {
+        return (StatusCode::BAD_REQUEST, "steer text is required").into_response();
+    }
+    if !state.bridge.in_flight_set().await.contains(&id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "not_running",
+                "message": "No turn in flight — send a normal message instead.",
+            })),
+        )
+            .into_response();
+    }
+    let Some(runtime) = state.bridge.get_runtime(&id).await else {
+        return (StatusCode::CONFLICT, "no runtime for session").into_response();
+    };
+    if let Err(e) = runtime
+        .send(AgentCommand::Steer { text: text.clone() })
+        .await
+    {
+        tracing::warn!(error = %e, session = %id, "steer send failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "steer_failed", "message": e.to_string() })),
+        )
+            .into_response();
+    }
+    let _ = state.deltas.send(ServerFrame::SessionLog {
+        session_id: id.clone(),
+        level: "info".into(),
+        source: "bridge".into(),
+        message: format!(
+            "Steering turn: {}",
+            text.chars().take(80).collect::<String>()
+        ),
+        timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+    });
+    (StatusCode::ACCEPTED, Json(json!({ "steered": true }))).into_response()
 }
 
 /// Body for POST /api/sessions/:id/permission — the user's decision on a

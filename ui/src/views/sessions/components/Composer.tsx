@@ -3,14 +3,15 @@
  *
  * Layout:
  *   [ textarea …………………………………………………………………… ]
- *   [ (+)                          agent-icon · model · thinking · send ]
- *   running on <node>                        ← auxiliary, below the bar
+ *   [ (+)                          agent-icon · model · thinking · send ] (idle)
+ *   [ running on <node>                        ← auxiliary, below the bar
  *
- * - Bottom-LEFT: a "+" menu for attachments, session mentions, etc.
- * - Bottom-RIGHT: the locked agent's brand icon (harness fixed at creation) +
- *   an agent-scoped model selector (only models the agent's provider serves) +
- *   thinking level + send.
- * - Node indicator sits BELOW the composer (auxiliary, non-critical info).
+ * Two modes:
+ * - IDLE (no turn running): textarea = prompt, send button sends the message.
+ * - RUNNING (turn in flight): the send button becomes a STOP button (square).
+ *   Typing into the textarea + Enter injects a STEER (interrupt) into the
+ *   running turn instead of starting a new one. A small hint above the bar
+ *   shows "steer running turn" so the user knows what Enter will do.
  */
 
 import React, { useState, useEffect, useRef } from "react";
@@ -44,6 +45,8 @@ export function Composer({
   onTextChange,
   onKeyDown,
   onSend,
+  onStop,
+  onSteer,
   sending,
   sessionModel,
   sessionAgent,
@@ -53,6 +56,8 @@ export function Composer({
   onTextChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: (model?: string, thinking?: string) => void;
+  onStop: () => void;
+  onSteer: (text: string) => void;
   sending: boolean;
   sessionModel: string | null;
   sessionAgent: string | null;
@@ -127,7 +132,7 @@ export function Composer({
         <textarea
           rows={1}
           className="composer-input"
-          placeholder="Type a message…"
+          placeholder={sending ? "Steer the running turn…" : "Type a message…"}
           value={text}
           onChange={onTextChange}
           onKeyDown={onKeyDown}
@@ -165,7 +170,7 @@ export function Composer({
             </div>
           </div>
 
-          {/* RIGHT: model selector + thinking + send */}
+          {/* RIGHT: model selector + thinking + send/stop */}
           <div className="comp-r">
             <div className="selwrap" ref={modelRef} style={{ position: "relative" }}>
               <button
@@ -230,15 +235,27 @@ export function Composer({
               )}
             </div>
 
-            <button
-              type="button"
-              className="send"
-              onClick={() => onSend(selectedModel, thinking === "off" ? undefined : thinking)}
-              disabled={!text.trim() || sending}
-              title="Send"
-            >
-              <Icon name="arrow-up" size={14} />
-            </button>
+            {sending ? (
+              <button
+                type="button"
+                className="send stop"
+                onClick={onStop}
+                title="Stop the running turn"
+                aria-label="Stop"
+              >
+                <Icon name="stop" size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="send"
+                onClick={() => onSend(selectedModel, thinking === "off" ? undefined : thinking)}
+                disabled={!text.trim()}
+                title="Send"
+              >
+                <Icon name="arrow-up" size={14} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -246,25 +263,34 @@ export function Composer({
       {/* Meta row — node · agent. OUTSIDE the composer box, below it, but
           inside .composer so it stays bounded to the composer's width. */}
       <div className="comp-meta">
-        <span className="cm-item" title={`Running on node: ${nodeLabel}`}>
-          <Icon name="server" size={11} />
-          <span>{nodeLabel}</span>
-        </span>
-        <span className="cm-dot" />
-        <span
-          className="cm-item"
-          title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
-        >
-          <BrandIcon name={agentIcon} size={12} />
-          <span>{agentName}</span>
-        </span>
-        {thinking !== "off" && (
+        {sending ? (
+          <span className="cm-item cm-steer" title="Steer the running turn">
+            <Icon name="zap" size={11} />
+            <span>steer running turn</span>
+          </span>
+        ) : (
           <>
-            <span className="cm-dot" />
-            <span className="cm-item" title={`Thinking level: ${thinkingLabel}`}>
-              <Icon name="brain" size={11} />
-              <span>{thinkingLabel}</span>
+            <span className="cm-item" title={`Running on node: ${nodeLabel}`}>
+              <Icon name="server" size={11} />
+              <span>{nodeLabel}</span>
             </span>
+            <span className="cm-dot" />
+            <span
+              className="cm-item"
+              title={`Agent: ${agentName} (${lockedAgent?.provider ?? "—"}) — locked for this session`}
+            >
+              <BrandIcon name={agentIcon} size={12} />
+              <span>{agentName}</span>
+            </span>
+            {thinking !== "off" && (
+              <>
+                <span className="cm-dot" />
+                <span className="cm-item" title={`Thinking level: ${thinkingLabel}`}>
+                  <Icon name="brain" size={11} />
+                  <span>{thinkingLabel}</span>
+                </span>
+              </>
+            )}
           </>
         )}
       </div>

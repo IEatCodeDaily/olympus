@@ -268,6 +268,27 @@ export async function cancelSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error(`cancel failed (${res.status})`);
 }
 
+/**
+ * Steer (interrupt) a running turn without stopping it — injects guidance
+ * into the in-flight LLM turn via the Hermes /steer command. Returns 202 on
+ * accept; 409 when no turn is running (the caller should send a normal
+ * message instead).
+ */
+export async function steerSession(
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/sessions/${sessionId}/steer`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ text }),
+  });
+  if (res.status === 409) {
+    throw new Error("not_running");
+  }
+  if (!res.ok) throw new Error(`steer failed (${res.status})`);
+}
+
 /** Answer a pending permission request. Pass optionId to allow/select, or
  *  omit it to cancel the request (ACP "cancelled" outcome). */
 export async function respondPermission(

@@ -18,7 +18,14 @@ import remarkGfm from "remark-gfm";
 
 import { Icon } from "../../../components/Icon";
 import { useSession, useMessages } from "../../../hooks/queries";
-import { sendMessage, forkSession, onFrame, respondPermission } from "../../../api";
+import {
+  sendMessage,
+  cancelSession,
+  steerSession,
+  forkSession,
+  onFrame,
+  respondPermission,
+} from "../../../api";
 import type { Message, ServerFrame } from "../../../types";
 import { MessageBubble } from "../components/MessageBubble";
 import { Composer } from "../components/Composer";
@@ -178,14 +185,47 @@ export function ChatPage({
     }
   }, [text, sending, sessionId]);
 
+  // ── Stop the running turn (cancel button) ──────────────────────
+  const handleStop = useCallback(async () => {
+    try {
+      await cancelSession(sessionId);
+    } catch {
+      // ignore — the WS will catch up
+    }
+    // Optimistically drop the thinking state; the server will emit
+    // liveness=idle and message.done (or an error) which finalize the UI.
+    setSending(false);
+    setAgentStatus("idle");
+    setStreamingText("");
+    setText("");
+  }, [sessionId]);
+
+  // ── Steer the running turn (interrupt injection) ──────────────
+  const handleSteer = useCallback(async () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    try {
+      await steerSession(sessionId, trimmed);
+      setText(""); // clear the input after steering
+    } catch {
+      // not_running or steer_failed — leave the text in place so the user
+      // can resend as a normal message.
+    }
+  }, [text, sessionId]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        void handleSend();
+        if (sending) {
+          // Steer the running turn instead of starting a new one.
+          void handleSteer();
+        } else {
+          void handleSend();
+        }
       }
     },
-    [handleSend],
+    [handleSend, handleSteer, sending],
   );
 
   const handleTextareaInput = useCallback(
@@ -307,6 +347,8 @@ export function ChatPage({
           onTextChange={handleTextareaInput}
           onKeyDown={handleKeyDown}
           onSend={handleSend}
+          onStop={handleStop}
+          onSteer={handleSteer}
           sending={sending}
           sessionModel={session?.model ?? null}
           sessionAgent={session?.agent ?? null}
