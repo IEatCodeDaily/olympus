@@ -4,11 +4,16 @@
  * Owns the transcript + composer ONLY (Page content). The View owns
  * the surrounding layout (right sidebar, bottom panel, header).
  *
- * Bug fixes:
- *  - Bug 7b: Optimistic message append — the user's message appears
- *    immediately before the server round-trip. Shows "thinking…" status
- *    via /ws (idle → thinking → streaming → done).
- *  - Bug 1: Fork confirmation uses the fixed-position ForkModal.
+ * Live-turn UX:
+ *  - Optimistic message append; "thinking…" via /ws (idle → thinking →
+ *    streaming → done).
+ *  - REHYDRATION: on mount/refresh, if the session's server-derived liveness
+ *    is "running", the thinking state is restored (the drain loop is still
+ *    running server-side; deltas resume over WS).
+ *  - QUEUE: messages typed while a turn runs are queued in cards above the
+ *    composer (reorder/edit/delete). Each card has a Steer button to inject
+ *    it into the running turn immediately. When the turn finishes, the queue
+ *    auto-drains head-first as the next prompt.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -30,8 +35,34 @@ import type { Message, ServerFrame } from "../../../types";
 import { MessageBubble } from "../components/MessageBubble";
 import { Composer } from "../components/Composer";
 import { ForkModal } from "../components/ForkModal";
+import { QueuePanel, type QueuedMsg } from "../components/QueuePanel";
 
 type AgentStatus = "idle" | "thinking" | "streaming" | "done";
+
+// ── Per-session queue persistence (survives refresh & session switches) ──
+function queueKey(sessionId: string): string {
+  return `olympus-queue-${sessionId}`;
+}
+
+function loadQueue(sessionId: string): QueuedMsg[] {
+  try {
+    const raw = localStorage.getItem(queueKey(sessionId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as QueuedMsg[];
+    return Array.isArray(parsed) ? parsed.filter((m) => m?.id && m?.text) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveQueue(sessionId: string, items: QueuedMsg[]) {
+  try {
+    if (items.length === 0) localStorage.removeItem(queueKey(sessionId));
+    else localStorage.setItem(queueKey(sessionId), JSON.stringify(items));
+  } catch {
+    // storage full/unavailable — queue lives in memory only
+  }
+}
 
 export function ChatPage({
   sessionId,
@@ -50,12 +81,15 @@ export function ChatPage({
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("idle");
   const [text, setText] = useState("");
   const [optimisticMsg, setOptimisticMsg] = useState<Message | null>(null);
+  const [queue, setQueue] = useState<QueuedMsg[]>([]);
   // Pending permission request (ACP session/request_permission) for this session.
   const [permission, setPermission] = useState<{
     toolCall: string;
     options: Array<{ optionId: string; name: string; kind: string }>;
   } | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  // The model/thinking used for the last send — reused when the queue drains.
+  const lastSendOpts = useRef<{ model?: string; thinking?: string }>({});
 
   // ── Reset ALL transient state when switching sessions (Bug: thinking leak) ──
   // Without this, agentStatus/streamingText/sending from the previous session
@@ -68,19 +102,29 @@ export function ChatPage({
     setOptimisticMsg(null);
     setPermission(null);
     setText("");
+    setQueue(loadQueue(sessionId));
   }, [sessionId]);
 
+  // Persist queue on every change.
+  useEffect(() => {
+    saveQueue(sessionId, queue);
+  }, [sessionId, queue]);
+
+  // ── Rehydrate thinking state on refresh/mount ─────────────────────
+  // The server's liveness is authoritative: "running" means the drain loop is
+  // mid-turn server-side. On browser refresh the local `sending` state is
+  // lost but the turn is still going — restore the indicator so the user
+  // isn't staring at a silent chat. Deltas resume over WS automatically.
+  useEffect(() => {
+    if (session?.liveness === "running" && !sending) {
+      setSending(true);
+      setAgentStatus("thinking");
+    }
+    // Only react to liveness — deliberately not `sending` (would re-trigger).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.liveness, sessionId]);
+
   const serverMessages = msgData?.messages ?? [];
-  // Dedupe: once the server echoes the user's message (same role+content), drop
-  // the optimistic copy so we don't show two identical bubbles while the agent
-  // is thinking. (The optimistic id is -1; the real one has a server id.)
-  const echoed =
-    optimisticMsg != null &&
-    serverMessages.some(
-      (m) => m.role === "user" && m.content === optimisticMsg.content,
-    );
-  // Only show optimistic if no server messages with the same content exist.
-  // The old check used `echoed` but a race could show both briefly.
   const hasServerEcho = serverMessages.some(
     (m) => m.role === "user" && m.content === optimisticMsg?.content && m.messageId >= 0,
   );
@@ -99,7 +143,47 @@ export function ChatPage({
   const showThinking =
     (agentStatus === "thinking" || sending) && !streamingText;
 
-  // ── WS streaming + status (Bug 7b) ───────────────────────────────
+  // ── Send (used by composer AND queue auto-drain) ──────────────────
+  const doSend = useCallback(
+    async (content: string, model?: string, thinking?: string) => {
+      setSending(true);
+      setAgentStatus("thinking");
+      lastSendOpts.current = { model, thinking };
+
+      const now = Math.floor(Date.now() / 1000);
+      setOptimisticMsg({
+        messageId: -1,
+        sessionId,
+        role: "user",
+        content,
+        toolName: null,
+        toolCalls: null,
+        reasoning: null,
+        timestamp: now,
+        tokenCount: null,
+        finishReason: null,
+      });
+
+      try {
+        await sendMessage(sessionId, content, model, thinking);
+      } catch {
+        setSending(false);
+        setAgentStatus("idle");
+        setOptimisticMsg(null);
+        throw new Error("send failed");
+      }
+    },
+    [sessionId],
+  );
+
+  // Auto-drain ref so the WS effect always sees the latest queue without
+  // re-subscribing on every queue change.
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  const doSendRef = useRef(doSend);
+  doSendRef.current = doSend;
+
+  // ── WS streaming + status ─────────────────────────────────────────
   useEffect(() => {
     const unsub = onFrame((frame: ServerFrame) => {
       // Narrow by kind first — not all ServerFrame variants have sessionId.
@@ -117,9 +201,33 @@ export function ChatPage({
         setStreamingText("");
         setSending(false);
         setAgentStatus("done");
-        // Clear optimistic message once the server message arrives
         setOptimisticMsg(null);
         setPermission(null);
+        // Auto-drain: send the next queued message as a fresh prompt.
+        const q = queueRef.current;
+        if (q.length > 0) {
+          const [head, ...rest] = q;
+          setQueue(rest);
+          const { model, thinking } = lastSendOpts.current;
+          void doSendRef.current(head.text, model, thinking).catch(() => {
+            // restore on failure so the message isn't lost
+            setQueue((cur) => [head, ...cur]);
+          });
+        }
+      }
+      // Liveness pushed from elsewhere (cancel from another tab, server
+      // restart marking idle) — keep local state in sync.
+      if (frame.kind === "session.updated" && frame.sessionId === sessionId) {
+        const lv = (frame.changes as { liveness?: string }).liveness;
+        if (lv === "idle") {
+          setSending(false);
+          setAgentStatus("idle");
+          setStreamingText("");
+        }
+        if (lv === "running") {
+          setSending(true);
+          setAgentStatus((s) => (s === "streaming" ? s : "thinking"));
+        }
       }
       // Agent is blocked awaiting a permission decision for a gated tool call.
       if (frame.kind === "permission.required" && frame.sessionId === sessionId) {
@@ -148,42 +256,29 @@ export function ChatPage({
     }
   }, [messages.length, streamingText, agentStatus]);
 
-  // ── Send (Bug 7b: optimistic + thinking status) ──────────────────
-  const handleSend = useCallback(async (model?: string, thinking?: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || sending) return;
-
-    setSending(true);
-    setAgentStatus("thinking");
-    setText("");
-
-    // Optimistic: append the user message immediately
-    const now = Math.floor(Date.now() / 1000);
-    const optimistic: Message = {
-      messageId: -1,
-      sessionId,
-      role: "user",
-      content: trimmed,
-      toolName: null,
-      toolCalls: null,
-      reasoning: null,
-      timestamp: now,
-      tokenCount: null,
-      finishReason: null,
-    };
-    setOptimisticMsg(optimistic);
-
-    try {
-      await sendMessage(sessionId, trimmed, model, thinking);
-      // The server returns 202; the agent status stays "thinking" until
-      // the first /ws delta arrives (handled by the effect above).
-    } catch {
-      setText(trimmed); // restore on error
-      setSending(false);
-      setAgentStatus("idle");
-      setOptimisticMsg(null);
-    }
-  }, [text, sending, sessionId]);
+  // ── Composer send: idle → send now; running → enqueue ─────────────
+  const handleSend = useCallback(
+    async (model?: string, thinking?: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (sending) {
+        // Turn in flight — queue it (zcode-style follow-up).
+        setQueue((cur) => [
+          ...cur,
+          { id: `q${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, text: trimmed },
+        ]);
+        setText("");
+        return;
+      }
+      setText("");
+      try {
+        await doSend(trimmed, model, thinking);
+      } catch {
+        setText(trimmed); // restore on error
+      }
+    },
+    [text, sending, doSend],
+  );
 
   // ── Stop the running turn (cancel button) ──────────────────────
   const handleStop = useCallback(async () => {
@@ -192,40 +287,53 @@ export function ChatPage({
     } catch {
       // ignore — the WS will catch up
     }
-    // Optimistically drop the thinking state; the server will emit
-    // liveness=idle and message.done (or an error) which finalize the UI.
     setSending(false);
     setAgentStatus("idle");
     setStreamingText("");
-    setText("");
   }, [sessionId]);
 
-  // ── Steer the running turn (interrupt injection) ──────────────
-  const handleSteer = useCallback(async () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    try {
-      await steerSession(sessionId, trimmed);
-      setText(""); // clear the input after steering
-    } catch {
-      // not_running or steer_failed — leave the text in place so the user
-      // can resend as a normal message.
-    }
-  }, [text, sessionId]);
+  // ── Queue management ────────────────────────────────────────────
+  const handleQueueReorder = useCallback((from: number, to: number) => {
+    setQueue((cur) => {
+      const next = [...cur];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const handleQueueEdit = useCallback((id: string, newText: string) => {
+    setQueue((cur) => cur.map((m) => (m.id === id ? { ...m, text: newText } : m)));
+  }, []);
+
+  const handleQueueDelete = useCallback((id: string) => {
+    setQueue((cur) => cur.filter((m) => m.id !== id));
+  }, []);
+
+  /** Steer a QUEUED item into the running turn right now. */
+  const handleQueueSteer = useCallback(
+    async (id: string) => {
+      const item = queueRef.current.find((m) => m.id === id);
+      if (!item) return;
+      // Optimistically remove; restore on failure.
+      setQueue((cur) => cur.filter((m) => m.id !== id));
+      try {
+        await steerSession(sessionId, item.text);
+      } catch {
+        setQueue((cur) => [item, ...cur]);
+      }
+    },
+    [sessionId],
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (sending) {
-          // Steer the running turn instead of starting a new one.
-          void handleSteer();
-        } else {
-          void handleSend();
-        }
+        void handleSend();
       }
     },
-    [handleSend, handleSteer, sending],
+    [handleSend],
   );
 
   const handleTextareaInput = useCallback(
@@ -238,7 +346,7 @@ export function ChatPage({
     [],
   );
 
-  // ── Fork (Bug 1: fixed-position modal) ───────────────────────────
+  // ── Fork (fixed-position modal) ───────────────────────────────────
   const [forkOpen, setForkOpen] = useState(false);
   const handleForkRequest = useCallback(() => {
     setForkOpen(true);
@@ -342,21 +450,30 @@ export function ChatPage({
           </div>
         </div>
       ) : (
-        <Composer
-          text={text}
-          onTextChange={handleTextareaInput}
-          onKeyDown={handleKeyDown}
-          onSend={handleSend}
-          onStop={handleStop}
-          onSteer={handleSteer}
-          sending={sending}
-          sessionModel={session?.model ?? null}
-          sessionAgent={session?.agent ?? null}
-          sessionNode={session?.node ?? null}
-        />
+        <div className="composer-stack">
+          <QueuePanel
+            items={queue}
+            onReorder={handleQueueReorder}
+            onEdit={handleQueueEdit}
+            onDelete={handleQueueDelete}
+            onSteer={handleQueueSteer}
+          />
+          <Composer
+            text={text}
+            onTextChange={handleTextareaInput}
+            onKeyDown={handleKeyDown}
+            onSend={handleSend}
+            onStop={handleStop}
+            sending={sending}
+            queueCount={queue.length}
+            sessionModel={session?.model ?? null}
+            sessionAgent={session?.agent ?? null}
+            sessionNode={session?.node ?? null}
+          />
+        </div>
       )}
 
-      {/* Bug 1: fixed-position fork modal */}
+      {/* Fixed-position fork modal */}
       <ForkModal
         open={forkOpen}
         title="Fork this session?"

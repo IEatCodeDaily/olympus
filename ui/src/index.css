@@ -215,6 +215,24 @@ button {
 /* Stop button — same dimensions as send, danger-tinted on hover */
 .send.stop:hover { background: var(--danger, #e5484d); }
 .cm-steer span { color: var(--accent, var(--silver)); }
+/* Queue-add button — outline style so stop stays the primary action */
+.send.queue-add { background: none; border: var(--border-w) solid var(--border-strong); color: var(--text); }
+.send.queue-add:hover { background: var(--elev); }
+
+/* ── Queued messages (zcode-style cards above the composer) ───── */
+.composer-stack { flex-shrink: 0; display: flex; flex-direction: column; }
+.queue-panel { max-width: var(--measure); width: 100%; margin: 0 auto; padding: 0 var(--space-8); display: flex; flex-direction: column; gap: var(--space-2); }
+.queue-card { display: flex; align-items: center; gap: var(--space-3); background: var(--elev); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); cursor: grab; }
+.queue-card.drag-over { border-color: var(--silver); }
+.queue-card:active { cursor: grabbing; }
+.qc-grip { color: var(--faint); font-size: var(--fs-11); letter-spacing: -2px; user-select: none; flex-shrink: 0; }
+.qc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-13); color: var(--text); }
+.qc-edit { flex: 1; background: none; border: none; outline: none; resize: none; color: var(--text); font-family: var(--font-sans); font-size: var(--fs-13); }
+.qc-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.qc-steer { display: flex; align-items: center; gap: var(--space-2); padding: 3px 8px; background: var(--silver); color: var(--on-silver); border-radius: var(--radius); font-size: var(--fs-11); font-weight: 600; transition: background var(--dur) var(--ease); }
+.qc-steer:hover { background: var(--accent-bright); }
+.qc-btn { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; padding: 0; background: none; border-radius: var(--radius); color: var(--faint); }
+.qc-btn:hover { background: var(--hover); color: var(--text); }
 
 /* ── Bottom panel ────────────────────────────────── */
 .bpanel { flex-shrink: 0; height: var(--bpanel-h); background: var(--bg); border-top: var(--border-w) solid var(--border); display: flex; flex-direction: column; }

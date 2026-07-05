@@ -2331,6 +2331,12 @@ async fn post_message(
     // Mark in-flight up front so liveness shows "active" the instant the POST
     // returns (the runtime spawn + turn happen in the background task below).
     state.bridge.mark_in_flight(&id).await;
+    // Broadcast liveness so other tabs/windows watching this session flip to
+    // the thinking state immediately (and refreshes rehydrate from GET).
+    let _ = state.deltas.send(ServerFrame::SessionUpdated {
+        session_id: id.clone(),
+        changes: serde_json::json!({ "liveness": "running" }),
+    });
 
     // Everything expensive — lazily spawning/resuming the agent runtime, sending
     // the prompt, and draining the event stream — happens OFF the request path
@@ -2799,6 +2805,12 @@ async fn post_message(
         // flag (e.g. the turn was cancelled while a permission was pending).
         bridge.clear_in_flight(&session_id).await;
         bridge.clear_awaiting_input(&session_id).await;
+        // Broadcast liveness=idle so the UI drops the thinking indicator
+        // immediately and refreshes see idle (not stale 'running').
+        let _ = deltas.send(ServerFrame::SessionUpdated {
+            session_id: session_id.clone(),
+            changes: serde_json::json!({ "liveness": "idle" }),
+        });
     });
 
     (StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response()

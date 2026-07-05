@@ -46,8 +46,8 @@ export function Composer({
   onKeyDown,
   onSend,
   onStop,
-  onSteer,
   sending,
+  queueCount = 0,
   sessionModel,
   sessionAgent,
   sessionNode,
@@ -57,8 +57,8 @@ export function Composer({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: (model?: string, thinking?: string) => void;
   onStop: () => void;
-  onSteer: (text: string) => void;
   sending: boolean;
+  queueCount?: number;
   sessionModel: string | null;
   sessionAgent: string | null;
   sessionNode: string | null;
@@ -132,7 +132,7 @@ export function Composer({
         <textarea
           rows={1}
           className="composer-input"
-          placeholder={sending ? "Steer the running turn…" : "Type a message…"}
+          placeholder={sending ? "Keep typing to queue follow-up changes…" : "Type a message…"}
           value={text}
           onChange={onTextChange}
           onKeyDown={onKeyDown}
@@ -236,15 +236,28 @@ export function Composer({
             </div>
 
             {sending ? (
-              <button
-                type="button"
-                className="send stop"
-                onClick={onStop}
-                title="Stop the running turn"
-                aria-label="Stop"
-              >
-                <Icon name="stop" size={14} />
-              </button>
+              <>
+                {text.trim() && (
+                  <button
+                    type="button"
+                    className="send queue-add"
+                    onClick={() => onSend(selectedModel, thinking === "off" ? undefined : thinking)}
+                    title="Add to queue"
+                    aria-label="Queue message"
+                  >
+                    <Icon name="plus" size={14} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="send stop"
+                  onClick={onStop}
+                  title="Stop the running turn"
+                  aria-label="Stop"
+                >
+                  <Icon name="stop" size={14} />
+                </button>
+              </>
             ) : (
               <button
                 type="button"
@@ -264,9 +277,11 @@ export function Composer({
           inside .composer so it stays bounded to the composer's width. */}
       <div className="comp-meta">
         {sending ? (
-          <span className="cm-item cm-steer" title="Steer the running turn">
+          <span className="cm-item cm-steer" title="Messages queue while the turn runs; use Steer on a card to inject now">
             <Icon name="zap" size={11} />
-            <span>steer running turn</span>
+            <span>
+              turn running{queueCount > 0 ? ` · ${queueCount} queued` : " — Enter queues"}
+            </span>
           </span>
         ) : (
           <>
