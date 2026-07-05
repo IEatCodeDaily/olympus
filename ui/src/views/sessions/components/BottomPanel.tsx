@@ -20,9 +20,18 @@ import { onFrame } from "../../../api";
 import type { Message, ServerFrame, ToolCall } from "../../../types";
 import { fmtTime } from "../helpers";
 
-export type BpTab = "terminal" | "output" | "debug";
+export type BpTab = "terminal" | "logs" | "output" | "debug";
 
 // ── Types ──────────────────────────────────────────────
+
+interface LogEntry {
+  ts: number;
+  level: "info" | "warn" | "error";
+  source: string;
+  message: string;
+}
+
+const MAX_LOGS = 500;
 
 interface OutputEntry {
   ts: number;
@@ -100,16 +109,20 @@ export function BottomPanel({
 }) {
   const tabs: Array<{ id: BpTab; label: string }> = [
     { id: "terminal", label: "Terminal" },
+    { id: "logs", label: "Logs" },
     { id: "output", label: "Output" },
     { id: "debug", label: "Debug" },
   ];
 
   // ── Frame ring buffer (always active, regardless of active tab) ──
   const [debugFrames, setDebugFrames] = useState<DebugEntry[]>([]);
+  // ── Logs ring buffer (session.log frames + synthesized lifecycle events) ──
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
 
   // Reset on session change.
   useEffect(() => {
     setDebugFrames([]);
+    setLogEntries([]);
   }, [sessionId]);
 
   useEffect(() => {
@@ -127,12 +140,45 @@ export function BottomPanel({
         if (next.length > MAX_DEBUG) next.shift();
         return next;
       });
+
+      // Feed the Logs buffer: real session.log frames + synthesized entries
+      // from lifecycle frames so the panel is useful even for events the
+      // backend doesn't explicitly log yet.
+      const pushLog = (e: LogEntry) =>
+        setLogEntries((prev) => {
+          const next = [...prev, e];
+          if (next.length > MAX_LOGS) next.shift();
+          return next;
+        });
+      const now = Date.now() / 1000;
+      if (frame.kind === "session.log") {
+        pushLog({ ts: frame.timestamp, level: frame.level, source: frame.source, message: frame.message });
+      } else if (frame.kind === "message.appended") {
+        const m = frame.message;
+        if (m.role === "user") {
+          pushLog({ ts: now, level: "info", source: "olympus", message: "User message sent" });
+        } else if (m.role === "system") {
+          const isErr = (m.content ?? "").startsWith("⚠");
+          pushLog({ ts: now, level: isErr ? "error" : "info", source: "olympus", message: m.content ?? "(system)" });
+        }
+      } else if (frame.kind === "message.done") {
+        const fr = frame.finishReason;
+        if (fr && fr.startsWith("error")) {
+          pushLog({ ts: now, level: "error", source: "agent", message: `Turn ended with error: ${fr}` });
+        }
+      } else if (frame.kind === "permission.required") {
+        pushLog({ ts: now, level: "warn", source: "agent", message: `Permission required: ${frame.toolCall}` });
+      }
     });
     return unsub;
   }, [sessionId]);
 
   const handleClearFrames = useCallback(() => {
     setDebugFrames([]);
+  }, []);
+
+  const handleClearLogs = useCallback(() => {
+    setLogEntries([]);
   }, []);
 
   return (
@@ -158,6 +204,7 @@ export function BottomPanel({
       </div>
       <div className="bp-body">
         {tab === "terminal" && <TerminalTab />}
+        {tab === "logs" && <LogsTab entries={logEntries} onClear={handleClearLogs} />}
         {tab === "output" && <OutputTab sessionId={sessionId} />}
         {tab === "debug" && (
           <DebugTab
@@ -177,6 +224,100 @@ function TerminalTab() {
     <div className="bp-placeholder">
       <Icon name="terminal" size={20} />
       <span className="d">Terminal attach requires envoy PTY support (planned).</span>
+    </div>
+  );
+}
+
+// ── Logs tab — structured lifecycle log ────────────────
+//
+// Shows session.log frames from the backend (bridge/adapter/agent lifecycle:
+// "Starting agent runtime", "Sending prompt", "Tool call: X", "Turn finished",
+// harness errors) plus synthesized entries from other lifecycle frames.
+
+function LogsTab({
+  entries,
+  onClear,
+}: {
+  entries: LogEntry[];
+  onClear: () => void;
+}) {
+  const [levelFilter, setLevelFilter] = useState<"all" | "warn" | "error">("all");
+
+  const filtered = useMemo(() => {
+    if (levelFilter === "all") return entries;
+    if (levelFilter === "warn") return entries.filter((e) => e.level !== "info");
+    return entries.filter((e) => e.level === "error");
+  }, [entries, levelFilter]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [filtered.length]);
+
+  return (
+    <div className="bp-debug">
+      <div className="bp-debug-bar">
+        <button
+          type="button"
+          className={`bp-mini-btn${levelFilter === "all" ? " on" : ""}`}
+          onClick={() => setLevelFilter("all")}
+        >
+          All
+        </button>
+        <button
+          type="button"
+          className={`bp-mini-btn${levelFilter === "warn" ? " on" : ""}`}
+          onClick={() => setLevelFilter("warn")}
+        >
+          Warn+
+        </button>
+        <button
+          type="button"
+          className={`bp-mini-btn${levelFilter === "error" ? " on" : ""}`}
+          onClick={() => setLevelFilter("error")}
+        >
+          Errors
+        </button>
+        <button type="button" className="bp-mini-btn" onClick={onClear} title="Clear log">
+          <Icon name="trash" size={12} />
+        </button>
+        <span className="bp-count d">{filtered.length}/{entries.length}</span>
+      </div>
+      <div className="bp-debug-list" ref={scrollRef}>
+        {filtered.length === 0 ? (
+          <div className="bp-placeholder">
+            <Icon name="activity" size={20} />
+            <span className="d">
+              {entries.length === 0
+                ? "No lifecycle events yet — send a message to see agent activity."
+                : "No entries at this level."}
+            </span>
+          </div>
+        ) : (
+          filtered.map((e, i) => (
+            <div className="ln bp-frame" key={i}>
+              <span className="ts">{fmtTime(e.ts)}</span>
+              <span
+                className="fk"
+                style={{
+                  color:
+                    e.level === "error"
+                      ? "var(--red, #e06c75)"
+                      : e.level === "warn"
+                        ? "var(--amber, #d19a66)"
+                        : "var(--dim)",
+                }}
+              >
+                {e.level.toUpperCase()}
+              </span>
+              <span className="fk">{e.source}</span>
+              <span className="fj">{e.message}</span>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }

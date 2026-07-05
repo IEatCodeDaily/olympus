@@ -66,6 +66,18 @@ pub enum ServerFrame {
         tool_call: String,
         options: serde_json::Value,
     },
+    /// A structured lifecycle/progress event for a session (shown in the Logs
+    /// panel). `level` is "info" | "warn" | "error"; `source` is the subsystem
+    /// that emitted it (e.g. "bridge", "repo", "vault", "jj"); `message` is
+    /// human-readable.
+    #[serde(rename = "session.log", rename_all = "camelCase")]
+    SessionLog {
+        session_id: String,
+        level: String,
+        source: String,
+        message: String,
+        timestamp: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

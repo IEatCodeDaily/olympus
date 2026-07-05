@@ -209,13 +209,36 @@ async fn handle_incoming_message(
     msg: &AcpMessage,
     tx: &tokio::sync::broadcast::Sender<AgentEvent>,
     session_id_shared: &Arc<Mutex<Option<String>>>,
+    handshake_id: &Arc<Mutex<Option<serde_json::Value>>>,
 ) {
     if let AcpMessage::Response(resp) = msg {
         if let Some(sid) = resp.result.get("sessionId").and_then(|v| v.as_str()) {
             *session_id_shared.lock().await = Some(sid.to_string());
             debug!(target: "olympus.bridge.hermes", session_id = %sid, "captured session id");
         }
+        // If this response completes the session/new|resume handshake, lift
+        // the history-replay gate: everything streamed after this point is
+        // live turn output.
+        let mut hs = handshake_id.lock().await;
+        if let Some(expected) = hs.as_ref() {
+            if *expected == resp.id.0 {
+                *hs = None;
+                debug!(target: "olympus.bridge.hermes", "handshake complete — history-replay gate lifted");
+            }
+        }
     }
+
+    // While the handshake is in flight, streamed session/update notifications
+    // are the Hermes adapter REPLAYING PERSISTED HISTORY (its resume_session
+    // sends the whole transcript as agent_message_chunk updates). Forwarding
+    // them as AgentEvents would bleed old assistant text into the next live
+    // turn ("PONGHey! What can I do for you?" bug). Drop them here — the
+    // transcript is already in the Olympus event log.
+    if matches!(msg, AcpMessage::Notification(_)) && handshake_id.lock().await.is_some() {
+        debug!(target: "olympus.bridge.hermes", "dropping history-replay update during handshake");
+        return;
+    }
+
     if let Some(event) = map_message_to_event(msg) {
         let _ = tx.send(event);
     }
@@ -325,6 +348,13 @@ pub struct HermesAgentRuntime {
     /// Active ACP session id, shared with the stdout reader task so it can
     /// capture the id from the `session/new` response while `send()` reads it.
     session_id_shared: Arc<Mutex<Option<String>>>,
+    /// The JSON-RPC id of the in-flight session/new or session/resume request.
+    /// While set, streaming updates (agent_message_chunk etc.) are HISTORY
+    /// REPLAY from the Hermes adapter — not live turn output — and must NOT
+    /// be forwarded as AgentEvents, or they bleed into the next assistant
+    /// message ("PONGHey! What can I do for you?" bug). Cleared by the reader
+    /// when the matching Response arrives.
+    handshake_id: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
 impl HermesAgentRuntime {
@@ -342,6 +372,7 @@ impl HermesAgentRuntime {
             next_id: AtomicI64::new(1),
             event_tx: tx,
             session_id_shared: Arc::new(Mutex::new(None)),
+            handshake_id: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -373,6 +404,7 @@ impl HermesAgentRuntime {
         stdout: ChildStdout,
         tx: tokio::sync::broadcast::Sender<AgentEvent>,
         session_id_shared: Arc<Mutex<Option<String>>>,
+        handshake_id: Arc<Mutex<Option<serde_json::Value>>>,
         framing: AcpFraming,
     ) {
         tokio::spawn(async move {
@@ -385,7 +417,7 @@ impl HermesAgentRuntime {
                         let Some(msg) = NlFrame::decode_line(line.as_bytes()) else {
                             continue;
                         };
-                        handle_incoming_message(&msg, &tx, &session_id_shared).await;
+                        handle_incoming_message(&msg, &tx, &session_id_shared, &handshake_id).await;
                     }
                 }
                 AcpFraming::ContentLength => {
@@ -393,7 +425,13 @@ impl HermesAgentRuntime {
                     loop {
                         match read_content_length_message(&mut reader).await {
                             Ok(Some(msg)) => {
-                                handle_incoming_message(&msg, &tx, &session_id_shared).await
+                                handle_incoming_message(
+                                    &msg,
+                                    &tx,
+                                    &session_id_shared,
+                                    &handshake_id,
+                                )
+                                .await
                             }
                             Ok(None) => break,
                             Err(err) => {
@@ -471,6 +509,7 @@ impl AgentRuntime for HermesAgentRuntime {
             stdout,
             self.event_tx.clone(),
             Arc::clone(&self.session_id_shared),
+            Arc::clone(&self.handshake_id),
             self.config.framing,
         );
 
@@ -485,6 +524,11 @@ impl AgentRuntime for HermesAgentRuntime {
         } else {
             build_session_new_request(&self.config.cwd, &self.config.mcp_servers, self.alloc_id())
         };
+        // Arm the history-replay gate BEFORE sending: session/resume replays
+        // the whole persisted transcript as agent_message_chunk updates within
+        // the request lifetime. The reader drops those, and lifts the gate
+        // when the response with this id arrives.
+        *self.handshake_id.lock().await = Some(req.id.0.clone());
         debug!(target: "olympus.bridge.hermes", method = %req.method, "ACP send");
         self.write_message(&AcpMessage::Request(req)).await?;
 
@@ -551,6 +595,7 @@ impl AgentRuntime for HermesAgentRuntime {
             stdout,
             self.event_tx.clone(),
             Arc::clone(&self.session_id_shared),
+            Arc::clone(&self.handshake_id),
             self.config.framing,
         );
 
@@ -559,6 +604,9 @@ impl AgentRuntime for HermesAgentRuntime {
         self.write_message(&AcpMessage::Request(init_req)).await?;
 
         let fork_req = build_session_fork_request(session_id, &self.config.cwd, self.alloc_id());
+        // Arm the history-replay gate: a fork may replay the source
+        // transcript the same way resume does.
+        *self.handshake_id.lock().await = Some(fork_req.id.0.clone());
         debug!(target: "olympus.bridge.hermes", method = %fork_req.method, "ACP send");
         self.write_message(&AcpMessage::Request(fork_req)).await?;
 

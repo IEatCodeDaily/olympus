@@ -2387,6 +2387,13 @@ async fn post_message(
     if !adapter_warnings.is_empty() {
         for w in &adapter_warnings {
             tracing::info!(session = %id, warning = %w, "adapter warning");
+            let _ = deltas.send(ServerFrame::SessionLog {
+                session_id: id.clone(),
+                level: "warn".into(),
+                source: "adapter".into(),
+                message: w.clone(),
+                timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+            });
         }
     }
 
@@ -2405,8 +2412,37 @@ async fn post_message(
     let prompt_text = body.text.clone();
     let prompt_model = body.model.clone();
     let assistant_seed_id = next_id + 1;
+    let log_deltas = deltas.clone();
+    let log_session_id = session_id.clone();
+    let log_agent = spec.agent.clone().unwrap_or_default();
+    let log_resume = resume_hermes.clone();
     tokio::spawn(async move {
         use futures::stream::StreamExt;
+
+        // Emit structured log events for the Logs panel.
+        let emit_log = |level: &str, source: &str, msg: &str| {
+            let _ = log_deltas.send(ServerFrame::SessionLog {
+                session_id: log_session_id.clone(),
+                level: level.into(),
+                source: source.into(),
+                message: msg.into(),
+                timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+            });
+        };
+
+        if log_resume.is_some() {
+            emit_log(
+                "info",
+                "bridge",
+                &format!("Resuming agent runtime ({})…", log_agent),
+            );
+        } else {
+            emit_log(
+                "info",
+                "bridge",
+                &format!("Starting new agent runtime ({})…", log_agent),
+            );
+        }
 
         // Lazily ensure a runtime (spawn for a fresh draft, resume by hermes_id
         // after a restart). This is the slow part — now off the request path.
@@ -2414,7 +2450,10 @@ async fn post_message(
             .ensure_runtime(&session_id, &spec, resume_hermes.as_deref())
             .await
         {
-            Ok(pair) => pair,
+            Ok(pair) => {
+                emit_log("info", "bridge", "Agent runtime ready");
+                pair
+            }
             Err(e) => {
                 tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
                 // PERSIST the error as a system message so the user sees it in
@@ -2488,6 +2527,7 @@ async fn post_message(
 
         // Subscribe before sending the prompt so fast runtimes cannot emit and
         // finish the whole turn before the drain loop is listening.
+        emit_log("info", "bridge", "Sending prompt to agent…");
         if let Err(e) = runtime
             .send(AgentCommand::Prompt {
                 text: prompt_text,
@@ -2496,6 +2536,7 @@ async fn post_message(
             .await
         {
             tracing::error!(error = %e, session = %session_id, "prompt send failed");
+            emit_log("error", "bridge", &format!("Prompt send failed: {e}"));
             let _ = deltas.send(ServerFrame::MessageDone {
                 session_id: session_id.clone(),
                 message_id: assistant_seed_id,
@@ -2516,8 +2557,28 @@ async fn post_message(
                         text_delta: chunk,
                     });
                 }
+                AgentEvent::ToolCall { name, args, .. } => {
+                    tool_calls_acc.push(serde_json::json!({
+                        "name": name,
+                        "args": args,
+                    }));
+                    emit_log("info", "agent", &format!("Tool call: {}", name));
+                }
+                AgentEvent::AwaitingInput { .. } => {
+                    emit_log("warn", "agent", "Awaiting permission decision…");
+                }
+                AgentEvent::Reasoning(_) => {} // too noisy for the log panel
+                AgentEvent::Text(_) => {}      // streamed to the chat bubble, not logs
                 AgentEvent::Done { finish_reason } => {
                     terminal_event_seen = true;
+                    emit_log(
+                        "info",
+                        "agent",
+                        &format!(
+                            "Turn finished: {}",
+                            finish_reason.as_deref().unwrap_or("end_turn")
+                        ),
+                    );
                     let _ = deltas.send(ServerFrame::MessageDone {
                         session_id: session_id.clone(),
                         message_id: assistant_msg_id,
@@ -2570,6 +2631,7 @@ async fn post_message(
                 AgentEvent::Error(e) => {
                     terminal_event_seen = true;
                     tracing::warn!(error = %e, session = %session_id, "agent error event");
+                    emit_log("error", "agent", &e);
                     let content = format!("⚠ agent error: {e}");
                     let finish_reason = format!("error: {e}");
                     if let Ok(event) = bridge.append_system_message(
