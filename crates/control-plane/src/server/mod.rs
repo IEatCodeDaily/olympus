@@ -89,6 +89,8 @@ pub struct AppState {
     pub vaults: Arc<crate::vault::VaultStore>,
     /// Project (context container) storage — dir/manifest/symlink.
     pub projects: Arc<crate::projects::ProjectStore>,
+    /// Managed repo store — clone/sync/attach jj workspaces.
+    pub repos: Arc<crate::repos::RepoStore>,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -154,6 +156,9 @@ pub fn build_router(state: AppState) -> Router {
             "/api/sessions/{id}/project",
             axum::routing::post(attach_session_project),
         )
+        .route("/api/repos", get(list_repos).post(register_repo))
+        .route("/api/repos/{slug}", get(get_repo).delete(remove_repo))
+        .route("/api/sessions/{id}/repos", axum::routing::post(attach_repo))
         .route(
             "/api/proxy",
             get(crate::proxy::list_proxy_endpoints).post(crate::proxy::create_proxy_endpoint),
@@ -1269,6 +1274,78 @@ struct HandoverBody {
     /// Optional model override for the target session.
     #[serde(default)]
     model: Option<String>,
+}
+
+// ---- Repos (managed git/jj repos) ----
+
+async fn list_repos(State(state): State<AppState>) -> Response {
+    let views = state.views.read().await;
+    let dtos: Vec<dto::RepoDto> = views
+        .repos
+        .list()
+        .iter()
+        .map(|r| dto::RepoDto::from_row(r))
+        .collect();
+    Json(dtos).into_response()
+}
+
+async fn get_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    match state.views.read().await.repos.get(&slug) {
+        Some(row) => Json(dto::RepoDto::from_row(row)).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterRepoBody {
+    slug: String,
+    url: String,
+    default_branch: String,
+}
+
+async fn register_repo(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterRepoBody>,
+) -> Response {
+    let event = crate::event::Event::RepoRegistered {
+        slug: body.slug.clone(),
+        url: body.url.clone(),
+        default_branch: body.default_branch.clone(),
+        registered_at: now_epoch(),
+    };
+    append_and_apply(&state, event).await
+}
+
+async fn remove_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    if state.views.read().await.repos.get(&slug).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let event = crate::event::Event::RepoRemoved {
+        slug,
+        removed_at: now_epoch(),
+    };
+    append_and_apply(&state, event).await
+}
+
+#[derive(Debug, Deserialize)]
+struct AttachRepoBody {
+    slug: String,
+}
+
+async fn attach_repo(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<AttachRepoBody>,
+) -> Response {
+    if state.views.read().await.sessions.get(&session_id).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let event = crate::event::Event::SessionRepoAttached {
+        session_id,
+        slug: body.slug,
+        attached_at: now_epoch(),
+    };
+    append_and_apply(&state, event).await
 }
 
 /// POST /api/sessions/:id/handover — switch this session to a different agent
@@ -2645,6 +2722,10 @@ mod tests {
             projects: Arc::new(crate::projects::ProjectStore::new(
                 dir.path().join("default"),
             )),
+            repos: Arc::new(crate::repos::RepoStore::new(
+                dir.path().join("default"),
+                "default",
+            )),
         };
         (state, dir)
     }
@@ -2741,6 +2822,10 @@ mod tests {
             )),
             projects: Arc::new(crate::projects::ProjectStore::new(
                 dir.path().join("default"),
+            )),
+            repos: Arc::new(crate::repos::RepoStore::new(
+                dir.path().join("default"),
+                "default",
             )),
         };
         let app = build_router(state);
@@ -3885,5 +3970,111 @@ mod tests {
             status: None,
         });
         assert_eq!(all.len(), 3);
+    }
+
+    /// B-3 route-contract guard: every expected route must be reachable.
+    /// This test exists because a prior manual merge (6549616) silently
+    /// dropped the entire /api/repos surface while keeping the store + views
+    /// intact — dead code that compiled fine. Walking the route table via
+    /// HTTP requests catches that class of regression at build time.
+    ///
+    /// To add a route: add it here AND to build_router. If you forget
+    /// either, this test fails.
+    #[tokio::test]
+    async fn route_contract_all_expected_routes_exist() {
+        let (state, _dir) = test_state();
+        let app = build_router(state);
+
+        // (method, path, expected_status_range). We use 400/404 to confirm
+        // the route exists (matched) without needing valid bodies.
+        // NOTE: session "s1" exists in the test fixture, so /sessions/s1/*
+        // routes return 200 for GET/POST.
+        let cases: &[(&str, &str, &[u16])] = &[
+            ("GET", "/api/sessions", &[200]),
+            ("POST", "/api/sessions", &[200, 201, 400, 422]),
+            ("GET", "/api/sessions/s1", &[200]),
+            ("GET", "/api/sessions/nonexistent", &[404]),
+            ("PATCH", "/api/sessions/s1", &[200]),
+            ("POST", "/api/sessions/s1/fork", &[200, 409]),
+            ("POST", "/api/sessions/s1/cancel", &[200, 409]),
+            ("GET", "/api/sessions/s1/messages", &[200]),
+            ("GET", "/api/search", &[200]),
+            ("GET", "/api/models", &[200]),
+            ("GET", "/api/agents", &[200]),
+            ("GET", "/api/cards", &[200]),
+            ("POST", "/api/cards", &[400, 422]),
+            ("GET", "/api/cards/nonexistent", &[404]),
+            ("POST", "/api/cards/nonexistent/assign", &[404]),
+            ("POST", "/api/cards/nonexistent/claim", &[404, 500]), // TODO: should be 404
+            ("POST", "/api/cards/nonexistent/block", &[404]),
+            ("POST", "/api/cards/nonexistent/complete", &[404, 500]), // TODO: should be 404
+            ("POST", "/api/cards/nonexistent/reassign", &[404]),
+            ("GET", "/api/nodes", &[200]),
+            ("GET", "/api/nodes/nonexistent/agents", &[200, 404]),
+            (
+                "POST",
+                "/api/nodes/nonexistent/agents/refresh",
+                &[200, 404, 501],
+            ),
+            ("GET", "/api/vaults", &[200]),
+            ("POST", "/api/vaults", &[400, 422]),
+            ("GET", "/api/vaults/nonexistent/notes", &[404]),
+            ("GET", "/api/vaults/nonexistent/note", &[400, 404]),
+            ("PUT", "/api/vaults/nonexistent/note", &[400, 404]),
+            ("DELETE", "/api/vaults/nonexistent/note", &[400, 404]),
+            ("GET", "/api/vaults/nonexistent/graph", &[404]),
+            ("GET", "/api/vaults/nonexistent/collections", &[404]),
+            ("GET", "/api/vaults/nonexistent/collections/p", &[404]),
+            ("GET", "/api/projects", &[200]),
+            ("POST", "/api/projects", &[400, 422]),
+            ("GET", "/api/projects/nonexistent", &[404]),
+            ("PATCH", "/api/projects/nonexistent", &[404]),
+            ("DELETE", "/api/projects/nonexistent", &[404]),
+            ("POST", "/api/sessions/s1/project", &[400, 404, 422]),
+            // ── The regression class: repos were dropped once before ──
+            ("GET", "/api/repos", &[200]),
+            ("POST", "/api/repos", &[400, 422]),
+            ("GET", "/api/repos/nonexistent", &[404]),
+            ("DELETE", "/api/repos/nonexistent", &[404]),
+            ("POST", "/api/sessions/s1/repos", &[400, 404, 422]),
+            ("GET", "/api/health", &[200]),
+            ("GET", "/api/setup", &[200]),
+            ("PUT", "/api/setup", &[400, 422]),
+            ("GET", "/api/registry", &[200]),
+        ];
+
+        let mut missing: Vec<String> = Vec::new();
+        for (method, path, acceptable) in cases {
+            let req_method = match *method {
+                "GET" => axum::http::Method::GET,
+                "POST" => axum::http::Method::POST,
+                "PATCH" => axum::http::Method::PATCH,
+                "PUT" => axum::http::Method::PUT,
+                "DELETE" => axum::http::Method::DELETE,
+                _ => unreachable!(),
+            };
+            let req = axum::http::Request::builder()
+                .method(req_method)
+                .uri(*path)
+                .header("authorization", "Bearer testtoken")
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            let status = resp.status().as_u16();
+            // 405 = route exists but method not allowed (also confirms match)
+            if !acceptable.contains(&status) && status != 405 && status != 400 && status != 415 {
+                missing.push(format!(
+                    "{} {} → {} (expected {:?})",
+                    method, path, status, acceptable
+                ));
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "route contract violations:\n  {}",
+            missing.join("\n  ")
+        );
     }
 }

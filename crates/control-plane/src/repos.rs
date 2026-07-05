@@ -22,9 +22,9 @@ pub struct RepoStore {
 
 impl RepoStore {
     /// Create a store rooted at `<base_dir>/<org>/repos/`.
-    pub fn new(base_dir: &Path, org: &str) -> Self {
+    pub fn new(base_dir: impl AsRef<Path>, org: &str) -> Self {
         Self {
-            root: base_dir.join(org).join("repos"),
+            root: base_dir.as_ref().join(org).join("repos"),
             org: org.to_string(),
         }
     }

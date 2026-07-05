@@ -203,6 +203,10 @@ async fn main() -> Result<()> {
         projects: Arc::new(olympus_control_plane::projects::ProjectStore::new(
             org_workspace_root(&default_org())?,
         )),
+        repos: Arc::new(olympus_control_plane::repos::RepoStore::new(
+            &org_workspace_root(&default_org())?,
+            &default_org(),
+        )),
     };
 
     let sync_log = Arc::clone(&log_arc);
