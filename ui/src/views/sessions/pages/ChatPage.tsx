@@ -319,8 +319,21 @@ export function ChatPage({
       setQueue((cur) => cur.filter((m) => m.id !== id));
       try {
         await steerSession(sessionId, item.text);
-      } catch {
-        setQueue((cur) => [item, ...cur]);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg === "not_running") {
+          // No turn in flight — send as a normal prompt instead. The queue
+          // auto-drain will handle any remaining items after this one finishes.
+          const { model, thinking } = lastSendOpts.current;
+          try {
+            await doSendRef.current(item.text, model, thinking);
+          } catch {
+            setQueue((cur) => [item, ...cur]);
+          }
+        } else {
+          // Steer genuinely failed — restore so the user can retry.
+          setQueue((cur) => [item, ...cur]);
+        }
       }
     },
     [sessionId],
