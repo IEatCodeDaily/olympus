@@ -70,30 +70,28 @@ export function AppShell() {
           <FleetView />
         )}
 
-        {/* Other surfaces keep the shell-level sidebar + viewport split */}
-        {!sidebarCollapsed && surface === "vaults" && (
-          <SecondarySidebar width={sidebarWidth}>
-            <PlaceholderSidebar surface={surface} />
-          </SecondarySidebar>
+        {/* Vaults View owns its own sidebar + viewport layout */}
+        {surface === "vaults" && (
+          <VaultsView />
         )}
+
+        {/* Other surfaces keep the shell-level sidebar + viewport split */}
         {!sidebarCollapsed && (surface === "projects" || surface === "settings") && (
           <SecondarySidebar width={sidebarWidth}>
             <PlaceholderSidebar surface={surface} />
           </SecondarySidebar>
         )}
 
-        {/* Viewport for non-sessions, non-fleet surfaces */}
-        {surface !== "sessions" && surface !== "fleet" && (
+        {/* Viewport for shell-managed surfaces (projects, settings) */}
+        {surface === "projects" || surface === "settings" ? (
           <div className="viewport">
-            {surface === "vaults" ? (
-              <VaultsView />
-            ) : surface === "projects" ? (
+            {surface === "projects" ? (
               <ProjectsView />
             ) : surface === "settings" ? (
               <SettingsView />
             ) : null}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

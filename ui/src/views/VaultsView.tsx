@@ -9,6 +9,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon } from "../components/Icon";
 import { useVaults, useVaultNotes, qk } from "../hooks/queries";
+import { useUIStore } from "../store";
 import { createVault } from "../api";
 import type { NoteTreeEntry } from "../types";
 import { NotePage } from "./vaults/pages/NotePage";
@@ -18,6 +19,7 @@ import { parseRoute } from "../router";
 
 export function VaultsView() {
   const { location } = useRouterState();
+  const { sidebarCollapsed } = useUIStore();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { vaultId: routeVaultId, vaultPage } = parseRoute(location.pathname);
@@ -69,33 +71,37 @@ export function VaultsView() {
   };
 
   return (
-    <div className="view on" data-view="vaults">
-      <VaultSidebar
-        vaults={vaults}
-        activeVaultId={activeVaultId}
-        notes={notes}
-        activeNotePath={activeNotePath}
-        onSelectVault={handleSelectVault}
-        onSelectPage={handleSelectPage}
-        onOpenNote={handleOpenNote}
-        onNewVault={handleNewVault}
-        activePage={vaultPage}
-      />
-      <div className="gv-wrap">
-        {vaultPage === "note" ? (
-          <NotePage
-            vaultId={activeVaultId ?? ""}
-            notePath={activeNotePath}
-            onNavigateNote={handleOpenNote}
-          />
-        ) : vaultPage === "tables" ? (
-          <TablesPage vaultId={activeVaultId ?? ""} />
-        ) : (
-          <GraphPage vaultId={activeVaultId ?? ""} />
-        )}
-        <VaultAgentPanel vaultId={activeVaultId} />
+    <>
+      {!sidebarCollapsed && (
+        <VaultSidebar
+          vaults={vaults}
+          activeVaultId={activeVaultId}
+          notes={notes}
+          activeNotePath={activeNotePath}
+          onSelectVault={handleSelectVault}
+          onSelectPage={handleSelectPage}
+          onOpenNote={handleOpenNote}
+          onNewVault={handleNewVault}
+          activePage={vaultPage}
+        />
+      )}
+      <div className="viewport">
+        <div className="gv-wrap">
+          {vaultPage === "note" ? (
+            <NotePage
+              vaultId={activeVaultId ?? ""}
+              notePath={activeNotePath}
+              onNavigateNote={handleOpenNote}
+            />
+          ) : vaultPage === "tables" ? (
+            <TablesPage vaultId={activeVaultId ?? ""} />
+          ) : (
+            <GraphPage vaultId={activeVaultId ?? ""} />
+          )}
+          <VaultAgentPanel vaultId={activeVaultId} />
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

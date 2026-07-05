@@ -13,7 +13,7 @@ pub mod ws;
 pub mod test_support;
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     Arc,
 };
 
@@ -41,23 +41,34 @@ use dto::{
 };
 use ws::ServerFrame;
 
-/// Import progress, surfaced on `/api/health`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportState {
-    Idle,
-    Running,
-    Done,
-}
+/// Import progress, surfaced on `/api/health`. Stored as an atomic so the
+/// background import thread can flip it to Done without a lock.
+#[derive(Debug, Clone)]
+pub struct ImportState(pub Arc<AtomicU8>);
 
 impl ImportState {
-    fn as_str(&self) -> &'static str {
-        match self {
-            ImportState::Idle => "idle",
-            ImportState::Running => "running",
-            ImportState::Done => "done",
+    pub fn running() -> Self {
+        Self(Arc::new(AtomicU8::new(IMPORT_RUNNING)))
+    }
+    pub fn done() -> Self {
+        Self(Arc::new(AtomicU8::new(IMPORT_DONE)))
+    }
+    pub fn set_done(&self) {
+        self.0.store(IMPORT_DONE, Ordering::SeqCst);
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self.0.load(Ordering::SeqCst) {
+            IMPORT_IDLE => "idle",
+            IMPORT_RUNNING => "running",
+            IMPORT_DONE => "done",
+            _ => "unknown",
         }
     }
 }
+
+pub const IMPORT_IDLE: u8 = 0;
+pub const IMPORT_RUNNING: u8 = 1;
+pub const IMPORT_DONE: u8 = 2;
 
 /// Shared server state. Cheap to clone (everything behind `Arc`).
 #[derive(Clone)]
@@ -3226,8 +3237,8 @@ mod tests {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),
             token: Arc::new("testtoken".to_string()),
-            import_state: ImportState::Done,
-            hermes_profile: Arc::new("default".to_string()),
+            import_state: ImportState::done(),
+            hermes_profile: Arc::new("default".into()),
             deltas: tx,
             snapshot_sessions: 1,
             snapshot_messages: 1,
@@ -3327,7 +3338,7 @@ mod tests {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),
             token: Arc::new("testtoken".to_string()),
-            import_state: ImportState::Done,
+            import_state: ImportState::done(),
             hermes_profile: Arc::new("default".to_string()),
             deltas: tx,
             snapshot_sessions: 3,

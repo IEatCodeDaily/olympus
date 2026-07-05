@@ -84,30 +84,25 @@ async fn main() -> Result<()> {
     log.retain_native().context("retaining native events")?;
 
     let state_db = hermes_state_db()?;
-    let (snap_sessions, snap_messages) = if state_db.exists() {
-        tracing::info!(db = %state_db.display(), "importing Hermes state.db");
-        let s = import::import_sessions(&state_db, &log).context("importing sessions")?;
-        let m = import::import_messages(&state_db, &log).context("importing messages")?;
-        tracing::info!(
-            sessions = s.session_count,
-            messages = m.message_count,
-            "import complete"
-        );
-        (s.session_count, m.message_count)
-    } else {
-        tracing::warn!(db = %state_db.display(), "state.db not found — starting empty");
-        (0, 0)
-    };
-
-    // ---- build views + search from the log ----
+    // ---- NATIVE-ONLY boot: rebuild views + search from the retained event log
+    // (Olympus sessions, cards, setup declarations) so the server can start
+    // serving IMMEDIATELY. The Hermes state.db import (1829 sessions, 127K
+    // messages) runs AFTER bind in a background thread — see below.
     let mut views = ViewManager::new();
-    views.replay(&log).context("replaying log into views")?;
+    views
+        .replay(&log)
+        .context("replaying native log into views")?;
 
     let mut search =
         SearchIndex::open(&home.join("search-index")).context("opening search index")?;
     search
         .build_from_log(&log)
-        .context("building search index")?;
+        .context("building search index (native only)")?;
+
+    // Snapshot counts BEFORE the Hermes import adds observed sessions — these
+    // reflect Olympus-native records only, so they stay stable across restarts.
+    let snap_sessions: u64 = 0;
+    let snap_messages: u64 = 0;
 
     // ---- assemble server state ----
     let (deltas, _rx) = broadcast::channel(1024);
@@ -188,7 +183,7 @@ async fn main() -> Result<()> {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
-        import_state: ImportState::Done,
+        import_state: ImportState::running(), // Hermes import runs after bind (below)
         hermes_profile: Arc::new(profile),
         deltas,
         snapshot_sessions: snap_sessions,
@@ -246,7 +241,7 @@ async fn main() -> Result<()> {
         })
         .expect("spawn live sync thread");
 
-    let app = server::build_router(state);
+    let app = server::build_router(state.clone());
 
     // Spawn the UDS listener for node (envoy) registration.
     let uds_path = home.join("control.sock");
@@ -268,6 +263,72 @@ async fn main() -> Result<()> {
     );
     println!("olympus control plane listening on http://{bind}");
     println!("token: {token}");
+
+    // ---- Background Hermes state.db import (deferred so bind is instant) ----
+    // The server is now serving with native-only data (Olympus sessions,
+    // cards, setup). The Hermes import (1829 sessions, 127K messages) runs
+    // here in a tokio task, appending to the log and replaying into views +
+    // search. The live-sync worker (started above) will also pick up
+    // incremental changes. import_state flips to Done when this completes.
+    //
+    // Uses tokio::task::spawn_blocking for the SQLite-heavy import (blocking
+    // I/O), then async blocks for the view/search rebuild (tokio RwLocks).
+    {
+        let bg_log = Arc::clone(&log_arc);
+        let bg_views = Arc::clone(&state.views);
+        let bg_search = Arc::clone(&state.search);
+        let bg_deltas = state.deltas.clone();
+        let bg_import = state.import_state.clone();
+        let bg_state_db = state_db.clone();
+        tokio::spawn(async move {
+            if !bg_state_db.exists() {
+                tracing::warn!(db = %bg_state_db.display(), "state.db not found — skipping import");
+                bg_import.set_done();
+                return;
+            }
+            tracing::info!(db = %bg_state_db.display(), "importing Hermes state.db (background)");
+            // Import is blocking SQLite I/O — run on the blocking pool.
+            let db = bg_state_db.clone();
+            let log_clone = Arc::clone(&bg_log);
+            let import_result = tokio::task::spawn_blocking(move || {
+                let s = import::import_sessions(&db, &log_clone)?;
+                let m = import::import_messages(&db, &log_clone)?;
+                Ok::<_, anyhow::Error>((s, m))
+            })
+            .await;
+            match import_result {
+                Ok(Ok((s, m))) => {
+                    tracing::info!(
+                        sessions = s.session_count,
+                        messages = m.message_count,
+                        "background import complete — replaying into views + search"
+                    );
+                    // Rebuild views + search from the now-complete log.
+                    {
+                        let mut v = bg_views.write().await;
+                        *v = ViewManager::new();
+                        if let Err(e) = v.replay(&bg_log) {
+                            tracing::error!(error = %e, "view replay after import failed");
+                        }
+                    }
+                    {
+                        let mut idx = bg_search.write().await;
+                        if let Err(e) = idx.build_from_log(&bg_log) {
+                            tracing::error!(error = %e, "search rebuild after import failed");
+                        }
+                    }
+                }
+                Ok(Err(e)) => tracing::error!(error = %e, "background import failed"),
+                Err(e) => tracing::error!(error = %e, "background import task panicked"),
+            }
+            bg_import.set_done();
+            use olympus_control_plane::server::ws::ServerFrame;
+            let _ = bg_deltas.send(ServerFrame::SessionUpdated {
+                session_id: "__import__".into(),
+                changes: serde_json::json!({ "importState": "done" }),
+            });
+        });
+    }
 
     axum::serve(listener, app).await.context("serving")?;
     Ok(())

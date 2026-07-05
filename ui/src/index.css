@@ -538,8 +538,6 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
 .shell-placeholder-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: var(--space-16); }
 
 /* ── Vaults view (V-UI) ──────────────────────────── */
-/* Override gv-wrap direction for vaults so dtabs + content stack vertically */
-[data-view="vaults"].gv-wrap { flex-direction: column; }
 
 /* Content area: side-by-side note pane + agent panel */
 .vault-content {
