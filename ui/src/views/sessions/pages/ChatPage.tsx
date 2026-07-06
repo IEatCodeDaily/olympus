@@ -31,13 +31,22 @@ import {
   onFrame,
   respondPermission,
 } from "../../../api";
-import type { Message, ServerFrame } from "../../../types";
+import type { Message, ServerFrame, ToolCall } from "../../../types";
 import { MessageBubble } from "../components/MessageBubble";
+import { ToolCard } from "../components/ToolCard";
+import { DiffCard } from "../components/DiffCard";
+import { isDiffResult } from "../helpers";
 import { Composer } from "../components/Composer";
 import { ForkModal } from "../components/ForkModal";
 import { QueuePanel, type QueuedMsg } from "../components/QueuePanel";
 
 type AgentStatus = "idle" | "thinking" | "streaming" | "done";
+
+/** A chunk of the in-flight assistant turn, in arrival order. */
+type StreamPart =
+  | { type: "text"; text: string }
+  | { type: "toolCall"; toolCall: ToolCall }
+  | { type: "reasoning"; text: string };
 
 // ── Per-session queue persistence (survives refresh & session switches) ──
 function queueKey(sessionId: string): string {
@@ -76,12 +85,22 @@ export function ChatPage({
   const navigate = useNavigate();
 
   // streaming + status — ALL session-scoped, reset on session change.
-  const [streamingText, setStreamingText] = useState("");
+  // streamParts preserves arrival order so text, tool calls, and reasoning
+  // interleave naturally as the agent works.
+  const [streamParts, setStreamParts] = useState<StreamPart[]>([]);
+  const streamingText = streamParts
+    .filter((p) => p.type === "text")
+    .map((p) => p.text)
+    .join("");
   const [sending, setSending] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("idle");
   const [text, setText] = useState("");
   const [optimisticMsg, setOptimisticMsg] = useState<Message | null>(null);
   const [queue, setQueue] = useState<QueuedMsg[]>([]);
+  // Steer message IDs still waiting to be processed by the agent.
+  // The backend broadcasts a `steer.delivered` session.log when the
+  // steer-ack Done is consumed; IDs leave this set at that point.
+  const [pendingSteers, setPendingSteers] = useState<Set<number>>(new Set());
   // Pending permission request (ACP session/request_permission) for this session.
   const [permission, setPermission] = useState<{
     toolCall: string;
@@ -96,7 +115,7 @@ export function ChatPage({
   // persist across the route transition because React Router reuses the same
   // component instance for /sessions/$sessionId → /sessions/$otherId.
   useEffect(() => {
-    setStreamingText("");
+    setStreamParts([]);
     setSending(false);
     setAgentStatus("idle");
     setOptimisticMsg(null);
@@ -139,9 +158,9 @@ export function ChatPage({
   const isObserved = session?.managed === false;
 
   // Show a thinking indicator while the agent is working but hasn't streamed
-  // text yet (thinking) — cleared once streaming text or the final reply lands.
+  // any content yet (text/toolcall/reasoning) — cleared once parts arrive.
   const showThinking =
-    (agentStatus === "thinking" || sending) && !streamingText;
+    (agentStatus === "thinking" || sending) && streamParts.length === 0;
 
   // ── Rotating thinking hints (Claude Code-style) ──────────────────
   const hints = useMemo(
@@ -219,17 +238,39 @@ export function ChatPage({
     const unsub = onFrame((frame: ServerFrame) => {
       // Narrow by kind first — not all ServerFrame variants have sessionId.
       if (
-        (frame.kind === "message.delta" || frame.kind === "message.done") &&
+        (frame.kind === "message.delta" ||
+          frame.kind === "message.done" ||
+          frame.kind === "message.toolCall" ||
+          frame.kind === "message.reasoning") &&
         frame.sessionId !== sessionId
       ) {
         return;
       }
       if (frame.kind === "message.delta") {
-        setStreamingText((prev) => prev + frame.textDelta);
+        // Append to the last text part if it's the tail; otherwise push a new one.
+        setStreamParts((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.type === "text") {
+            return [...prev.slice(0, -1), { type: "text", text: last.text + frame.textDelta }];
+          }
+          return [...prev, { type: "text", text: frame.textDelta }];
+        });
         setAgentStatus("streaming");
       }
+      if (frame.kind === "message.toolCall") {
+        setStreamParts((prev) => [...prev, { type: "toolCall", toolCall: frame.toolCall }]);
+      }
+      if (frame.kind === "message.reasoning") {
+        setStreamParts((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.type === "reasoning") {
+            return [...prev.slice(0, -1), { type: "reasoning", text: last.text + frame.textDelta }];
+          }
+          return [...prev, { type: "reasoning", text: frame.textDelta }];
+        });
+      }
       if (frame.kind === "message.done") {
-        setStreamingText("");
+        setStreamParts([]);
         setSending(false);
         setAgentStatus("done");
         setOptimisticMsg(null);
@@ -253,7 +294,7 @@ export function ChatPage({
         if (lv === "idle") {
           setSending(false);
           setAgentStatus("idle");
-          setStreamingText("");
+          setStreamParts([]);
         }
         if (lv === "running") {
           setSending(true);
@@ -263,6 +304,22 @@ export function ChatPage({
       // Agent is blocked awaiting a permission decision for a gated tool call.
       if (frame.kind === "permission.required" && frame.sessionId === sessionId) {
         setPermission({ toolCall: frame.toolCall, options: frame.options });
+      }
+      if (frame.kind === "message.appended" && frame.sessionId === sessionId) {
+        // Track steer messages as pending until the agent processes them.
+        if (frame.message.finishReason === "steer") {
+          setPendingSteers((prev) => new Set(prev).add(frame.message.messageId));
+        }
+      }
+      // Steer delivery signal — the agent consumed the steer-ack Done.
+      // Clear all pending steers (steers are processed one at a time per turn).
+      if (
+        frame.kind === "session.log" &&
+        frame.sessionId === sessionId &&
+        frame.source === "bridge" &&
+        frame.message === "steer.delivered"
+      ) {
+        setPendingSteers(new Set());
       }
     });
     return unsub;
@@ -285,7 +342,7 @@ export function ChatPage({
     if (transcriptRef.current) {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
     }
-  }, [messages.length, streamingText, agentStatus]);
+  }, [messages.length, streamParts, agentStatus]);
 
   // ── Composer send: idle → send now; running → enqueue ─────────────
   const handleSend = useCallback(
@@ -320,7 +377,7 @@ export function ChatPage({
     }
     setSending(false);
     setAgentStatus("idle");
-    setStreamingText("");
+    setStreamParts([]);
   }, [sessionId]);
 
   // ── Queue management ────────────────────────────────────────────
@@ -420,7 +477,7 @@ export function ChatPage({
             {isLoading && (
               <div className="msg-empty">Loading messages…</div>
             )}
-            {!isLoading && messages.length === 0 && !streamingText && (
+            {!isLoading && messages.length === 0 && streamParts.length === 0 && (
               <div className="msg-empty">
                 No messages yet. Send a message below.
               </div>
@@ -429,15 +486,37 @@ export function ChatPage({
               <MessageBubble
                 key={`${sessionId}-${m.messageId}`}
                 msg={m}
+                steerPending={pendingSteers.has(m.messageId)}
                 onFork={handleForkRequest}
               />
             ))}
-            {/* Streaming assistant reply */}
-            {streamingText && (
+            {/* Streaming assistant reply — interleaved text, tool calls, reasoning */}
+            {streamParts.length > 0 && (
               <div className="msg-ai">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {streamingText}
-                </ReactMarkdown>
+                {streamParts.map((part, i) => {
+                  if (part.type === "toolCall") {
+                    return isDiffResult(part.toolCall) ? (
+                      <DiffCard key={`tc-${i}`} tc={part.toolCall} />
+                    ) : (
+                      <ToolCard key={`tc-${i}`} tc={part.toolCall} idx={i} expanded={false} onToggle={() => {}} />
+                    );
+                  }
+                  if (part.type === "reasoning") {
+                    return (
+                      <div key={`r-${i}`} className="reasoning-block stream-reasoning">
+                        <span className="reasoning-toggle gk" style={{ fontSize: 10 }}>
+                          thinking
+                        </span>
+                        <div className="reasoning-body">{part.text}</div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <ReactMarkdown key={`t-${i}`} remarkPlugins={[remarkGfm]}>
+                      {part.text}
+                    </ReactMarkdown>
+                  );
+                })}
               </div>
             )}
             {/* Thinking indicator — agent is working, no text streamed yet.

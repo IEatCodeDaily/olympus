@@ -118,6 +118,8 @@ export type ServerFrame =
   | { kind: "session.removed"; sessionId: string }
   | { kind: "message.appended"; sessionId: string; message: Message }
   | { kind: "message.delta"; sessionId: string; messageId: number; textDelta: string }
+  | { kind: "message.toolCall"; sessionId: string; messageId: number; toolCall: ToolCall }
+  | { kind: "message.reasoning"; sessionId: string; messageId: number; textDelta: string }
   | { kind: "message.done"; sessionId: string; messageId: number; finishReason: string | null }
   | { kind: "session.log"; sessionId: string; level: "info" | "warn" | "error"; source: string; message: string; timestamp: number }
   | { kind: "sync.status"; connected: boolean }

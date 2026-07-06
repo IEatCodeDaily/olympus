@@ -10,6 +10,17 @@ export function fmtTime(ts: number): string {
   });
 }
 
+/** Short datetime: "7/5, 4:07 PM" — matches the reference screenshot style. */
+export function fmtDateTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
 export function timeAgo(ts: number): string {
   const diff = Date.now() / 1000 - ts;
   if (diff < 60) return "now";

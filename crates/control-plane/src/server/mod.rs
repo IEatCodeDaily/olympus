@@ -2616,16 +2616,35 @@ async fn post_message(
                     });
                 }
                 AgentEvent::ToolCall { name, args, .. } => {
-                    tool_calls_acc.push(serde_json::json!({
-                        "name": name,
-                        "args": args,
-                    }));
+                    let parsed_args = serde_json::from_str::<serde_json::Value>(&args)
+                        .unwrap_or(serde_json::json!({ "raw": args }));
+                    let tc_json = serde_json::json!({ "name": name, "args": parsed_args });
+                    tool_calls_acc.push(tc_json.clone());
                     emit_log("info", "agent", &format!("Tool call: {}", name));
+                    // Stream the tool call live so the UI can interleave it
+                    // between text chunks as it happens, not all at the end.
+                    let _ = deltas.send(ServerFrame::MessageToolCall {
+                        session_id: session_id.clone(),
+                        message_id: assistant_msg_id,
+                        tool_call: crate::server::dto::ToolCallDto {
+                            id: None,
+                            name: name.clone(),
+                            args: parsed_args,
+                            label: None,
+                        },
+                    });
                 }
                 AgentEvent::AwaitingInput { .. } => {
                     emit_log("warn", "agent", "Awaiting permission decision…");
                 }
-                AgentEvent::Reasoning(_) => {} // too noisy for the log panel
+                AgentEvent::Reasoning(delta) => {
+                    // Stream reasoning/CoT chunks live alongside text + tool calls.
+                    let _ = deltas.send(ServerFrame::MessageReasoning {
+                        session_id: session_id.clone(),
+                        message_id: assistant_msg_id,
+                        text_delta: delta,
+                    });
+                }
                 AgentEvent::Text(_) => {}      // streamed to the chat bubble, not logs
                 AgentEvent::Done { finish_reason } => {
                     // Skip the Done ack from a /steer slash command. The Hermes
@@ -2636,6 +2655,15 @@ async fn post_message(
                     if bridge.take_steer_pending(&session_id).await {
                         tracing::debug!(session = %session_id, "skipped steer-ack Done");
                         suppressing_steer_ack = false; // resume normal text capture
+                        // Broadcast delivery status so the steer bubble's
+                        // badge flips from 'pending' to 'delivered'.
+                        let _ = deltas.send(ServerFrame::SessionLog {
+                            session_id: session_id.clone(),
+                            level: "info".into(),
+                            source: "bridge".into(),
+                            message: "steer.delivered".into(),
+                            timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+                        });
                         continue;
                     }
                     terminal_event_seen = true;

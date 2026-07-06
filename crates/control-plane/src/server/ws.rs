@@ -16,7 +16,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::AppState;
-use crate::server::dto::{MessageDto, SessionDto};
+use crate::server::dto::{MessageDto, SessionDto, ToolCallDto};
 
 /// Server→client frames (api-contract.md §ServerFrame). Internally tagged on
 /// `kind`, camelCase fields.
@@ -42,6 +42,21 @@ pub enum ServerFrame {
     /// A chunk of assistant text streamed from the agent (token-level delta).
     #[serde(rename = "message.delta", rename_all = "camelCase")]
     MessageDelta {
+        session_id: String,
+        message_id: u64,
+        text_delta: String,
+    },
+    /// A tool call the agent is invoking, streamed live (not at turn end).
+    /// Lets the UI interleave tool cards between text chunks as they happen.
+    #[serde(rename = "message.toolCall", rename_all = "camelCase")]
+    MessageToolCall {
+        session_id: String,
+        message_id: u64,
+        tool_call: ToolCallDto,
+    },
+    /// A reasoning/CoT chunk streamed from the agent (token-level delta).
+    #[serde(rename = "message.reasoning", rename_all = "camelCase")]
+    MessageReasoning {
         session_id: String,
         message_id: u64,
         text_delta: String,

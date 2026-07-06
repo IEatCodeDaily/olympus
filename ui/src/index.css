@@ -387,6 +387,28 @@ button {
 .msg-acts button { display: flex; padding: 3px; border-radius: var(--radius-sm); color: var(--faint); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .msg-acts button:hover { background: var(--hover); color: var(--text); }
 
+/* ── Message toolbar: [Copy] [Fork] datetime ──
+   Always visible (not hover-only), inline at the bottom of each message.
+   Matches the reference screenshot: icon buttons left, datetime right. */
+.msg-toolbar { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-3); opacity: 0.5; transition: opacity var(--dur) var(--ease); }
+.msg-user .msg-toolbar { justify-content: flex-end; }
+.msg-ai .msg-toolbar { justify-content: flex-start; }
+.msg-toolbar:hover, .msg-user:hover .msg-toolbar, .msg-ai:hover .msg-toolbar { opacity: 1; }
+.mt-btn { display: flex; padding: 2px 4px; border-radius: var(--radius-sm); color: var(--faint); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); cursor: pointer; border: none; background: none; }
+.mt-btn:hover { background: var(--hover); color: var(--text); }
+.mt-dt { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); margin-left: var(--space-2); white-space: nowrap; }
+.msg-user .mt-dt { margin-left: 0; margin-right: var(--space-2); }
+
+/* Steer delivery status */
+.steer-pending { color: var(--amber, #e8a838); }
+.steer-pending::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-left: 4px; animation: pulse 1.5s ease-in-out infinite; }
+.steer-delivered { color: var(--silver); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Streamed reasoning block (during turn) */
+.stream-reasoning { margin-bottom: var(--space-4); }
+.stream-reasoning .reasoning-body { font-size: var(--fs-12); color: var(--faint); font-style: italic; }
+
 /* ── Generic view: progress bars, toggle, columns ── */
 .gbar { height: 6px; background: var(--hover); border-radius: var(--radius-full); overflow: hidden; }
 .gbar>i { display: block; height: 100%; background: var(--silver); }
