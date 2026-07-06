@@ -4,11 +4,13 @@
  * Design:
  *  - User = right-aligned elevated bubble; agent = left/default.
  *  - Steer = user bubble with dashed border + ⚡ badge (pending → delivered).
- *  - Toolbar at bottom: [Copy] [Fork] <datetime>
- *    Copy and Fork are icon buttons; datetime is right-aligned muted text.
+ *  - Assistant tool calls are interleaved at their `anchor` offset inside
+ *    the markdown body — not dumped at the bottom. Each card carries its
+ *    lifecycle status (pending / in_progress / completed / failed).
+ *  - Toolbar at bottom: [Copy] [Fork] <datetime> (hover-only).
  */
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -24,7 +26,6 @@ export const MessageBubble = React.memo(function MessageBubble({
   onFork,
 }: {
   msg: Message;
-  /** True when this steer message hasn't been processed by the agent yet. */
   steerPending?: boolean;
   onFork: () => void;
 }) {
@@ -59,12 +60,47 @@ export const MessageBubble = React.memo(function MessageBubble({
     );
   }
 
-  // Tool-result messages (role === "tool") are SUPPRESSED — they are the
-  // result of a tool call already shown inline in the assistant message's
-  // toolCalls array. Rendering them separately creates duplicate dropdowns.
-  if (msg.role === "tool") {
-    return null;
-  }
+  if (msg.role === "tool") return null;
+
+  // Build chronologically interleaved segments: text split at each tool call's
+  // anchor offset, with the card inserted between segments.
+  const segments = useMemo(() => {
+    const text = msg.content ?? "";
+    const calls = msg.toolCalls ?? [];
+    if (calls.length === 0) return [{ type: "text" as const, text }];
+
+    // Calls without an anchor go to the end (legacy / old persisted messages).
+    const anchored = calls.filter((c) => c.anchor != null);
+    const unanchored = calls.filter((c) => c.anchor == null);
+
+    // Sort anchored calls by their offset within the text.
+    const sorted = [...anchored].sort((a, b) => (a.anchor! - b.anchor!));
+
+    const segs: Array<{ type: "text"; text: string } | { type: "call"; tc: ToolCall }> = [];
+    let cursor = 0;
+    let cardIdx = 0;
+    for (const tc of sorted) {
+      const off = tc.anchor!;
+      // Clamp to text length (anchors are codepoint offsets; slice works on
+      // UTF-16 code units, but for typical ASCII-heavy markdown this is fine;
+      // worst case the split point is slightly off but no content is lost).
+      const safeOff = Math.min(off, text.length);
+      if (safeOff > cursor) {
+        segs.push({ type: "text", text: text.slice(cursor, safeOff) });
+      }
+      segs.push({ type: "call", tc });
+      cardIdx++;
+      cursor = safeOff;
+    }
+    if (cursor < text.length) {
+      segs.push({ type: "text", text: text.slice(cursor) });
+    }
+    // Append unanchored calls at the end.
+    for (const tc of unanchored) {
+      segs.push({ type: "call", tc });
+    }
+    return segs;
+  }, [msg.content, msg.toolCalls]);
 
   return (
     <div className={isSteer ? "msg-user msg-steer" : isUser ? "msg-user" : "msg-ai"} data-ts={dt}>
@@ -96,32 +132,30 @@ export const MessageBubble = React.memo(function MessageBubble({
         </div>
       )}
 
-      {/* Content */}
+      {/* Content — interleaved for assistant, plain for user */}
       {isUser ? (
         <span>{msg.content}</span>
       ) : (
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {msg.content ?? ""}
-        </ReactMarkdown>
-      )}
-
-      {/* Tool calls embedded in assistant message */}
-      {msg.toolCalls && msg.toolCalls.length > 0 && (
-        <div className="tc-list">
-          {msg.toolCalls.map((tc, idx) =>
-            isDiffResult(tc) ? (
-              <DiffCard key={idx} tc={tc} />
+        segments.map((seg, i) => {
+          if (seg.type === "call") {
+            return isDiffResult(seg.tc) ? (
+              <DiffCard key={`tc-${i}`} tc={seg.tc} />
             ) : (
               <ToolCard
-                key={idx}
-                tc={tc}
-                idx={idx}
-                expanded={tcExpanded.has(idx)}
+                key={`tc-${i}`}
+                tc={seg.tc}
+                idx={i}
+                expanded={tcExpanded.has(i)}
                 onToggle={toggleTc}
               />
-            ),
-          )}
-        </div>
+            );
+          }
+          return (
+            <ReactMarkdown key={`t-${i}`} remarkPlugins={[remarkGfm]}>
+              {seg.text}
+            </ReactMarkdown>
+          );
+        })
       )}
 
       {/* Toolbar: [Copy] [Fork] datetime */}
@@ -138,5 +172,4 @@ export const MessageBubble = React.memo(function MessageBubble({
   );
 });
 
-// Re-export for convenience
 export type { ToolCall };

@@ -2615,24 +2615,99 @@ async fn post_message(
                         text_delta: chunk,
                     });
                 }
-                AgentEvent::ToolCall { name, args, .. } => {
-                    let parsed_args = serde_json::from_str::<serde_json::Value>(&args)
-                        .unwrap_or(serde_json::json!({ "raw": args }));
-                    let tc_json = serde_json::json!({ "name": name, "args": parsed_args });
-                    tool_calls_acc.push(tc_json.clone());
-                    emit_log("info", "agent", &format!("Tool call: {}", name));
-                    // Stream the tool call live so the UI can interleave it
-                    // between text chunks as it happens, not all at the end.
-                    let _ = deltas.send(ServerFrame::MessageToolCall {
-                        session_id: session_id.clone(),
-                        message_id: assistant_msg_id,
-                        tool_call: crate::server::dto::ToolCallDto {
-                            id: None,
-                            name: name.clone(),
-                            args: parsed_args,
-                            label: None,
-                        },
-                    });
+                AgentEvent::ToolCall { id, name, args, status, result } => {
+                    // Two shapes arrive here:
+                    //  - `tool_call` (new invocation): has name+args, status
+                    //    "pending" (queued/awaiting permission) or "in_progress".
+                    //  - `tool_call_update`: status transition and/or result.
+                    // Match updates to their originating call by ACP toolCallId;
+                    // fall back to "most recent entry without a result" when the
+                    // id is missing (some adapters omit it on updates).
+                    let is_update = args.is_empty() && !tool_calls_acc.is_empty() && {
+                        // An update either carries a known id or has no args.
+                        id.as_deref().map_or(true, |i| {
+                            tool_calls_acc.iter().any(|tc| {
+                                tc.get("id").and_then(|v| v.as_str()) == Some(i)
+                            })
+                        })
+                    };
+                    if is_update {
+                        let idx = tool_calls_acc
+                            .iter()
+                            .rposition(|tc| match id.as_deref() {
+                                Some(i) => tc.get("id").and_then(|v| v.as_str()) == Some(i),
+                                None => tc.get("result").is_none(),
+                            })
+                            .or_else(|| {
+                                tool_calls_acc.iter().rposition(|tc| tc.get("result").is_none())
+                            });
+                        if let Some(idx) = idx {
+                            let tc = &mut tool_calls_acc[idx];
+                            if let Some(s) = &status {
+                                tc["status"] = serde_json::json!(s);
+                            }
+                            if let Some(r) = &result {
+                                tc["result"] = serde_json::json!(r);
+                            }
+                            if !name.is_empty() {
+                                tc["name"] = serde_json::json!(name);
+                            }
+                            // Stream the updated card (full state) so the UI
+                            // patches it in place — chronological position is
+                            // preserved because the UI matches by id.
+                            let dto = crate::server::dto::ToolCallDto {
+                                id: tc.get("id").and_then(|v| v.as_str()).map(String::from),
+                                name: tc
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("tool")
+                                    .to_string(),
+                                args: tc.get("args").cloned().unwrap_or(serde_json::json!({})),
+                                label: None,
+                                status: tc.get("status").and_then(|v| v.as_str()).map(String::from),
+                                result: tc.get("result").and_then(|v| v.as_str()).map(String::from),
+                            };
+                            let _ = deltas.send(ServerFrame::MessageToolCall {
+                                session_id: session_id.clone(),
+                                message_id: assistant_msg_id,
+                                tool_call: dto,
+                            });
+                        }
+                    } else {
+                        // New tool call — record and stream with its status.
+                        // `anchor` = codepoint offset into the assistant text at
+                        // the moment the call fired; the UI uses it to interleave
+                        // the card chronologically inside the final message.
+                        let parsed_args = serde_json::from_str::<serde_json::Value>(&args)
+                            .unwrap_or(serde_json::json!({ "raw": args }));
+                        let status_str = status.clone().unwrap_or_else(|| "pending".into());
+                        let mut entry = serde_json::json!({
+                            "name": name,
+                            "args": parsed_args,
+                            "status": status_str,
+                            "anchor": assistant_text.chars().count(),
+                        });
+                        if let Some(i) = &id {
+                            entry["id"] = serde_json::json!(i);
+                        }
+                        if let Some(r) = &result {
+                            entry["result"] = serde_json::json!(r);
+                        }
+                        tool_calls_acc.push(entry);
+                        emit_log("info", "agent", &format!("Tool call: {}", name));
+                        let _ = deltas.send(ServerFrame::MessageToolCall {
+                            session_id: session_id.clone(),
+                            message_id: assistant_msg_id,
+                            tool_call: crate::server::dto::ToolCallDto {
+                                id: id.clone(),
+                                name: name.clone(),
+                                args: parsed_args,
+                                label: None,
+                                status: status.clone(),
+                                result: result.clone(),
+                            },
+                        });
+                    }
                 }
                 AgentEvent::AwaitingInput { .. } => {
                     emit_log("warn", "agent", "Awaiting permission decision…");
@@ -2765,15 +2840,22 @@ async fn post_message(
                     });
                     break;
                 }
-                AgentEvent::ToolCall { name, args, result } => {
+                AgentEvent::ToolCall { id, name, args, status, result } => {
                     // Accumulate so the final assistant message carries its tool
                     // calls (rendered in the transcript's tool UI).
-                    tool_calls_acc.push(serde_json::json!({
+                    let mut entry = serde_json::json!({
                         "name": name,
                         "args": serde_json::from_str::<serde_json::Value>(&args)
                             .unwrap_or(serde_json::Value::String(args.clone())),
                         "result": result,
-                    }));
+                    });
+                    if let Some(i) = &id {
+                        entry["id"] = serde_json::json!(i);
+                    }
+                    if let Some(s) = &status {
+                        entry["status"] = serde_json::json!(s);
+                    }
+                    tool_calls_acc.push(entry);
                 }
                 AgentEvent::Reasoning(_) => {
                     // Accumulate silently for now; reasoning rendering is separate.

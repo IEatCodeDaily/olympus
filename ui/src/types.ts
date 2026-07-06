@@ -54,6 +54,11 @@ export interface ToolCall {
   args: unknown;
   /** Display label when the provider gives one, else omitted. */
   label?: string | null;
+  /** Lifecycle: "pending" (awaiting permission/queued) | "in_progress" | "completed" | "failed". */
+  status?: string | null;
+  /** Codepoint offset into the assistant text where this call fired — used to
+   *  interleave the card chronologically inside the final message. */
+  anchor?: number | null;
   /** Tool result, when known. null/absent while the call is in-flight. */
   result?: string | null;
 }

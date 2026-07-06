@@ -1,13 +1,37 @@
 /**
- * ToolCard — a collapsible tool-call dropdown.
+ * ToolCard — a collapsible tool-call dropdown with lifecycle status.
  *
- * Bug 8: renders as a collapsible dropdown (icon + toolName + status),
- * expandable to show input parameters (args) and output (result).
+ * Status rendering:
+ *  - pending:     amber clock  — awaiting permission / queued
+ *  - in_progress: amber spinner — running
+ *  - completed:   green check
+ *  - failed:      red x
  */
 
 import React from "react";
 import { Icon } from "../../../components/Icon";
 import type { ToolCall } from "../../../types";
+
+function StatusBadge({ status }: { status: string }) {
+  const cls = `tc-status tc-${status}`;
+  const label =
+    status === "pending"
+      ? "waiting"
+      : status === "in_progress"
+        ? "running"
+        : status === "failed"
+          ? "failed"
+          : status;
+  return (
+    <span className={cls}>
+      {status === "pending" && <Icon name="clock" size={10} />}
+      {status === "in_progress" && <span className="tc-spin" />}
+      {status === "completed" && <Icon name="check" size={10} />}
+      {status === "failed" && <Icon name="x" size={10} />}
+      {label}
+    </span>
+  );
+}
 
 export function ToolCard({
   tc,
@@ -20,9 +44,7 @@ export function ToolCard({
   expanded: boolean;
   onToggle: (idx: number) => void;
 }) {
-  const done = tc.result != null;
-  const statusIcon = done ? "check" : "clock";
-  const statusColor = done ? "var(--green)" : "var(--amber)";
+  const status = tc.status ?? (tc.result != null ? "completed" : "pending");
 
   const argsStr = React.useMemo(() => {
     if (!tc.args) return "";
@@ -41,7 +63,7 @@ export function ToolCard({
         style={{ cursor: "pointer" }}
         onClick={() => onToggle(idx)}
       >
-        <Icon name={statusIcon} size={12} style={{ color: statusColor } as React.CSSProperties} />
+        <StatusBadge status={status} />
         <span className="nm">{tc.label ?? tc.name}</span>
         <span className="sp" />
         <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />

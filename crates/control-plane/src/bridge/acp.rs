@@ -210,13 +210,26 @@ impl AgentEvent {
                     .get("title")
                     .and_then(|t| t.as_str())
                     .unwrap_or("tool");
+                let id = update
+                    .get("toolCallId")
+                    .and_then(|i| i.as_str())
+                    .map(String::from);
                 let args = update
                     .get("content")
                     .map(|c| serde_json::to_string(c).unwrap_or_default())
                     .unwrap_or_default();
+                // Initial status: ACP sends "pending" (queued / awaiting
+                // permission) or "in_progress" (already running).
+                let status = update
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("pending")
+                    .to_string();
                 Some(AgentEvent::ToolCall {
+                    id,
                     name: title.into(),
                     args,
+                    status: Some(status),
                     result: None,
                 })
             }
@@ -224,21 +237,31 @@ impl AgentEvent {
                 let title = update
                     .get("title")
                     .and_then(|t| t.as_str())
-                    .unwrap_or("tool");
+                    .unwrap_or("");
+                let id = update
+                    .get("toolCallId")
+                    .and_then(|i| i.as_str())
+                    .map(String::from);
                 let content_str = update
                     .get("content")
                     .map(|c| serde_json::to_string(c).unwrap_or_default())
                     .unwrap_or_default();
-                let status = update.get("status").and_then(|s| s.as_str());
-                // Only attach a result when the tool call has completed.
-                let result = if status == Some("completed") {
+                let status = update
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .map(String::from);
+                // Attach the result on terminal states (completed OR failed) —
+                // a failed tool's error output matters as much as a success.
+                let result = if matches!(status.as_deref(), Some("completed") | Some("failed")) {
                     Some(content_str)
                 } else {
                     None
                 };
                 Some(AgentEvent::ToolCall {
+                    id,
                     name: title.into(),
                     args: String::new(),
+                    status,
                     result,
                 })
             }

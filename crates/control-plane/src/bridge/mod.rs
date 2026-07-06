@@ -63,8 +63,12 @@ pub enum AgentEvent {
     Text(String),
     /// A tool call / tool result (from `tool_call` / `tool_call_update`).
     ToolCall {
+        /// ACP `toolCallId` — the stable key for matching updates to calls.
+        id: Option<String>,
         name: String,
         args: String,
+        /// ACP lifecycle status: "pending" | "in_progress" | "completed" | "failed".
+        status: Option<String>,
         result: Option<String>,
     },
     /// A reasoning chunk (from `agent_thought_chunk`).
@@ -335,9 +339,11 @@ mod tests {
         };
         let event = AgentEvent::from_notification(&notif).expect("map tool_call");
         match event {
-            AgentEvent::ToolCall { name, args, result } => {
+            AgentEvent::ToolCall { id, name, args, status, result } => {
+                assert_eq!(id.as_deref(), Some("tc-1"));
                 assert!(name.contains("terminal") || name.contains("echo") || !name.is_empty());
                 assert!(!args.is_empty());
+                assert_eq!(status.as_deref(), Some("pending"));
                 assert!(result.is_none());
             }
             other => panic!("expected ToolCall, got {other:?}"),

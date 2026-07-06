@@ -162,6 +162,12 @@ pub struct ToolCallDto {
     /// Display label when the provider gives one (title), else the name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Lifecycle status: "pending" | "in_progress" | "completed" | "failed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Tool output, present once the call reaches a terminal state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
 }
 
 /// Parse the OpenAI-style `tool_calls` JSON string stored on an assistant

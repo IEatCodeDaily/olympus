@@ -258,7 +258,43 @@ export function ChatPage({
         setAgentStatus("streaming");
       }
       if (frame.kind === "message.toolCall") {
-        setStreamParts((prev) => [...prev, { type: "toolCall", toolCall: frame.toolCall }]);
+        setStreamParts((prev) => {
+          const tc = frame.toolCall;
+          // Update in place when we already have this call (matched by id, or
+          // by "most recent card without a result" when the id is absent) —
+          // this preserves the card's chronological position in the stream.
+          const idx =
+            tc.id != null
+              ? prev.findIndex(
+                  (p) => p.type === "toolCall" && p.toolCall.id === tc.id,
+                )
+              : (() => {
+                  for (let i = prev.length - 1; i >= 0; i--) {
+                    const p = prev[i];
+                    if (p.type === "toolCall" && p.toolCall.result == null) return i;
+                  }
+                  return -1;
+                })();
+          if (idx >= 0) {
+            const next = [...prev];
+            const existing = next[idx] as { type: "toolCall"; toolCall: ToolCall };
+            next[idx] = {
+              type: "toolCall",
+              toolCall: {
+                ...existing.toolCall,
+                ...tc,
+                // Don't let an empty-name update wipe the original name/args.
+                name: tc.name || existing.toolCall.name,
+                args:
+                  tc.args && Object.keys(tc.args as object).length > 0
+                    ? tc.args
+                    : existing.toolCall.args,
+              },
+            };
+            return next;
+          }
+          return [...prev, { type: "toolCall", toolCall: tc }];
+        });
       }
       if (frame.kind === "message.reasoning") {
         setStreamParts((prev) => {
