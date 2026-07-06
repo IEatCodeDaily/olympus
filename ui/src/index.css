@@ -388,12 +388,12 @@ button {
 .msg-acts button:hover { background: var(--hover); color: var(--text); }
 
 /* ── Message toolbar: [Copy] [Fork] datetime ──
-   Always visible (not hover-only), inline at the bottom of each message.
-   Matches the reference screenshot: icon buttons left, datetime right. */
-.msg-toolbar { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-3); opacity: 0.5; transition: opacity var(--dur) var(--ease); }
+   Hover-only (matches the old action bar behavior). Hidden by default,
+   fades in on message hover. */
+.msg-toolbar { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-3); opacity: 0; pointer-events: none; transition: opacity var(--dur) var(--ease); }
 .msg-user .msg-toolbar { justify-content: flex-end; }
 .msg-ai .msg-toolbar { justify-content: flex-start; }
-.msg-toolbar:hover, .msg-user:hover .msg-toolbar, .msg-ai:hover .msg-toolbar { opacity: 1; }
+.msg-user:hover .msg-toolbar, .msg-ai:hover .msg-toolbar, .msg-toolbar:hover { opacity: 1; pointer-events: auto; }
 .mt-btn { display: flex; padding: 2px 4px; border-radius: var(--radius-sm); color: var(--faint); transition: background var(--dur) var(--ease), color var(--dur) var(--ease); cursor: pointer; border: none; background: none; }
 .mt-btn:hover { background: var(--hover); color: var(--text); }
 .mt-dt { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); margin-left: var(--space-2); white-space: nowrap; }

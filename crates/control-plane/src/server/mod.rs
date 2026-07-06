@@ -2944,6 +2944,8 @@ async fn steer_session(
     }
     // Persist the steer as a user message with finish_reason="steer" so the
     // transcript shows it as a distinct bubble (an interrupt, not a new turn).
+    // Use max(message_id)+1 to avoid colliding with the in-flight assistant
+    // message ID (count+1 can collide after window eviction).
     let (hermes_id, steer_msg_id) = {
         let v = state.views.read().await;
         let sid = v
@@ -2951,8 +2953,15 @@ async fn steer_session(
             .get(&id)
             .map(|r| r.hermes_id.clone())
             .unwrap_or_default();
-        let next_id = v.messages.count(&id) + 1;
-        (sid, next_id)
+        let max_id = v
+            .messages
+            .recent(&id, usize::MAX)
+            .iter()
+            .map(|m| m.message_id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        (sid, max_id)
     };
     if let Ok(event) = state
         .bridge
