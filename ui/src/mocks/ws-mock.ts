@@ -45,10 +45,26 @@ class MockWebSocket {
       return;
     }
     if (frame.kind === "subscribe") {
-      this.subscriptions.add(frame.sessionId);
-      this.startMessageStream(frame.sessionId);
+      for (const id of frame.sessionIds) {
+        this.subscriptions.add(id);
+        this.startMessageStream(id);
+      }
     } else if (frame.kind === "unsubscribe") {
-      this.subscriptions.delete(frame.sessionId);
+      if (frame.sessionIds.length === 0) {
+        this.subscriptions.clear();
+      } else {
+        for (const id of frame.sessionIds) this.subscriptions.delete(id);
+      }
+    } else if (frame.kind === "typing") {
+      // Echo a user.typing frame back so the UI can be developed/tested in
+      // mock mode. Ephemeral — never persisted.
+      const expiresAt = Date.now() / 1000 + 5;
+      this.emit({
+        kind: "user.typing",
+        sessionId: frame.sessionId,
+        who: "you",
+        expiresAt,
+      });
     }
   }
 

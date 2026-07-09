@@ -245,16 +245,26 @@ export type ServerFrame =
   | { kind: "message.appended"; sessionId: string; message: Message }
   | { kind: "message.delta"; sessionId: string; messageId: number; textDelta: string } // streaming token
   | { kind: "message.done"; sessionId: string; messageId: number; finishReason: string | null }
-  | { kind: "sync.status"; connected: boolean };
+  | { kind: "sync.status"; connected: boolean }
+  | { kind: "user.typing"; sessionId: string; who: string; expiresAt: number }; // ephemeral (S8)
 
 export type ClientFrame =
-  | { kind: "subscribe"; sessionId: string }    // start receiving this session's message frames
-  | { kind: "unsubscribe"; sessionId: string };
+  | { kind: "subscribe"; sessionIds: string[] }    // narrow to these sessions (default = firehose)
+  | { kind: "unsubscribe"; sessionIds: string[] }  // empty array reverts to firehose
+  | { kind: "typing"; sessionId: string };          // ephemeral typing presence (S8)
 ```
 
 - The session-list view subscribes implicitly (gets all `session.*` frames).
-- The chat view sends `subscribe {sessionId}` to receive `message.*` frames for
+- The chat view sends `subscribe {sessionIds}` to receive `message.*` frames for
   the open session; `message.delta` streams tokens (UI applies smoothing).
+- Default on connect is **firehose** (all frames) for backward compatibility.
+  The first `subscribe` narrows the connection to the listed sessions; session-
+  list-level frames (`session.*`, `sync.status`, `cards.changed`) always flow.
+- `typing {sessionId}` → the server broadcasts `user.typing {sessionId, who,
+  expiresAt}` to that session's subscribers. **Ephemeral**: never event-logged,
+  no replay; the client hides it once `expiresAt` passes. The client debounces
+  outbound `typing` frames at ~3 s. `who` comes from the `?name=` query param
+  on WS connect (falls back to `anon-<N>`).
 - Ordering: frames for a given session arrive in order; `message.delta` always
   precedes its `message.done`.
 

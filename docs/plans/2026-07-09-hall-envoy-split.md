@@ -202,4 +202,4 @@ rewires what the previous moved).
 | S5 drain+triggers | TODO | — | — |
 | S6 cutover | TODO | — | — |
 | S7 iroh | TODO | — | — |
-| S8 streaming+typing | TODO | — | — |
+| S8 streaming+typing | DONE | Zephyr (glm52) | feat(ws): session-scoped subs + typing presence |
