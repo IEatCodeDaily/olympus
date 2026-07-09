@@ -20,6 +20,7 @@ tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 hostname = "0.4"
+iroh = "1"
 
 [dev-dependencies]
 tempfile = "3"
