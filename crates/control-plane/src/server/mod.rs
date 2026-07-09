@@ -98,8 +98,12 @@ pub struct AppState {
     pub irc: crate::irc::IrcBus,
     /// Fleet node registry — tracks connected envoys (UDS) + the local node.
     pub nodes: crate::node::NodeRegistry,
-    /// Remote envoy connections (UDS write halves for RemoteRuntime).
+    /// Remote envoy connections (UDS or iroh write halves for RemoteRuntime).
     pub envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+    /// Hall's iroh node id (public key, z-base-32). `None` when iroh is not
+    /// enabled (no listener bound). Exposed via GET /api/nodes/hall-identity
+    /// so the installer can fetch it without scraping logs (ADR 0008 §1 S7).
+    pub hall_iroh_id: Option<Arc<String>>,
     /// Reverse proxy routing table — slug → backend target.
     pub proxy: crate::proxy::ProxyTable,
     /// Markdown-first knowledge vault storage (ADR 0004).
@@ -149,6 +153,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/setup", get(get_setup).put(put_setup))
         .route("/api/registry", get(list_registry).put(put_registry_entry))
         .route("/api/nodes", get(list_nodes))
+        .route("/api/nodes/hall-identity", get(hall_identity))
         .route("/api/nodes/{id}/agents", get(node_agents))
         .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
         .route("/api/vaults", get(list_vaults).post(create_vault))
@@ -910,6 +915,14 @@ async fn refresh_node_agents(State(state): State<AppState>, Path(id): Path<Strin
 async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {
     let nodes = state.nodes.list().await;
     Json(json!({ "nodes": nodes }))
+}
+
+/// GET /api/nodes/hall-identity — returns the hall's iroh node id (public key,
+/// z-base-32) so the installer can fetch it without scraping boot logs (ADR
+/// 0008 §1 S7). Returns `{"irohNodeId": null}` when iroh is not enabled.
+async fn hall_identity(State(state): State<AppState>) -> impl IntoResponse {
+    let id = state.hall_iroh_id.as_ref().map(|s| s.as_str().to_string());
+    Json(json!({ "irohNodeId": id }))
 }
 
 async fn list_vaults(State(state): State<AppState>) -> Response {
@@ -2599,6 +2612,7 @@ async fn post_message(
         let mut suppressing_steer_ack = false;
 
         while let Some(event) = stream.next().await {
+            #[allow(unreachable_patterns)]
             match event {
                 AgentEvent::Text(chunk) => {
                     if suppressing_steer_ack {
@@ -2637,7 +2651,7 @@ async fn post_message(
                     // id is missing (some adapters omit it on updates).
                     let is_update = args.is_empty() && !tool_calls_acc.is_empty() && {
                         // An update either carries a known id or has no args.
-                        id.as_deref().map_or(true, |i| {
+                        id.as_deref().is_none_or(|i| {
                             tool_calls_acc
                                 .iter()
                                 .any(|tc| tc.get("id").and_then(|v| v.as_str()) == Some(i))
@@ -3446,6 +3460,7 @@ mod tests {
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
             envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
             proxy: crate::proxy::ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),
@@ -3548,6 +3563,7 @@ mod tests {
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
             envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
             proxy: crate::proxy::ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),

@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
         .register("local", &local_hostname, 4, "0.1", true, local_agents)
         .await;
 
-    let state = AppState {
+    let mut state = AppState {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
@@ -203,6 +203,7 @@ async fn main() -> Result<()> {
             &org_workspace_root(&default_org())?,
             &default_org(),
         )),
+        hall_iroh_id: None, // set below after endpoint creation
     };
 
     let sync_log = Arc::clone(&log_arc);
@@ -252,6 +253,38 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             olympus_control_plane::node::run_uds_listener(uds_path, reg, conns).await;
         });
+    }
+
+    // Spawn the iroh listener for REMOTE envoys (ADR 0008 §1, S7). Public n0
+    // relays; peers are gated by the node-id allowlist in ~/.olympus/hall.toml
+    // (`allowed_envoys = ["<node-id>", ...]`) — fail closed: no file or empty
+    // list means no remote envoys can connect (the endpoint still binds and
+    // prints its node id so the operator can set up the allowlist).
+    {
+        match olympus_control_plane::node::create_iroh_endpoint(&home).await {
+            Ok((endpoint, node_id)) => {
+                println!("hall iroh node id: {node_id}");
+                state.hall_iroh_id = Some(Arc::new(node_id.to_string()));
+                let reg = node_registry.clone();
+                let conns = state.envoy_conns.clone();
+                let hall_home = home.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = olympus_control_plane::node::run_iroh_accept_loop(
+                        hall_home, endpoint, reg, conns,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = format!("{e:#}"), "iroh accept loop failed");
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = format!("{e:#}"),
+                    "failed to bind iroh endpoint — remote envoys disabled (UDS still active)"
+                );
+            }
+        }
     }
 
     let bind = std::env::var("OLYMPUS_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());

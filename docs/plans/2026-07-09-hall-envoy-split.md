@@ -201,5 +201,5 @@ rewires what the previous moved).
 | S4 spool/replay | TODO | — | — |
 | S5 drain+triggers | TODO | — | — |
 | S6 cutover | TODO | — | — |
-| S7 iroh | TODO | — | — |
+| S7 iroh | DONE | glm52 (Zephyr) | feat(hall): iroh remote transport |
 | S8 streaming+typing | DONE | Zephyr (glm52) | feat(ws): session-scoped subs + typing presence |

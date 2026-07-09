@@ -506,6 +506,7 @@ pub fn chrono_epoch_pub() -> f64 {
 }
 
 /// Current epoch milliseconds as u128 (for unique id generation).
+#[allow(dead_code)]
 fn chrono_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

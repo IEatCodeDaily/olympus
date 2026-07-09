@@ -254,11 +254,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
             delta = rx.recv() => {
                 match delta {
                     Ok(frame) => {
-                        if should_deliver(&frame, &subscriptions) {
-                            if send_frame(&mut socket, &frame).await.is_err() {
+                        if should_deliver(&frame, &subscriptions)
+                            && send_frame(&mut socket, &frame).await.is_err() {
                                 break;
                             }
-                        }
                     }
                     // Lagged: drop and continue (client will reconcile via REST).
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -694,6 +693,7 @@ mod tests {
             irc: IrcBus::new(),
             nodes: NodeRegistry::new(),
             envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
             proxy: ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("v"),

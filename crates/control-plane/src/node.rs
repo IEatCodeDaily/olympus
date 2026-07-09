@@ -388,16 +388,30 @@ async fn handle_uds_conn(
     registry: NodeRegistry,
     envoy_conns: crate::server::envoy_conn::EnvoyConnections,
 ) {
+    let (reader, writer) = stream.into_split();
+    handle_envoy_conn(reader, writer, registry, envoy_conns).await;
+}
+
+/// Transport-generic envoy connection handler: the same JSON-lines dispatch
+/// runs over UDS (local) and iroh QUIC streams (remote, S7). ADR 0008 §1.
+pub async fn handle_envoy_conn<R, W>(
+    reader: R,
+    writer: W,
+    registry: NodeRegistry,
+    envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+) where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let (reader, writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let mut connected_node: Option<String> = None;
     // The EnvoyConnection (set on hello). All writes to the envoy go through
     // its buffered writer. For legacy v1 connections, we fall back to writing
-    // directly via a plain OwnedWriteHalf.
+    // directly via the raw writer.
     let mut conn: Option<Arc<crate::server::envoy_conn::EnvoyConnection>> = None;
-    let mut legacy_writer = Some(writer);
+    let mut legacy_writer: Option<crate::server::envoy_conn::BoxedWriter> = Some(Box::new(writer));
 
     loop {
         let line = match lines.next_line().await {
@@ -552,7 +566,7 @@ async fn handle_envoy_hello(
     frame: olympus_proto::frames::EnvoyFrame,
     registry: &NodeRegistry,
     envoy_conns: &crate::server::envoy_conn::EnvoyConnections,
-    writer: tokio::net::unix::OwnedWriteHalf,
+    writer: crate::server::envoy_conn::BoxedWriter,
     connected_node: &mut Option<String>,
 ) -> HelloOutcome {
     use olympus_proto::frames::EnvoyFrame;
@@ -684,6 +698,101 @@ async fn handle_envoy_frame(
         }
     }
     FrameOutcome::Continue
+}
+
+// ── Iroh listener (remote envoys, ADR 0008 §1 / S7) ────────────────────
+
+/// Hall-side allowlist config, loaded from `<home>/hall.toml`:
+///
+/// ```toml
+/// allowed_envoys = ["<iroh-node-id>", ...]
+/// ```
+#[derive(Debug, Default, serde::Deserialize)]
+struct HallConfig {
+    #[serde(default)]
+    allowed_envoys: Vec<String>,
+}
+
+fn load_allowlist(home: &std::path::Path) -> Vec<iroh::PublicKey> {
+    let path = home.join("hall.toml");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new(); // no file → empty allowlist → no remote envoys (fail closed)
+    };
+    let cfg: HallConfig = match toml::from_str(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, path = %path.display(), "hall.toml parse failed — remote envoys disabled");
+            return Vec::new();
+        }
+    };
+    cfg.allowed_envoys
+        .iter()
+        .filter_map(|s| match s.parse::<iroh::PublicKey>() {
+            Ok(k) => Some(k),
+            Err(e) => {
+                tracing::warn!(id = %s, error = %e, "invalid node id in hall.toml allowlist, skipping");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Bind the hall's iroh endpoint (public n0 relays) and return it + the node
+/// id. The node id is needed at boot for `AppState` (GET /api/nodes/hall-identity)
+/// and for the operator log line. The accept loop is [`run_iroh_accept_loop`].
+///
+/// The hall's iroh identity persists at `<home>/iroh.key`.
+pub async fn create_iroh_endpoint(
+    home: &std::path::Path,
+) -> anyhow::Result<(iroh::Endpoint, iroh::EndpointId)> {
+    let secret = olympus_envoy::transport::load_or_create_secret(home)?;
+    let endpoint = olympus_envoy::transport::bind_endpoint(secret).await?;
+    let node_id = endpoint.id();
+    tracing::info!(iroh_node_id = %node_id, "hall iroh endpoint listening (remote envoys)");
+    Ok((endpoint, node_id))
+}
+
+/// Run the iroh accept loop: each accepted + allowlisted connection speaks the
+/// identical JSON-lines protocol via [`handle_envoy_conn`]. The allowlist is
+/// re-read from `hall.toml` per connection so additions don't need a restart.
+pub async fn run_iroh_accept_loop(
+    home: std::path::PathBuf,
+    endpoint: iroh::Endpoint,
+    registry: NodeRegistry,
+    envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+) -> anyhow::Result<()> {
+    while let Some(incoming) = endpoint.accept().await {
+        let conn = match incoming.await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(error = %e, "iroh handshake failed");
+                continue;
+            }
+        };
+        let peer = conn.remote_id();
+        // Fail closed: only allowlisted node ids proceed to the protocol.
+        let allowlist = load_allowlist(&home);
+        if !allowlist.contains(&peer) {
+            tracing::warn!(peer = %peer, "rejecting non-allowlisted iroh envoy");
+            conn.close(1u32.into(), b"not allowlisted");
+            continue;
+        }
+        tracing::info!(peer = %peer, "iroh envoy connected");
+        let reg = registry.clone();
+        let conns = envoy_conns.clone();
+        tokio::spawn(async move {
+            // The envoy opens the bi-stream; hall accepts it.
+            match conn.accept_bi().await {
+                Ok((send, recv)) => {
+                    handle_envoy_conn(recv, send, reg, conns).await;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "iroh accept_bi failed");
+                }
+            }
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

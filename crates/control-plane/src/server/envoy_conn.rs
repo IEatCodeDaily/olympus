@@ -19,9 +19,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::stream::Stream;
 use olympus_envoy::bridge::{AgentCommand, AgentEvent, AgentRuntime};
-use olympus_proto::frames::{EnvoyFrame, HallFrame};
+use olympus_proto::frames::HallFrame;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, Mutex, RwLock};
+
+/// A boxed, thread-safe async writer — transport-agnostic (UDS OwnedWriteHalf
+/// or iroh QUIC SendStream). This lets `EnvoyConnection` work identically over
+/// either transport (ADR 0008 §1).
+pub type BoxedWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
 
 /// A pending request awaiting an envoy `Resp` frame.
 type PendingSlot = tokio::sync::oneshot::Sender<EnvoyResp>;
@@ -37,8 +42,9 @@ pub struct EnvoyResp {
 /// One envoy's connection state: the write half + pending requests + per-session
 /// event channels.
 pub struct EnvoyConnection {
-    /// Buffered writer to the UDS stream (guarded so Hall can send from any task).
-    writer: Mutex<tokio::io::BufWriter<tokio::net::unix::OwnedWriteHalf>>,
+    /// Buffered writer to the transport stream (UDS or iroh QUIC). Guarded so
+    /// Hall can send from any task. Transport-agnostic via [`BoxedWriter`].
+    writer: Mutex<tokio::io::BufWriter<BoxedWriter>>,
     /// Pending requests keyed by reqId, awaiting `EnvoyFrame::Resp`.
     pending: Mutex<HashMap<u64, PendingSlot>>,
     /// Next Hall-assigned reqId.
@@ -58,7 +64,7 @@ pub struct EnvoyConnection {
 }
 
 impl EnvoyConnection {
-    fn new(writer: tokio::net::unix::OwnedWriteHalf) -> Arc<Self> {
+    fn new(writer: BoxedWriter) -> Arc<Self> {
         Arc::new(Self {
             writer: Mutex::new(tokio::io::BufWriter::new(writer)),
             pending: Mutex::new(HashMap::new()),
@@ -241,11 +247,7 @@ impl EnvoyConnections {
     }
 
     /// Register a connection for a node. Returns the connection.
-    pub async fn insert(
-        &self,
-        node_id: &str,
-        writer: tokio::net::unix::OwnedWriteHalf,
-    ) -> Arc<EnvoyConnection> {
+    pub async fn insert(&self, node_id: &str, writer: BoxedWriter) -> Arc<EnvoyConnection> {
         let conn = EnvoyConnection::new(writer);
         self.inner
             .write()
@@ -456,7 +458,7 @@ mod tests {
         s1.set_nonblocking(true).unwrap();
         let stream = tokio::net::UnixStream::from_std(s1).unwrap();
         let (_reader, writer) = stream.into_split();
-        EnvoyConnection::new(writer)
+        EnvoyConnection::new(Box::new(writer))
     }
 
     #[tokio::test]
