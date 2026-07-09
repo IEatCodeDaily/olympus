@@ -693,6 +693,7 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: IrcBus::new(),
             nodes: NodeRegistry::new(),
+            envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
             proxy: ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("v"),

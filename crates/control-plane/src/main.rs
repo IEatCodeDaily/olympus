@@ -193,6 +193,7 @@ async fn main() -> Result<()> {
         sync_connected: sync_connected.clone(),
         irc: olympus_control_plane::irc::IrcBus::new(),
         nodes: node_registry.clone(),
+        envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::new(),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
         vaults: Arc::new(VaultStore::new(org_workspace_root(&default_org())?)),
         projects: Arc::new(olympus_control_plane::projects::ProjectStore::new(
@@ -247,8 +248,9 @@ async fn main() -> Result<()> {
     let uds_path = home.join("control.sock");
     {
         let reg = node_registry.clone();
+        let conns = state.envoy_conns.clone();
         tokio::spawn(async move {
-            olympus_control_plane::node::run_uds_listener(uds_path, reg).await;
+            olympus_control_plane::node::run_uds_listener(uds_path, reg, conns).await;
         });
     }
 

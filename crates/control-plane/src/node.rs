@@ -336,9 +336,19 @@ fn default_slots() -> u32 {
 /// (one message per line, newline-delimited). The connection stays open for
 /// the lifetime of the envoy — heartbeats arrive on the same socket.
 ///
-/// On disconnect, the node is deregistered. On `bye`, the node is deregistered
-/// and the connection closes.
-pub async fn run_uds_listener(path: std::path::PathBuf, registry: NodeRegistry) {
+/// ADR 0008 S3: connections now speak the `EnvoyFrame` protocol (hello/resp/
+/// event/heartbeat/bye/runtimes). Old envoys that still send legacy
+/// `NodeMessage` (hello/heartbeat/bye-only) are handled by falling back to
+/// the legacy dispatch. On disconnect, the node is deregistered and its
+/// EnvoyConnection (if any) is removed.
+///
+/// `envoy_conns` holds the per-node write halves for RemoteRuntime; `registry`
+/// holds the node metadata. Both are shared clones.
+pub async fn run_uds_listener(
+    path: std::path::PathBuf,
+    registry: NodeRegistry,
+    envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+) {
     // Remove stale socket from a previous run.
     let _ = std::fs::remove_file(&path);
     if let Some(parent) = path.parent() {
@@ -356,17 +366,38 @@ pub async fn run_uds_listener(path: std::path::PathBuf, registry: NodeRegistry) 
 
     while let Ok((stream, _)) = listener.accept().await {
         let reg = registry.clone();
-        tokio::spawn(handle_uds_conn(stream, reg));
+        let conns = envoy_conns.clone();
+        tokio::spawn(handle_uds_conn(stream, reg, conns));
     }
 }
 
 /// Handle a single UDS connection (one envoy's lifecycle).
-async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry) {
+///
+/// Supports two protocol generations on the same socket:
+/// - **v2 (ADR 0008):** `EnvoyFrame`-tagged JSON-lines (hello/heartbeat/bye/
+///   resp/event/runtimes). On hello, validates `protocol_version == 2` (fail
+///   closed) and registers an `EnvoyConnection` so RemoteRuntime can drive
+///   sessions on this envoy.
+/// - **v1 (legacy):** `NodeMessage`-tagged JSON-lines (hello/heartbeat/bye).
+///   Kept for backward compatibility with old envoys.
+///
+/// The dispatch tries `EnvoyFrame` first; if the `kind` field doesn't match
+/// any EnvoyFrame variant, it falls back to `NodeMessage`.
+async fn handle_uds_conn(
+    stream: tokio::net::UnixStream,
+    registry: NodeRegistry,
+    envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let (reader, mut writer) = stream.into_split();
+    let (reader, writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let mut connected_node: Option<String> = None;
+    // The EnvoyConnection (set on hello). All writes to the envoy go through
+    // its buffered writer. For legacy v1 connections, we fall back to writing
+    // directly via a plain OwnedWriteHalf.
+    let mut conn: Option<Arc<crate::server::envoy_conn::EnvoyConnection>> = None;
+    let mut legacy_writer = Some(writer);
 
     loop {
         let line = match lines.next_line().await {
@@ -379,15 +410,58 @@ async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry)
             continue;
         }
 
+        // Try parsing as EnvoyFrame (v2 protocol) first. EnvoyFrame and
+        // NodeMessage share `kind`-tagged JSON, but their variant names differ
+        // (EnvoyFrame uses snake_case: hello, heartbeat, bye, resp, event,
+        // runtimes). NodeMessage uses lowercase: hello, heartbeat, bye.
+        let parsed_envoy: Result<olympus_proto::frames::EnvoyFrame, _> =
+            serde_json::from_str(&line);
+        if let Ok(frame) = parsed_envoy {
+            // On the first Hello, move the writer into an EnvoyConnection.
+            if matches!(frame, olympus_proto::frames::EnvoyFrame::Hello { .. }) {
+                if let Some(w) = legacy_writer.take() {
+                    let hello_frame = match frame {
+                        olympus_proto::frames::EnvoyFrame::Hello { .. } => frame,
+                        _ => unreachable!(),
+                    };
+                    let new_conn = handle_envoy_hello(
+                        hello_frame,
+                        &registry,
+                        &envoy_conns,
+                        w,
+                        &mut connected_node,
+                    )
+                    .await;
+                    match new_conn {
+                        HelloOutcome::Accepted(c) => {
+                            conn = Some(c);
+                        }
+                        HelloOutcome::Rejected => break, // protocol mismatch → disconnect
+                    }
+                    continue;
+                }
+            }
+            let outcome = handle_envoy_frame(frame, &registry, &envoy_conns, &mut conn).await;
+            if outcome == FrameOutcome::Disconnect {
+                break;
+            }
+            continue;
+        }
+
+        // Fall back to legacy NodeMessage (v1 protocol).
         let msg: NodeMessage = match serde_json::from_str(&line) {
             Ok(m) => m,
             Err(e) => {
-                let resp = NodeResponse::Error {
-                    message: format!("bad json: {e}"),
-                };
-                let _ = writer
-                    .write_all(format!("{}\n", serde_json::to_string(&resp).unwrap()).as_bytes())
-                    .await;
+                if let Some(ref mut w) = legacy_writer {
+                    let resp = NodeResponse::Error {
+                        message: format!("bad json: {e}"),
+                    };
+                    let _ = w
+                        .write_all(
+                            format!("{}\n", serde_json::to_string(&resp).unwrap()).as_bytes(),
+                        )
+                        .await;
+                }
                 continue;
             }
         };
@@ -399,7 +473,7 @@ async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry)
                 slots_total,
                 version,
             } => {
-                tracing::info!(node = %node_id, hostname = %hostname, "node registered");
+                tracing::info!(node = %node_id, hostname = %hostname, "node registered (legacy v1)");
                 registry
                     .register(
                         &node_id,
@@ -428,24 +502,188 @@ async fn handle_uds_conn(stream: tokio::net::UnixStream, registry: NodeRegistry)
             NodeMessage::Bye { node_id } => {
                 tracing::info!(node = %node_id, "node deregistered (bye)");
                 registry.deregister(&node_id).await;
-                let resp = NodeResponse::Ack { status: "ok" };
-                let _ = writer
-                    .write_all(format!("{}\n", serde_json::to_string(&resp).unwrap()).as_bytes())
-                    .await;
+                if let Some(ref mut w) = legacy_writer {
+                    let resp = NodeResponse::Ack { status: "ok" };
+                    let _ = w
+                        .write_all(
+                            format!("{}\n", serde_json::to_string(&resp).unwrap()).as_bytes(),
+                        )
+                        .await;
+                }
                 break;
             }
         };
 
-        let _ = writer
-            .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
-            .await;
+        if let Some(ref mut w) = legacy_writer {
+            let _ = w
+                .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
+                .await;
+        }
     }
 
     // Connection closed — deregister the node if it was registered.
     if let Some(node_id) = connected_node {
         tracing::info!(node = %node_id, "node disconnected, deregistering");
         registry.deregister(&node_id).await;
+        // Fail all pending requests on this envoy's connection and remove it.
+        if let Some(conn) = envoy_conns.remove(&node_id).await {
+            conn.fail_all().await;
+        }
     }
+}
+
+/// Outcome of handling an EnvoyFrame: Continue or Disconnect (bye).
+#[derive(PartialEq)]
+enum FrameOutcome {
+    Continue,
+    Disconnect,
+}
+
+/// Outcome of handling an EnvoyFrame Hello: Accepted (with the EnvoyConnection)
+/// or Rejected (protocol mismatch → connection closing).
+enum HelloOutcome {
+    Accepted(Arc<crate::server::envoy_conn::EnvoyConnection>),
+    Rejected,
+}
+
+/// Handle a v2 EnvoyFrame::Hello: validate protocol version, register the node,
+/// create the EnvoyConnection with the writer, and return the connection.
+async fn handle_envoy_hello(
+    frame: olympus_proto::frames::EnvoyFrame,
+    registry: &NodeRegistry,
+    envoy_conns: &crate::server::envoy_conn::EnvoyConnections,
+    writer: tokio::net::unix::OwnedWriteHalf,
+    connected_node: &mut Option<String>,
+) -> HelloOutcome {
+    use olympus_proto::frames::EnvoyFrame;
+    use olympus_proto::version::PROTOCOL_VERSION;
+
+    let EnvoyFrame::Hello {
+        node_id,
+        hostname,
+        slots_total,
+        protocol_version,
+        version: build_version,
+        agents,
+        runtimes: _,
+    } = frame
+    else {
+        unreachable!("handle_envoy_hello called with non-Hello frame")
+    };
+
+    // Fail closed: reject incompatible protocol versions (ADR 0008 §1).
+    if protocol_version != PROTOCOL_VERSION {
+        tracing::warn!(
+            node = %node_id,
+            got = protocol_version,
+            expected = PROTOCOL_VERSION,
+            "rejecting envoy: protocol version mismatch"
+        );
+        // We can't write to the writer anymore (it's consumed by insert).
+        // The rejection is logged; the connection is closed.
+        return HelloOutcome::Rejected;
+    }
+
+    tracing::info!(
+        node = %node_id,
+        hostname = %hostname,
+        version = %build_version.semver,
+        git = %build_version.git_hash,
+        "envoy registered (v2)"
+    );
+
+    // Parse the agents JSON into AgentInfo (best-effort; the envoy sends
+    // harness-native JSON that serde tolerates with unknown fields).
+    let agents_parsed: Vec<crate::server::agents::AgentInfo> = agents
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    // Build a display version from the BuildVersion semver + git hash.
+    let version_str = if build_version.git_hash != "unknown" {
+        format!("{} ({})", build_version.semver, &build_version.git_hash)
+    } else {
+        build_version.semver.clone()
+    };
+
+    registry
+        .register(
+            &node_id,
+            &hostname,
+            slots_total,
+            &version_str,
+            false,
+            agents_parsed,
+        )
+        .await;
+
+    // Create the EnvoyConnection and store it for RemoteRuntime.
+    let conn = envoy_conns.insert(&node_id, writer).await;
+    *connected_node = Some(node_id);
+
+    HelloOutcome::Accepted(conn)
+}
+
+/// Dispatch a parsed EnvoyFrame (ADR 0008 v2 protocol) — all variants except
+/// Hello (handled by handle_envoy_hello). The `conn` is set after a successful
+/// hello; Resp and Event frames route through it.
+async fn handle_envoy_frame(
+    frame: olympus_proto::frames::EnvoyFrame,
+    registry: &NodeRegistry,
+    envoy_conns: &crate::server::envoy_conn::EnvoyConnections,
+    conn: &mut Option<Arc<crate::server::envoy_conn::EnvoyConnection>>,
+) -> FrameOutcome {
+    use olympus_proto::frames::EnvoyFrame;
+
+    match frame {
+        EnvoyFrame::Hello { .. } => {
+            // A second hello on the same connection is a no-op (the first was
+            // handled by handle_envoy_hello in the read loop).
+        }
+        EnvoyFrame::Heartbeat {
+            node_id,
+            slots_used,
+        } => {
+            if let Err(e) = registry.heartbeat(&node_id, slots_used).await {
+                tracing::warn!(node = %node_id, error = %e, "heartbeat for unknown node");
+            }
+        }
+        EnvoyFrame::Bye { node_id } => {
+            tracing::info!(node = %node_id, "envoy deregistered (bye)");
+            registry.deregister(&node_id).await;
+            if let Some(conn) = envoy_conns.remove(&node_id).await {
+                conn.fail_all().await;
+            }
+            return FrameOutcome::Disconnect;
+        }
+        EnvoyFrame::Resp {
+            req_id,
+            ok,
+            error,
+            result,
+        } => {
+            if let Some(c) = conn {
+                c.resolve(
+                    req_id,
+                    crate::server::envoy_conn::EnvoyResp { ok, error, result },
+                )
+                .await;
+            }
+        }
+        EnvoyFrame::Event {
+            session_id,
+            turn_id: _,
+            seq: _,
+            payload,
+        } => {
+            if let Some(c) = conn {
+                c.forward_event(&session_id, payload);
+            }
+        }
+        EnvoyFrame::Runtimes { runtimes: _ } => {
+            tracing::debug!("runtimes table update received (S4 will process)");
+        }
+    }
+    FrameOutcome::Continue
 }
 
 #[cfg(test)]

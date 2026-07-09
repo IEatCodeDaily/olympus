@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use futures::stream::Stream;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -314,11 +314,19 @@ async fn read_content_length_message(
 // HermesAgentRuntime
 // ---------------------------------------------------------------------------
 
+/// Maximum bytes of child stderr to buffer (postmortem 0001 §Fix item 3).
+/// 8 KiB is enough for the adapter's diagnostic tail without unbounded growth.
+const STDERR_BUF_CAP: usize = 8 * 1024;
+
 /// Internal state held behind a lock so `&self` trait methods work.
 struct RuntimeState {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     session_id: Option<String>,
+    /// Bounded ring buffer of the child's stderr, captured so handshake
+    /// failures surface the adapter's diagnostic instead of a bare timeout
+    /// (postmortem 0001 §Fix item 3).
+    stderr_buf: Arc<Mutex<Vec<u8>>>,
 }
 
 impl RuntimeState {
@@ -327,7 +335,53 @@ impl RuntimeState {
             child: None,
             stdin: None,
             session_id: None,
+            stderr_buf: Arc::new(Mutex::new(Vec::with_capacity(STDERR_BUF_CAP))),
         }
+    }
+}
+
+/// Spawn a background task that reads the child's stderr into a bounded buffer.
+/// The buffer keeps the last `STDERR_BUF_CAP` bytes (ring-buffer semantics:
+/// when full, older data is evicted). The task exits when stderr reaches EOF.
+fn spawn_stderr_capture(stderr: tokio::process::ChildStderr, buf: Arc<Mutex<Vec<u8>>>) {
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut chunk = [0u8; 512];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    let mut b = buf.lock().await;
+                    let remaining = STDERR_BUF_CAP.saturating_sub(b.len());
+                    if n > remaining {
+                        // Evict the oldest bytes to make room (ring buffer).
+                        let drop_count = (n - remaining).min(b.len());
+                        b.drain(..drop_count);
+                    }
+                    b.extend_from_slice(&chunk[..n]);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+/// Return the captured stderr as a string for error messages, or an empty
+/// string if nothing was captured (postmortem 0001 §Fix item 3).
+async fn tail_or_empty(buf: &Arc<Mutex<Vec<u8>>>) -> String {
+    let b = buf.lock().await;
+    String::from_utf8_lossy(b.as_slice()).trim().to_string()
+}
+
+/// Check if the child has exited prematurely during the handshake wait loop.
+/// Returns `Some(exit_status_string)` if the child is gone, `None` if still
+/// alive. Used by start()/fork_session() to fail fast instead of running out
+/// the full 30s timeout (postmortem 0001 §Fix item 3).
+fn child_early_exit(child: &mut Child) -> Option<String> {
+    match child.try_wait() {
+        Ok(Some(status)) => Some(format!("child exited: {status}")),
+        Ok(None) => None,
+        Err(e) => Some(format!("child poll failed: {e}")),
     }
 }
 
@@ -531,7 +585,7 @@ impl AgentRuntime for HermesAgentRuntime {
         cmd.current_dir(&self.config.cwd);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::inherit()); // logging goes to our stderr
+        cmd.stderr(Stdio::piped()); // capture stderr for diagnostics (postmortem 0001)
         if let Some(source) = &self.config.session_source {
             cmd.env("HERMES_ACP_SESSION_SOURCE", source);
         }
@@ -551,6 +605,13 @@ impl AgentRuntime for HermesAgentRuntime {
             .stdout
             .take()
             .context("child stdout pipe was not captured")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("child stderr pipe was not captured")?;
+
+        // Capture stderr into a bounded buffer for diagnostics (postmortem 0001).
+        spawn_stderr_capture(stderr, Arc::clone(&state.stderr_buf));
 
         // Store session_id for resume
         if let Some(sid) = session_id {
@@ -559,6 +620,7 @@ impl AgentRuntime for HermesAgentRuntime {
         }
         state.child = Some(child);
         state.stdin = Some(stdin);
+        let stderr_buf = Arc::clone(&state.stderr_buf);
         drop(state); // release before we call write_message
 
         // Spawn the stdout reader so streamed session/update events flow into
@@ -605,10 +667,35 @@ impl AgentRuntime for HermesAgentRuntime {
             if self.session_id_shared.lock().await.is_some() {
                 break;
             }
+            // Fail fast: if the child died before session/new completed, surface
+            // the exit status + stderr tail instead of waiting out the full
+            // timeout (postmortem 0001 §Fix item 3).
+            {
+                let mut state = self.state.lock().await;
+                if let Some(ref mut child) = state.child {
+                    if let Some(exit) = child_early_exit(child) {
+                        let tail = tail_or_empty(&stderr_buf).await;
+                        anyhow::bail!(
+                            "ACP handshake failed — {exit}\n{}",
+                            if tail.is_empty() {
+                                "(no stderr captured)".to_string()
+                            } else {
+                                format!("stderr:\n{tail}")
+                            }
+                        );
+                    }
+                }
+            }
             if std::time::Instant::now() >= deadline {
+                let tail = tail_or_empty(&stderr_buf).await;
                 anyhow::bail!(
-                    "timed out after {}s waiting for ACP session/new response",
-                    self.config.start_timeout_secs
+                    "timed out after {}s waiting for ACP session/new response\n{}",
+                    self.config.start_timeout_secs,
+                    if tail.is_empty() {
+                        "(no stderr captured)".to_string()
+                    } else {
+                        format!("stderr:\n{tail}")
+                    }
                 );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -629,7 +716,7 @@ impl AgentRuntime for HermesAgentRuntime {
         cmd.current_dir(&self.config.cwd);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::inherit());
+        cmd.stderr(Stdio::piped()); // capture stderr for diagnostics (postmortem 0001)
         if let Some(source) = &self.config.session_source {
             cmd.env("HERMES_ACP_SESSION_SOURCE", source);
         }
@@ -648,10 +735,18 @@ impl AgentRuntime for HermesAgentRuntime {
             .stdout
             .take()
             .context("child stdout pipe was not captured")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("child stderr pipe was not captured")?;
+
+        // Capture stderr into a bounded buffer for diagnostics (postmortem 0001).
+        spawn_stderr_capture(stderr, Arc::clone(&state.stderr_buf));
 
         *self.session_id_shared.lock().await = None;
         state.child = Some(child);
         state.stdin = Some(stdin);
+        let stderr_buf = Arc::clone(&state.stderr_buf);
         drop(state);
 
         Self::spawn_reader(
@@ -685,10 +780,33 @@ impl AgentRuntime for HermesAgentRuntime {
                 self.state.lock().await.session_id = Some(sid);
                 break;
             }
+            // Fail fast: child died before session/fork completed (postmortem 0001).
+            {
+                let mut state = self.state.lock().await;
+                if let Some(ref mut child) = state.child {
+                    if let Some(exit) = child_early_exit(child) {
+                        let tail = tail_or_empty(&stderr_buf).await;
+                        anyhow::bail!(
+                            "ACP fork handshake failed — {exit}\n{}",
+                            if tail.is_empty() {
+                                "(no stderr captured)".to_string()
+                            } else {
+                                format!("stderr:\n{tail}")
+                            }
+                        );
+                    }
+                }
+            }
             if std::time::Instant::now() >= deadline {
+                let tail = tail_or_empty(&stderr_buf).await;
                 anyhow::bail!(
-                    "timed out after {}s waiting for ACP session/fork response",
-                    self.config.start_timeout_secs
+                    "timed out after {}s waiting for ACP session/fork response\n{}",
+                    self.config.start_timeout_secs,
+                    if tail.is_empty() {
+                        "(no stderr captured)".to_string()
+                    } else {
+                        format!("stderr:\n{tail}")
+                    }
                 );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -921,5 +1039,47 @@ mod tests {
                 },
             }),
         }
+    }
+
+    // ---- stderr capture (postmortem 0001 §Fix item 3) ----
+
+    #[tokio::test]
+    async fn tail_or_empty_returns_captured_content() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        buf.lock().await.extend_from_slice(b"error: missing dep\n");
+        let tail = tail_or_empty(&buf).await;
+        assert!(tail.contains("error: missing dep"));
+    }
+
+    #[tokio::test]
+    async fn tail_or_empty_returns_empty_for_nothing() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let tail = tail_or_empty(&buf).await;
+        assert!(tail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stderr_buf_evicts_oldest_when_full() {
+        // Verify ring-buffer semantics: filling past the cap keeps only the tail.
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        // Simulate writes that exceed the cap by calling the logic inline
+        // (spawn_stderr_capture uses a real pipe; here we test the ring math).
+        let data = vec![0x41u8; STDERR_BUF_CAP + 100]; // more than cap
+        {
+            let mut b = buf.lock().await;
+            for chunk in data.chunks(512) {
+                let remaining = STDERR_BUF_CAP.saturating_sub(b.len());
+                if chunk.len() > remaining {
+                    let drop_count = (chunk.len() - remaining).min(b.len());
+                    b.drain(..drop_count);
+                }
+                b.extend_from_slice(chunk);
+            }
+        }
+        let b = buf.lock().await;
+        assert_eq!(b.len(), STDERR_BUF_CAP, "buffer should be at cap");
+        // The last STDERR_BUF_CAP bytes of `data` should be what's stored.
+        let expected = &data[data.len() - STDERR_BUF_CAP..];
+        assert_eq!(b.as_slice(), expected);
     }
 }

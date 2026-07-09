@@ -98,6 +98,8 @@ pub struct AppState {
     pub irc: crate::irc::IrcBus,
     /// Fleet node registry — tracks connected envoys (UDS) + the local node.
     pub nodes: crate::node::NodeRegistry,
+    /// Remote envoy connections (UDS write halves for RemoteRuntime).
+    pub envoy_conns: crate::server::envoy_conn::EnvoyConnections,
     /// Reverse proxy routing table — slug → backend target.
     pub proxy: crate::proxy::ProxyTable,
     /// Markdown-first knowledge vault storage (ADR 0004).
@@ -3443,6 +3445,7 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
+            envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
             proxy: crate::proxy::ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),
@@ -3544,6 +3547,7 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
+            envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
             proxy: crate::proxy::ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),
