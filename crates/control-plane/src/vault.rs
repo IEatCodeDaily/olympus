@@ -804,9 +804,9 @@ fn inject_content_hash(markdown: &str) -> String {
     let fm_yaml = fm_yaml.trim_end();
 
     // Reconstruct: frontmatter + body
-    if markdown.starts_with("---\n") {
+    if let Some(rest) = markdown.strip_prefix("---\n") {
         // Replace existing frontmatter
-        let body_start = markdown[4..]
+        let body_start = rest
             .find("\n---")
             .map(|end| 4 + end + 4)
             .unwrap_or(markdown.len());

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::stream::Stream;
 use olympus_envoy::bridge::{AgentCommand, AgentEvent, AgentRuntime};
-use olympus_proto::frames::{EnvoyFrame, HallFrame};
+use olympus_proto::frames::HallFrame;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, Mutex, RwLock};
 
@@ -269,6 +269,12 @@ impl EnvoyConnections {
         self.inner.read().await.contains_key(node_id)
     }
 
+    /// The first connected envoy's node id (for default routing when a session
+    /// has no explicit node). Returns None when no envoys are connected.
+    pub async fn first_node(&self) -> Option<String> {
+        self.inner.read().await.keys().next().cloned()
+    }
+
     /// Fail all pending requests on all connections (graceful shutdown).
     pub async fn fail_all(&self) {
         let conns: Vec<_> = self.inner.read().await.values().cloned().collect();
@@ -290,6 +296,10 @@ pub struct RemoteRuntime {
     conn: Arc<EnvoyConnection>,
     session_id: String,
     hermes_id: tokio::sync::Mutex<Option<String>>,
+    /// The spawn configuration sent to the envoy in EnsureRuntime so it
+    /// knows which agent/cwd/mcp to use. Defaults to empty (the envoy's
+    /// factory picks its own cwd + default agent).
+    spec: olympus_proto::RuntimeSpec,
 }
 
 impl RemoteRuntime {
@@ -299,6 +309,23 @@ impl RemoteRuntime {
             conn,
             session_id,
             hermes_id: tokio::sync::Mutex::new(None),
+            spec: olympus_proto::RuntimeSpec::default(),
+        }
+    }
+
+    /// Create a remote runtime with an explicit spawn spec. The spec flows
+    /// into the EnsureRuntime frame so the envoy's factory knows which agent
+    /// to run and in which cwd.
+    pub fn with_spec(
+        conn: Arc<EnvoyConnection>,
+        session_id: String,
+        spec: olympus_proto::RuntimeSpec,
+    ) -> Self {
+        Self {
+            conn,
+            session_id,
+            hermes_id: tokio::sync::Mutex::new(None),
+            spec,
         }
     }
 
@@ -306,6 +333,15 @@ impl RemoteRuntime {
     /// AgentRuntime trait).
     pub fn new_arc(conn: Arc<EnvoyConnection>, session_id: String) -> Arc<dyn AgentRuntime> {
         Arc::new(Self::new(conn, session_id))
+    }
+
+    /// Create an Arc-wrapped remote runtime with a spawn spec.
+    pub fn arc_with_spec(
+        conn: Arc<EnvoyConnection>,
+        session_id: String,
+        spec: olympus_proto::RuntimeSpec,
+    ) -> Arc<dyn AgentRuntime> {
+        Arc::new(Self::with_spec(conn, session_id, spec))
     }
 }
 
@@ -315,11 +351,10 @@ impl AgentRuntime for RemoteRuntime {
         // EnsureRuntime: tell the envoy to spawn (or resume) a runtime for
         // this session. The envoy replies with the captured Hermes session id.
         let resume_id = session_id.filter(|s| !s.is_empty()).map(String::from);
-        let spec = olympus_proto::RuntimeSpec::default();
         let frame = HallFrame::EnsureRuntime {
             req_id: 0, // Hall assigns the real id
             session_id: self.session_id.clone(),
-            spec,
+            spec: self.spec.clone(),
             resume_id,
         };
         let rx = self

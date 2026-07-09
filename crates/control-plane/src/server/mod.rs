@@ -2363,6 +2363,7 @@ async fn post_message(
     let deltas = state.deltas.clone();
     let bridge = state.bridge.clone();
     let views = state.views.clone();
+    let envoy_conns = state.envoy_conns.clone();
     // Bind the agent to its session space (working directory). The space was
     // materialized eagerly at create time; derive its path here so the lazily
     // spawned runtime runs scoped to it, not the host cwd.
@@ -2479,55 +2480,134 @@ async fn post_message(
 
         // Lazily ensure a runtime (spawn for a fresh draft, resume by hermes_id
         // after a restart). This is the slow part — now off the request path.
-        let (runtime, captured_hermes_id) = match bridge
-            .ensure_runtime(&session_id, &spec, resume_hermes.as_deref())
-            .await
-        {
-            Ok(pair) => {
-                emit_log("info", "bridge", "Agent runtime ready");
-                pair
-            }
-            Err(e) => {
-                tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
-                // PERSIST the error as a system message so the user sees it in
-                // the transcript — the old code only broadcast a transient WS
-                // frame, so if the user wasn't watching it vanished silently.
-                let err_msg = format!("⚠ Failed to start agent: {e:#}");
-                let hid = resume_hermes.clone().unwrap_or_default();
-                if let Ok(event) = bridge.append_system_message(
-                    &session_id,
-                    &hid,
-                    assistant_seed_id,
-                    &err_msg,
-                    Some("error"),
-                ) {
-                    {
-                        let mut v = views.write().await;
-                        v.apply(&event);
-                    }
-                    let _ = deltas.send(ServerFrame::MessageAppended {
-                        session_id: session_id.clone(),
-                        message: crate::server::dto::MessageDto {
-                            message_id: assistant_seed_id,
-                            session_id: session_id.clone(),
-                            role: "system".into(),
-                            content: Some(err_msg.clone()),
-                            tool_name: None,
-                            tool_calls: None,
-                            reasoning: None,
-                            timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
-                            token_count: None,
-                            finish_reason: Some("error".into()),
-                        },
-                    });
+        //
+        // ADR 0008 S6 cutover: route to a connected envoy (RemoteRuntime) when
+        // the session's node has an active UDS connection. This replaces the
+        // in-process bridge for production — the local node is now
+        // olympus-envoy@1 over UDS, not an in-process pseudo-envoy. Tests that
+        // build AppState with no connected envoys fall back to the in-process
+        // bridge (mock factory), so existing tests keep working unchanged.
+        let node_id = spec.node.clone().unwrap_or_default();
+        // If the session has no explicit node, route to the first connected
+        // envoy (default for the single-operator case). Sessions with an
+        // explicit node route to that specific envoy.
+        let route_node = if node_id.is_empty() {
+            envoy_conns.first_node().await.unwrap_or_default()
+        } else {
+            node_id
+        };
+        let conn = envoy_conns.get(&route_node).await;
+        let (runtime, captured_hermes_id) = if let Some(conn) = conn {
+            // Route to the connected envoy via RemoteRuntime.
+            let rt = crate::server::envoy_conn::RemoteRuntime::arc_with_spec(
+                conn,
+                session_id.clone(),
+                spec.clone(),
+            );
+            emit_log(
+                "info",
+                "bridge",
+                &format!("Routing to envoy {}…", route_node),
+            );
+            match rt.start(resume_hermes.as_deref()).await {
+                Ok(()) => {
+                    let hid = rt.hermes_session_id().await.unwrap_or_default();
+                    emit_log("info", "bridge", "Agent runtime ready (envoy)");
+                    (rt, hid)
                 }
-                let _ = deltas.send(ServerFrame::MessageDone {
-                    session_id: session_id.clone(),
-                    message_id: assistant_seed_id,
-                    finish_reason: Some(format!("error: failed to start agent: {e:#}")),
-                });
-                bridge.clear_in_flight(&session_id).await;
-                return;
+                Err(e) => {
+                    tracing::error!(error = %e, session = %session_id, "envoy ensure_runtime failed");
+                    let err_msg = format!("⚠ Failed to start agent: {e:#}");
+                    let hid = resume_hermes.clone().unwrap_or_default();
+                    if let Ok(event) = bridge.append_system_message(
+                        &session_id,
+                        &hid,
+                        assistant_seed_id,
+                        &err_msg,
+                        Some("error"),
+                    ) {
+                        {
+                            let mut v = views.write().await;
+                            v.apply(&event);
+                        }
+                        let _ = deltas.send(ServerFrame::MessageAppended {
+                            session_id: session_id.clone(),
+                            message: crate::server::dto::MessageDto {
+                                message_id: assistant_seed_id,
+                                session_id: session_id.clone(),
+                                role: "system".into(),
+                                content: Some(err_msg.clone()),
+                                tool_name: None,
+                                tool_calls: None,
+                                reasoning: None,
+                                timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+                                token_count: None,
+                                finish_reason: Some("error".into()),
+                            },
+                        });
+                    }
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_seed_id,
+                        finish_reason: Some(format!("error: failed to start agent: {e:#}")),
+                    });
+                    bridge.clear_in_flight(&session_id).await;
+                    return;
+                }
+            }
+        } else {
+            // No connected envoy for this node — fall back to the in-process
+            // bridge (tests, or a legacy deployment without an envoy service).
+            match bridge
+                .ensure_runtime(&session_id, &spec, resume_hermes.as_deref())
+                .await
+            {
+                Ok(pair) => {
+                    emit_log("info", "bridge", "Agent runtime ready");
+                    pair
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
+                    // PERSIST the error as a system message so the user sees it in
+                    // the transcript — the old code only broadcast a transient WS
+                    // frame, so if the user wasn't watching it vanished silently.
+                    let err_msg = format!("⚠ Failed to start agent: {e:#}");
+                    let hid = resume_hermes.clone().unwrap_or_default();
+                    if let Ok(event) = bridge.append_system_message(
+                        &session_id,
+                        &hid,
+                        assistant_seed_id,
+                        &err_msg,
+                        Some("error"),
+                    ) {
+                        {
+                            let mut v = views.write().await;
+                            v.apply(&event);
+                        }
+                        let _ = deltas.send(ServerFrame::MessageAppended {
+                            session_id: session_id.clone(),
+                            message: crate::server::dto::MessageDto {
+                                message_id: assistant_seed_id,
+                                session_id: session_id.clone(),
+                                role: "system".into(),
+                                content: Some(err_msg.clone()),
+                                tool_name: None,
+                                tool_calls: None,
+                                reasoning: None,
+                                timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+                                token_count: None,
+                                finish_reason: Some("error".into()),
+                            },
+                        });
+                    }
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_seed_id,
+                        finish_reason: Some(format!("error: failed to start agent: {e:#}")),
+                    });
+                    bridge.clear_in_flight(&session_id).await;
+                    return;
+                }
             }
         };
 
@@ -2599,6 +2679,7 @@ async fn post_message(
         let mut suppressing_steer_ack = false;
 
         while let Some(event) = stream.next().await {
+            #[allow(unreachable_patterns)]
             match event {
                 AgentEvent::Text(chunk) => {
                     if suppressing_steer_ack {
@@ -2637,7 +2718,7 @@ async fn post_message(
                     // id is missing (some adapters omit it on updates).
                     let is_update = args.is_empty() && !tool_calls_acc.is_empty() && {
                         // An update either carries a known id or has no args.
-                        id.as_deref().map_or(true, |i| {
+                        id.as_deref().is_none_or(|i| {
                             tool_calls_acc
                                 .iter()
                                 .any(|tc| tc.get("id").and_then(|v| v.as_str()) == Some(i))

@@ -254,10 +254,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
             delta = rx.recv() => {
                 match delta {
                     Ok(frame) => {
-                        if should_deliver(&frame, &subscriptions) {
-                            if send_frame(&mut socket, &frame).await.is_err() {
-                                break;
-                            }
+                        if should_deliver(&frame, &subscriptions)
+                            && send_frame(&mut socket, &frame).await.is_err()
+                        {
+                            break;
                         }
                     }
                     // Lagged: drop and continue (client will reconcile via REST).

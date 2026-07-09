@@ -46,6 +46,9 @@ make verify-rust     # cargo test --workspace && clippy -D warnings && fmt --che
 make verify-ui       # cd ui && bun run typecheck && bun run build && playwright e2e
 make test            # cargo test --workspace (fast inner loop)
 make run             # cargo run --release (imports state.db, serves API on :8787)
+make deploy          # build + install both hall + envoy binaries (symlink flip)
+make deploy-hall     # build hall → flip → restart olympus-hall.service
+make deploy-envoy N=2 # build envoy → flip → start olympus-envoy@2 → health gate
 
 # Direct equivalents (what `make` runs):
 cargo test --workspace
@@ -56,6 +59,16 @@ cd ui && bun run typecheck && bun run build && bun run test:e2e
 
 There is NO `bun run test` / `bun run lint` / Convex command — those were the old
 TS scaffold (removed in fe7580b). The UI test target is `test:e2e` (Playwright).
+
+## Production services (ADR 0008 S6)
+
+Olympus runs as two systemd user services:
+- `olympus-hall.service` — the control plane (event log, views, REST/WS API).
+- `olympus-envoy@1.service` — the local agent runtime holder (hermes acp children).
+
+Binaries live at `~/.olympus/bin/olympus-{hall,envoy}-<gitHash>` with stable
+symlinks (`olympus-hall` / `olympus-envoy`) as the deploy pointer. The
+`scripts/deploy.sh` script handles build → copy → symlink flip.
 
 ## Hard rules
 

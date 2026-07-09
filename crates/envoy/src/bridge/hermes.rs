@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use futures::stream::Stream;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 use tracing::debug;
 

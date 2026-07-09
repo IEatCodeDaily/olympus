@@ -200,6 +200,6 @@ rewires what the previous moved).
 | S3 binaries+RPC | DONE | glm52 worker (committed by Terminus) | feat(hall): UDS session dispatch + RemoteRuntime |
 | S4 spool/replay | TODO | — | — |
 | S5 drain+triggers | TODO | — | — |
-| S6 cutover | TODO | — | — |
+| S6 cutover | DONE | glm52 worker | feat(hall): S6 cutover — retire monolith, systemd units, deploy scripts |
 | S7 iroh | TODO | — | — |
 | S8 streaming+typing | DONE | Zephyr (glm52) | feat(ws): session-scoped subs + typing presence |

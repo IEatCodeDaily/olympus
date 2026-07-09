@@ -1,8 +1,14 @@
-//! Olympus control plane — single-binary entrypoint.
+//! Olympus Hall — the control-plane entrypoint (ADR 0008 S6).
 //!
 //! On boot: import the operator's Hermes `state.db` into a fresh event log,
 //! build the in-memory views + search index from that log, then serve the REST
 //! + WSS API on `127.0.0.1:8787` behind the per-install token.
+//!
+//! Hall owns the event log, views, search, REST/WS, and the fleet node
+//! registry. Agent runtimes (the actual `hermes acp` children) live in the
+//! separate `olympus-envoy` binary — Hall drives them over UDS via the
+//! `EnvoyFrame` wire protocol. The local node is `olympus-envoy@1` over UDS,
+//! not an in-process pseudo-envoy.
 //!
 //! The event log is rebuilt from `state.db` on every boot for the MVP (cheap,
 //! deterministic, no migration story needed yet). Live sync (ADR §6.7) lands
@@ -164,20 +170,10 @@ async fn main() -> Result<()> {
     let sync_connected = Arc::new(AtomicBool::new(false));
 
     // ---- fleet node registry ----
+    // ADR 0008 S6: the local node is NO LONGER an in-process pseudo-envoy.
+    // It is olympus-envoy@1 over UDS — the envoy binary connects and
+    // registers itself at boot. Hall does not pre-register any node.
     let node_registry = NodeRegistry::new();
-    // Auto-register the local node (in-process pseudo-envoy per ADR 0005 §3).
-    // The local node's envoy discovers its own agents (Hermes profiles + CLI
-    // harnesses installed on THIS host) — that is the per-node source of truth,
-    // not a global control-plane probe.
-    let local_hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "localhost".to_string());
-    let local_agents = olympus_control_plane::server::agents::discover_local_agents();
-    tracing::info!(count = local_agents.len(), "local envoy discovered agents");
-    node_registry
-        .register("local", &local_hostname, 4, "0.1", true, local_agents)
-        .await;
 
     let state = AppState {
         views: Arc::new(RwLock::new(views)),

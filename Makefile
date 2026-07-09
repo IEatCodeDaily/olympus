@@ -4,7 +4,7 @@
 # The single source of truth for "is the tree green?" is `make verify`.
 
 SHELL := /bin/bash
-.PHONY: verify verify-rust verify-ui test lint fmt build run e2e e2e-desktop e2e-live e2e-prod
+.PHONY: verify verify-rust verify-ui test lint fmt build run e2e e2e-desktop e2e-live e2e-prod deploy deploy-hall deploy-envoy
 
 ## verify — run ALL canonical gates (Rust + UI). The harness's go-to command.
 verify: verify-rust verify-ui
@@ -59,3 +59,34 @@ e2e-live:
 ## (same origin cloudflared sees). Requires olympus.service running.
 e2e-prod:
 	cd ui && npx playwright test --config=playwright.prod.config.ts
+
+## deploy — install both hall + envoy binaries (symlink flip, no restart).
+deploy:
+	bash scripts/deploy.sh both
+
+## deploy-hall — build hall → symlink flip → restart olympus-hall.service.
+## Envoys survive (ADR §5 Hall deploy story); they buffer through downtime.
+deploy-hall:
+	bash scripts/deploy.sh hall
+	systemctl --user restart olympus-hall
+	@echo "Hall restarted. Envoys will re-attach on their next reconnect."
+
+## deploy-envoy N — build envoy → symlink flip → start olympus-envoy@N →
+## poll /api/nodes until the new envoy is online → drain the old envoy if
+## one exists. Usage: make deploy-envoy N=2
+deploy-envoy:
+	@if [ -z "$$N" ]; then echo "Usage: make deploy-envoy N=2" >&2; exit 1; fi
+	bash scripts/deploy.sh envoy
+	systemctl --user start olympus-envoy@$$N
+	@echo "Started olympus-envoy@$$N, polling /api/nodes until online…"
+	@TOKEN=$$(cat ~/.olympus/token); \
+	for i in $$(seq 1 30); do \
+		online=$$(curl -sf -H "Authorization: Bearer $$TOKEN" \
+			http://127.0.0.1:8799/api/nodes \
+			| grep -c "envoy-$$N" || true); \
+		if [ "$$online" -gt 0 ]; then \
+			echo "envoy-$$N is online"; exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "ERROR: envoy-$$N did not come online in 30s" >&2; exit 1
