@@ -24,16 +24,15 @@ pub const OLYMPUS_ALPN: &[u8] = b"olympus/envoy/1";
 pub fn load_or_create_secret(dir: &Path) -> Result<SecretKey> {
     let path = dir.join("iroh.key");
     if path.exists() {
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("reading iroh key {}", path.display()))?;
+        let bytes =
+            std::fs::read(&path).with_context(|| format!("reading iroh key {}", path.display()))?;
         let arr: [u8; 32] = bytes
             .as_slice()
             .try_into()
             .map_err(|_| anyhow::anyhow!("iroh.key must be exactly 32 bytes"))?;
         return Ok(SecretKey::from_bytes(&arr));
     }
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let key = SecretKey::generate();
     std::fs::write(&path, key.to_bytes())
         .with_context(|| format!("writing iroh key {}", path.display()))?;
@@ -89,7 +88,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let k1 = load_or_create_secret(dir.path()).unwrap();
         let k2 = load_or_create_secret(dir.path()).unwrap();
-        assert_eq!(k1.to_bytes(), k2.to_bytes(), "key must be stable across loads");
+        assert_eq!(
+            k1.to_bytes(),
+            k2.to_bytes(),
+            "key must be stable across loads"
+        );
         assert_eq!(k1.public(), k2.public());
     }
 

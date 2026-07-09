@@ -10,7 +10,7 @@
 
 use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey};
-use olympus_envoy::transport::{OLYMPUS_ALPN, connect_to_hall, load_or_create_secret};
+use olympus_envoy::transport::{connect_to_hall, load_or_create_secret, OLYMPUS_ALPN};
 use olympus_proto::frames::EnvoyFrame;
 use olympus_proto::version::{BuildVersion, PROTOCOL_VERSION};
 
@@ -29,7 +29,9 @@ async fn hall_accept_once(ep: Endpoint, allowlist: Vec<iroh::PublicKey>) -> Opti
     let buf = recv.read_to_end(64 * 1024).await.ok()?;
     let line = String::from_utf8(buf).ok()?;
     let frame: EnvoyFrame = serde_json::from_str(line.trim()).ok()?;
-    send.write_all(b"{\"kind\":\"ack\",\"status\":\"ok\"}\n").await.ok()?;
+    send.write_all(b"{\"kind\":\"ack\",\"status\":\"ok\"}\n")
+        .await
+        .ok()?;
     send.finish().ok()?;
     // Give the peer a moment to read before the connection drops.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -127,7 +129,9 @@ async fn iroh_rejects_non_allowlisted_peer() {
     // The QUIC connection itself may establish (allowlist is checked
     // post-handshake), but the hall must close it without processing frames.
     if let Ok((mut send, mut recv)) = connect_to_hall(&envoy_ep, &hall_id.to_string()).await {
-        let _ = send.write_all(b"{\"kind\":\"heartbeat\",\"nodeId\":\"x\"}\n").await;
+        let _ = send
+            .write_all(b"{\"kind\":\"heartbeat\",\"nodeId\":\"x\"}\n")
+            .await;
         let _ = send.finish();
         // Read should yield nothing / error — the hall closed on us.
         let got = recv.read_to_end(4096).await.unwrap_or_default();
@@ -142,7 +146,10 @@ async fn iroh_rejects_non_allowlisted_peer() {
         .await
         .expect("hall accept did not hang")
         .expect("hall task ok");
-    assert!(seen.is_none(), "hall must not process frames from non-allowlisted peers");
+    assert!(
+        seen.is_none(),
+        "hall must not process frames from non-allowlisted peers"
+    );
 
     envoy_ep.close().await;
     hall_ep.close().await;
