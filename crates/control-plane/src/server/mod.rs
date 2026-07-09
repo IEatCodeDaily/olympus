@@ -425,7 +425,7 @@ async fn tail_events(State(state): State<AppState>, Query(q): Query<EventsQuery>
             tracing::error!(error = %e, "tail_events read failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "log_read_failed", "message": format!("{e}") })),
+                Json(json!({ "error": "log_read_failed", "message": format!("{e:#}") })),
             )
                 .into_response()
         }
@@ -534,7 +534,7 @@ async fn put_setup(State(state): State<AppState>, Json(body): Json<PutSetupBody>
     if let Err(e) = state.log.append(&event) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+            Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
         )
             .into_response();
     }
@@ -614,7 +614,7 @@ async fn put_registry_entry(
     if let Err(e) = state.log.append(&event) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+            Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
         )
             .into_response();
     }
@@ -1491,7 +1491,7 @@ async fn create_subsession(
         Err(e) => {
             tracing::error!(error = %e, parent = %id, "create_subsession create_draft failed");
             return (StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "bridge_error", "message": format!("Failed to create subsession: {e}") })))
+                Json(json!({ "error": "bridge_error", "message": format!("Failed to create subsession: {e:#}") })))
                 .into_response();
         }
     };
@@ -1985,7 +1985,7 @@ async fn create_session(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "bridge_error",
-                    "message": format!("Failed to create session: {e}"),
+                    "message": format!("Failed to create session: {e:#}"),
                 })),
             )
                 .into_response()
@@ -2041,7 +2041,7 @@ async fn patch_session(
     if let Err(e) = state.log.append(&event) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+            Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
         )
             .into_response();
     }
@@ -2120,7 +2120,7 @@ async fn fork_session(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "bridge_error",
-                    "message": format!("Failed to fork agent session: {e}"),
+                    "message": format!("Failed to fork agent session: {e:#}"),
                 })),
             )
                 .into_response();
@@ -2400,7 +2400,7 @@ async fn post_message(
                 Ok(overlay) => (overlay.mcp_servers, overlay.env, overlay.warnings),
                 Err(e) => {
                     tracing::warn!(error = %e, session = %id, "adapter materialize failed; spawning with empty setup");
-                    (vec![], vec![], vec![format!("adapter failed: {e}")])
+                    (vec![], vec![], vec![format!("adapter failed: {e:#}")])
                 }
             }
         } else {
@@ -2490,7 +2490,7 @@ async fn post_message(
                 // PERSIST the error as a system message so the user sees it in
                 // the transcript — the old code only broadcast a transient WS
                 // frame, so if the user wasn't watching it vanished silently.
-                let err_msg = format!("⚠ Failed to start agent: {e}");
+                let err_msg = format!("⚠ Failed to start agent: {e:#}");
                 let hid = resume_hermes.clone().unwrap_or_default();
                 if let Ok(event) = bridge.append_system_message(
                     &session_id,
@@ -2522,7 +2522,7 @@ async fn post_message(
                 let _ = deltas.send(ServerFrame::MessageDone {
                     session_id: session_id.clone(),
                     message_id: assistant_seed_id,
-                    finish_reason: Some(format!("error: failed to start agent: {e}")),
+                    finish_reason: Some(format!("error: failed to start agent: {e:#}")),
                 });
                 bridge.clear_in_flight(&session_id).await;
                 return;
@@ -2580,11 +2580,11 @@ async fn post_message(
             .await
         {
             tracing::error!(error = %e, session = %session_id, "prompt send failed");
-            emit_log("error", "bridge", &format!("Prompt send failed: {e}"));
+            emit_log("error", "bridge", &format!("Prompt send failed: {e:#}"));
             let _ = deltas.send(ServerFrame::MessageDone {
                 session_id: session_id.clone(),
                 message_id: assistant_seed_id,
-                finish_reason: Some(format!("error: {e}")),
+                finish_reason: Some(format!("error: {e:#}")),
             });
             bridge.clear_in_flight(&session_id).await;
             return;
@@ -2815,8 +2815,8 @@ async fn post_message(
                     terminal_event_seen = true;
                     tracing::warn!(error = %e, session = %session_id, "agent error event");
                     emit_log("error", "agent", &e);
-                    let content = format!("⚠ agent error: {e}");
-                    let finish_reason = format!("error: {e}");
+                    let content = format!("⚠ agent error: {e:#}");
+                    let finish_reason = format!("error: {e:#}");
                     if let Ok(event) = bridge.append_system_message(
                         &session_id,
                         &hermes_id_clone,

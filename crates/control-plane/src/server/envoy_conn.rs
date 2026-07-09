@@ -10,6 +10,12 @@
 //! Session events arriving on an envoy connection are forwarded into Hall's
 //! broadcast `deltas` channel (via a sink closure) so the WS fanout + event log
 //! apply path sees them identically to in-process events.
+//!
+//! NOTE: this module is stub code awaiting S3 completion (RemoteRuntime wiring
+//! into bridge_mgr + UDS session dispatch). It compiles but is not exercised
+//! yet — `#[allow(dead_code)]` silences warnings until the wiring lands.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

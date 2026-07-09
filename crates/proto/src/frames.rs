@@ -322,7 +322,7 @@ mod tests {
                 hostname: "talos".into(),
                 slots_total: 4,
                 protocol_version: PROTOCOL_VERSION,
-                version: BuildVersion::current(),
+                version: BuildVersion::for_binary("0.1.0"),
                 agents: Some(json!([{"id": "default", "kind": "hermes"}])),
                 runtimes: vec![sample_runtime_status()],
             },

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use olympus_envoy::{
-    bridge::{AgentCommand, AgentRuntime},
+    bridge::{AgentCommand, AgentEvent, AgentRuntime},
     discovery,
     mock_runtime::MockAgentRuntime,
     runtime_table::RuntimeTable,
@@ -165,15 +165,15 @@ async fn run_connection(
         hostname: hostname.to_string(),
         slots_total: 4,
         protocol_version: PROTOCOL_VERSION,
-        version: BuildVersion::current(),
+        version: BuildVersion::for_binary(env!("CARGO_PKG_VERSION")),
         agents: Some(agents_json),
         runtimes: Vec::new(),
     };
     conn.send_frame(&hello).await?;
     tracing::info!("hello sent");
 
-    // Heartbeat loop.
-    {
+    // Heartbeat loop — store handle so we can abort it when the read loop exits.
+    let hb_handle = {
         let hb_conn = conn.clone();
         let hb_node = node_id.to_string();
         tokio::spawn(async move {
@@ -187,8 +187,8 @@ async fn run_connection(
                     break;
                 }
             }
-        });
-    }
+        })
+    };
 
     // Read loop — dispatch HallFrames.
     let mut lines = BufReader::new(reader).lines();
@@ -224,6 +224,10 @@ async fn run_connection(
             }
         });
     }
+
+    // Read loop exited (Hall disconnected or error). Abort the heartbeat task
+    // so it doesn't leak holding an Arc<Conn> clone across reconnect cycles.
+    hb_handle.abort();
 
     Ok(())
 }
@@ -332,7 +336,6 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
     }
     Ok(())
 }
-
 /// Send a command to a session's runtime and drain its event stream into
 /// `EnvoyFrame::Event` frames with per-session monotonic seq.
 async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Result<()> {
@@ -343,7 +346,12 @@ async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Re
         .ok_or_else(|| anyhow::anyhow!("no runtime for session"))?;
 
     // Assign the turn id before sending so events are grouped.
-    let _turn_id = conn.next_turn(session_id).await;
+    let _ = conn.next_turn(session_id).await;
+
+    // Subscribe BEFORE sending so fast runtimes cannot emit and finish the
+    // whole turn before the drain loop is listening (broadcast only delivers
+    // to existing subscribers). Mirrors the monolith's post_message ordering.
+    let mut events = runtime.events();
 
     runtime
         .send(cmd)
@@ -351,7 +359,9 @@ async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Re
         .context("sending command to runtime")?;
 
     // Drain the event stream, forwarding each as an EnvoyFrame::Event.
-    let mut events = runtime.events();
+    // Break on terminal events (Done/Error) — the broadcast channel is never
+    // closed (it lives for the runtime's lifetime), so without a break this
+    // loop hangs forever after the turn completes.
     while let Some(event) = events.next().await {
         let turn_id = conn.next_turn_id_for_event(session_id).await;
         let seq = conn.next_seq(session_id).await;
@@ -359,11 +369,15 @@ async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Re
             session_id: session_id.to_string(),
             turn_id,
             seq,
-            payload: event,
+            payload: event.clone(),
         };
         if let Err(e) = conn.send_frame(&frame).await {
             tracing::error!(error = %e, "failed to send event frame");
             return Err(e);
+        }
+        // Terminal events end the drain — the broadcast stream itself never ends.
+        if matches!(&event, AgentEvent::Done { .. } | AgentEvent::Error(_)) {
+            break;
         }
     }
 

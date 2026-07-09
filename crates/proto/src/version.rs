@@ -32,12 +32,14 @@ fn unknown() -> String {
 }
 
 impl BuildVersion {
-    /// The build identity of this compilation of the proto crate, populated at
-    /// build time by `build.rs` (git hash + timestamp; falls back to
-    /// `"unknown"` when git is unavailable).
-    pub fn current() -> Self {
+    /// Build identity for the **calling binary**, not the proto crate.
+    ///
+    /// `semver` must be passed by the caller (typically `env!("CARGO_PKG_VERSION")`
+    /// evaluated in the binary's crate) so it reflects the binary's version, not
+    /// proto's. The git hash and build timestamp come from `build.rs` (workspace-wide).
+    pub fn for_binary(semver: &str) -> Self {
         Self {
-            semver: env!("CARGO_PKG_VERSION").to_string(),
+            semver: semver.to_string(),
             git_hash: env!("OLYMPUS_GIT_HASH").to_string(),
             built_at: env!("OLYMPUS_BUILT_AT").to_string(),
         }
@@ -50,7 +52,7 @@ mod tests {
 
     #[test]
     fn build_version_round_trips_camel_case() {
-        let v = BuildVersion::current();
+        let v = BuildVersion::for_binary("0.1.0");
         assert!(!v.semver.is_empty());
         assert!(!v.git_hash.is_empty());
         let json = serde_json::to_value(&v).unwrap();
