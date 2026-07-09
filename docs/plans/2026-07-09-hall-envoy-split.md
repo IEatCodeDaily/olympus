@@ -196,7 +196,7 @@ rewires what the previous moved).
 | Milestone | Status | Worker | Commit |
 |---|---|---|---|
 | S1 proto | DONE | Terminus (subagent) | see git log (feat(proto)) |
-| S2 envoy lib | TODO | — | — |
+| S2 envoy lib | DONE | Terminus (subagent, committed by Terminus) | feat(envoy) |
 | S3 binaries+RPC | TODO | — | — |
 | S4 spool/replay | TODO | — | — |
 | S5 drain+triggers | TODO | — | — |

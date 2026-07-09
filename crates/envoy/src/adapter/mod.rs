@@ -16,7 +16,35 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::views::{RegistryEntry, RegistryView};
+/// A registry entry — one definition for one (kind, slug) pair. Moved here
+/// from the hall-side registry view (ADR 0008 S2): the adapter consumes
+/// resolved entries; the hall's `RegistryView` remains the projection that
+/// produces them (it re-exports this type).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegistryEntry {
+    pub kind: String, // "skill" | "mcp" | "plugin" | "hook"
+    pub slug: String,
+    /// Harness-agnostic definition (JSON string):
+    /// - MCP → `{"command":"...","args":[...],"env":{...}}`
+    /// - skill → `{"dir":"/path/to/skill"}` or a content-addressed ref
+    /// - plugin → `{"kind":"install|service", ...}`
+    /// - hook → harness-specific JSON
+    pub definition: String,
+    pub registered_at: f64,
+}
+
+/// Resolves (kind, slug-list) pairs to registry entries. The hall's
+/// `RegistryView` implements this; the envoy never owns the registry —
+/// it only consumes resolved definitions.
+pub trait SlugResolver {
+    /// Resolve a batch of slugs for a kind. Returns (found, missing) where
+    /// missing is the list of unregistered slugs (so the adapter can warn).
+    fn resolve_batch_owned(
+        &self,
+        kind: &str,
+        slugs: &[String],
+    ) -> (Vec<RegistryEntry>, Vec<String>);
+}
 
 /// Which agent harness is locked to this session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,31 +144,31 @@ impl ResolvedSetup {
     /// the concrete definitions the adapter needs. Each category resolves to
     /// (found definitions, missing slugs).
     pub fn from_registry(
-        registry: &RegistryView,
+        registry: &impl SlugResolver,
         skills: &[String],
         mcp: &[String],
         plugins: &[String],
         hooks: &[String],
     ) -> Self {
-        let (s_skills, m_skills) = registry.resolve_batch("skill", skills);
-        let (s_mcp, m_mcp) = registry.resolve_batch("mcp", mcp);
-        let (s_plugins, m_plugins) = registry.resolve_batch("plugin", plugins);
-        let (s_hooks, m_hooks) = registry.resolve_batch("hook", hooks);
+        let (s_skills, m_skills) = registry.resolve_batch_owned("skill", skills);
+        let (s_mcp, m_mcp) = registry.resolve_batch_owned("mcp", mcp);
+        let (s_plugins, m_plugins) = registry.resolve_batch_owned("plugin", plugins);
+        let (s_hooks, m_hooks) = registry.resolve_batch_owned("hook", hooks);
         Self {
             skills: ResolvedCategory {
-                resolved: s_skills.into_iter().cloned().collect(),
+                resolved: s_skills,
                 unresolved: m_skills,
             },
             mcp: ResolvedCategory {
-                resolved: s_mcp.into_iter().cloned().collect(),
+                resolved: s_mcp,
                 unresolved: m_mcp,
             },
             plugins: ResolvedCategory {
-                resolved: s_plugins.into_iter().cloned().collect(),
+                resolved: s_plugins,
                 unresolved: m_plugins,
             },
             hooks: ResolvedCategory {
-                resolved: s_hooks.into_iter().cloned().collect(),
+                resolved: s_hooks,
                 unresolved: m_hooks,
             },
         }

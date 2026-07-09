@@ -192,6 +192,26 @@ pub fn build_session_fork_request(session_id: &str, cwd: &str, id: AcpId) -> Acp
 // Message → AgentEvent mapping
 // ---------------------------------------------------------------------------
 
+/// Parse the `resumable` capability from an adapter's `initialize` response
+/// result (ADR 0008 §3): requires BOTH `agentCapabilities.loadSession == true`
+/// AND the presence of `agentCapabilities.sessionCapabilities.resume`.
+/// Fail closed: anything absent or malformed → false. Capability-driven,
+/// never harness-name-driven (docs/wayfinder/resume-semantics-claude-codex.md).
+pub fn parse_resumable_capability(result: &Value) -> bool {
+    let Some(caps) = result.get("agentCapabilities") else {
+        return false;
+    };
+    let load_session = caps
+        .get("loadSession")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let resume = caps
+        .get("sessionCapabilities")
+        .map(|sc| !sc.get("resume").unwrap_or(&Value::Null).is_null())
+        .unwrap_or(false);
+    load_session && resume
+}
+
 /// Map any [`AcpMessage`] (as read from the wire) into an optional [`AgentEvent`].
 ///
 /// - Notifications are mapped via [`AgentEvent::from_notification`].
@@ -210,8 +230,25 @@ async fn handle_incoming_message(
     tx: &tokio::sync::broadcast::Sender<AgentEvent>,
     session_id_shared: &Arc<Mutex<Option<String>>>,
     handshake_id: &Arc<Mutex<Option<serde_json::Value>>>,
+    init_id: &Arc<Mutex<Option<serde_json::Value>>>,
+    resumable: &Arc<Mutex<bool>>,
 ) {
     if let AcpMessage::Response(resp) = msg {
+        // If this response answers the in-flight `initialize` request, capture
+        // the adapter's capability flags (ADR 0008 §3): resumable requires
+        // agentCapabilities.loadSession + sessionCapabilities.resume. Fail
+        // closed — absent capabilities leave resumable false.
+        let mut init = init_id.lock().await;
+        if let Some(expected) = init.as_ref() {
+            if *expected == resp.id.0 {
+                *init = None;
+                let caps = parse_resumable_capability(&resp.result);
+                *resumable.lock().await = caps;
+                debug!(target: "olympus.bridge.hermes", resumable = caps, "captured initialize capabilities");
+            }
+        }
+        drop(init);
+
         if let Some(sid) = resp.result.get("sessionId").and_then(|v| v.as_str()) {
             *session_id_shared.lock().await = Some(sid.to_string());
             debug!(target: "olympus.bridge.hermes", session_id = %sid, "captured session id");
@@ -355,6 +392,13 @@ pub struct HermesAgentRuntime {
     /// message ("PONGHey! What can I do for you?" bug). Cleared by the reader
     /// when the matching Response arrives.
     handshake_id: Arc<Mutex<Option<serde_json::Value>>>,
+    /// The JSON-RPC id of the in-flight `initialize` request. The reader
+    /// matches its response and captures the capability flags below.
+    init_id: Arc<Mutex<Option<serde_json::Value>>>,
+    /// Capability flag parsed from the initialize response (ADR 0008 §3):
+    /// loadSession + sessionCapabilities.resume. Fail closed: false until
+    /// (and unless) the adapter advertises both.
+    resumable: Arc<Mutex<bool>>,
 }
 
 impl HermesAgentRuntime {
@@ -373,6 +417,8 @@ impl HermesAgentRuntime {
             event_tx: tx,
             session_id_shared: Arc::new(Mutex::new(None)),
             handshake_id: Arc::new(Mutex::new(None)),
+            init_id: Arc::new(Mutex::new(None)),
+            resumable: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -405,6 +451,8 @@ impl HermesAgentRuntime {
         tx: tokio::sync::broadcast::Sender<AgentEvent>,
         session_id_shared: Arc<Mutex<Option<String>>>,
         handshake_id: Arc<Mutex<Option<serde_json::Value>>>,
+        init_id: Arc<Mutex<Option<serde_json::Value>>>,
+        resumable: Arc<Mutex<bool>>,
         framing: AcpFraming,
     ) {
         tokio::spawn(async move {
@@ -417,7 +465,15 @@ impl HermesAgentRuntime {
                         let Some(msg) = NlFrame::decode_line(line.as_bytes()) else {
                             continue;
                         };
-                        handle_incoming_message(&msg, &tx, &session_id_shared, &handshake_id).await;
+                        handle_incoming_message(
+                            &msg,
+                            &tx,
+                            &session_id_shared,
+                            &handshake_id,
+                            &init_id,
+                            &resumable,
+                        )
+                        .await;
                     }
                 }
                 AcpFraming::ContentLength => {
@@ -430,6 +486,8 @@ impl HermesAgentRuntime {
                                     &tx,
                                     &session_id_shared,
                                     &handshake_id,
+                                    &init_id,
+                                    &resumable,
                                 )
                                 .await
                             }
@@ -510,11 +568,16 @@ impl AgentRuntime for HermesAgentRuntime {
             self.event_tx.clone(),
             Arc::clone(&self.session_id_shared),
             Arc::clone(&self.handshake_id),
+            Arc::clone(&self.init_id),
+            Arc::clone(&self.resumable),
             self.config.framing,
         );
 
         // --- ACP handshake: initialize ---
         let init_req = build_initialize_request(self.alloc_id());
+        // Arm the initialize-response gate so the reader captures the
+        // adapter's capability flags (resumable — ADR 0008 §3).
+        *self.init_id.lock().await = Some(init_req.id.0.clone());
         debug!(target: "olympus.bridge.hermes", method = %init_req.method, "ACP send");
         self.write_message(&AcpMessage::Request(init_req)).await?;
 
@@ -596,10 +659,15 @@ impl AgentRuntime for HermesAgentRuntime {
             self.event_tx.clone(),
             Arc::clone(&self.session_id_shared),
             Arc::clone(&self.handshake_id),
+            Arc::clone(&self.init_id),
+            Arc::clone(&self.resumable),
             self.config.framing,
         );
 
         let init_req = build_initialize_request(self.alloc_id());
+        // Arm the initialize-response gate so the reader captures the
+        // adapter's capability flags (resumable — ADR 0008 §3).
+        *self.init_id.lock().await = Some(init_req.id.0.clone());
         debug!(target: "olympus.bridge.hermes", method = %init_req.method, "ACP send");
         self.write_message(&AcpMessage::Request(init_req)).await?;
 
@@ -717,6 +785,10 @@ impl AgentRuntime for HermesAgentRuntime {
 
     async fn hermes_session_id(&self) -> Option<String> {
         self.session_id_shared.lock().await.clone()
+    }
+
+    async fn resumable(&self) -> bool {
+        *self.resumable.lock().await
     }
 }
 

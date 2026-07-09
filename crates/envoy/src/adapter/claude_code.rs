@@ -241,8 +241,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::RegistryEntry;
     use crate::adapter::{ResolvedCategory, ResolvedSetup};
-    use crate::views::RegistryEntry;
 
     fn mcp_entry(slug: &str, def: &str) -> RegistryEntry {
         RegistryEntry {

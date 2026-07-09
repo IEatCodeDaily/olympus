@@ -52,6 +52,14 @@ pub trait AgentRuntime: Send + Sync {
     /// The Hermes session id captured from the ACP session/new or session/resume
     /// response. Returns None if the runtime hasn't started or captured the id yet.
     async fn hermes_session_id(&self) -> Option<String>;
+    /// Whether this runtime's adapter advertised cross-process session resume
+    /// in its `initialize` response (`agentCapabilities.loadSession` +
+    /// `sessionCapabilities.resume` — ADR 0008 §3, capability-driven, never
+    /// harness-name-driven). Default false: fail closed when the capability
+    /// was absent or never captured.
+    async fn resumable(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

@@ -1041,6 +1041,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "olympus-envoy",
  "olympus-proto",
  "postcard",
  "rand 0.8.6",
@@ -1060,6 +1061,22 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zstd",
+]
+
+[[package]]
+name = "olympus-envoy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "olympus-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tracing",
 ]
 
 [[package]]

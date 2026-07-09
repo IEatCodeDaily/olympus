@@ -4,10 +4,14 @@
 //! router, shared state, the auth middleware, and the read-only REST handlers
 //! that back the UI's session list, transcript view, and search.
 
-pub mod agents;
 pub mod bridge_mgr;
 pub mod dto;
 pub mod ws;
+
+// Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
+// for Hermes profiles + CLI harnesses is the envoy's job. Re-exported so
+// existing `server::agents::…` call sites keep working unchanged.
+pub use olympus_envoy::discovery as agents;
 
 #[cfg(test)]
 pub mod test_support;
@@ -2615,7 +2619,13 @@ async fn post_message(
                         text_delta: chunk,
                     });
                 }
-                AgentEvent::ToolCall { id, name, args, status, result } => {
+                AgentEvent::ToolCall {
+                    id,
+                    name,
+                    args,
+                    status,
+                    result,
+                } => {
                     // Two shapes arrive here:
                     //  - `tool_call` (new invocation): has name+args, status
                     //    "pending" (queued/awaiting permission) or "in_progress".
@@ -2626,9 +2636,9 @@ async fn post_message(
                     let is_update = args.is_empty() && !tool_calls_acc.is_empty() && {
                         // An update either carries a known id or has no args.
                         id.as_deref().map_or(true, |i| {
-                            tool_calls_acc.iter().any(|tc| {
-                                tc.get("id").and_then(|v| v.as_str()) == Some(i)
-                            })
+                            tool_calls_acc
+                                .iter()
+                                .any(|tc| tc.get("id").and_then(|v| v.as_str()) == Some(i))
                         })
                     };
                     if is_update {
@@ -2639,7 +2649,9 @@ async fn post_message(
                                 None => tc.get("result").is_none(),
                             })
                             .or_else(|| {
-                                tool_calls_acc.iter().rposition(|tc| tc.get("result").is_none())
+                                tool_calls_acc
+                                    .iter()
+                                    .rposition(|tc| tc.get("result").is_none())
                             });
                         if let Some(idx) = idx {
                             let tc = &mut tool_calls_acc[idx];
@@ -2720,7 +2732,7 @@ async fn post_message(
                         text_delta: delta,
                     });
                 }
-                AgentEvent::Text(_) => {}      // streamed to the chat bubble, not logs
+                AgentEvent::Text(_) => {} // streamed to the chat bubble, not logs
                 AgentEvent::Done { finish_reason } => {
                     // Skip the Done ack from a /steer slash command. The Hermes
                     // adapter processes /steer as a slash command that returns
@@ -2730,8 +2742,8 @@ async fn post_message(
                     if bridge.take_steer_pending(&session_id).await {
                         tracing::debug!(session = %session_id, "skipped steer-ack Done");
                         suppressing_steer_ack = false; // resume normal text capture
-                        // Broadcast delivery status so the steer bubble's
-                        // badge flips from 'pending' to 'delivered'.
+                                                       // Broadcast delivery status so the steer bubble's
+                                                       // badge flips from 'pending' to 'delivered'.
                         let _ = deltas.send(ServerFrame::SessionLog {
                             session_id: session_id.clone(),
                             level: "info".into(),
@@ -2840,7 +2852,13 @@ async fn post_message(
                     });
                     break;
                 }
-                AgentEvent::ToolCall { id, name, args, status, result } => {
+                AgentEvent::ToolCall {
+                    id,
+                    name,
+                    args,
+                    status,
+                    result,
+                } => {
                     // Accumulate so the final assistant message carries its tool
                     // calls (rendered in the transcript's tool UI).
                     let mut entry = serde_json::json!({
