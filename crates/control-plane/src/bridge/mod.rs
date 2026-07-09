@@ -15,79 +15,10 @@ use std::pin::Pin;
 
 use futures::stream::Stream;
 
-/// A high-level command Olympus issues to the agent runtime.
-///
-/// Each variant maps onto a real ACP method (source-verified in the spike):
-/// - [`AgentCommand::Prompt`]  → `session/prompt` (text)
-/// - [`AgentCommand::Steer`]   → `session/prompt` with text `"/steer <text>"`
-///   (NOT an ACP method — slash is intercepted inside prompt handling)
-/// - [`AgentCommand::Slash`]   → `session/prompt` with text `"/<command>"`
-/// - [`AgentCommand::Cancel`]  → `session/cancel` (a *notification*, no id)
-/// - [`AgentCommand::SwitchModel`] → `session/set_model`
-/// - [`AgentCommand::Stop`]    → close the ACP child process
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentCommand {
-    /// Send a prompt to the active session. `model` is optional; if set, the
-    /// runtime switches model before prompting.
-    Prompt { text: String, model: Option<String> },
-    /// Inject mid-turn guidance. Best-effort and turn-scoped: only lands while
-    /// a turn is actively running.
-    Steer { text: String },
-    /// Invoke a Hermes slash command as prompt text (e.g. "compact", "reset").
-    Slash { command: String },
-    /// Cancel the running turn.
-    Cancel,
-    /// Switch the active session's model.
-    SwitchModel { model: String },
-    /// Stop the runtime (close the child process).
-    Stop,
-}
-
-/// A permission option the agent offers for a gated tool call (ACP
-/// `session/request_permission`). Mirrors the ACP `PermissionOption` shape.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PermissionOption {
-    /// Unique id echoed back in the response outcome.
-    pub option_id: String,
-    /// Human-readable label ("Allow once", "Reject", …).
-    pub name: String,
-    /// Hint: allow_once | allow_always | reject_once | reject_always.
-    pub kind: String,
-}
-
-/// A streaming event emitted by the agent runtime, derived from
-/// `session/update` notifications and final prompt responses.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentEvent {
-    /// A chunk of assistant text (from `agent_message_chunk`).
-    Text(String),
-    /// A tool call / tool result (from `tool_call` / `tool_call_update`).
-    ToolCall {
-        /// ACP `toolCallId` — the stable key for matching updates to calls.
-        id: Option<String>,
-        name: String,
-        args: String,
-        /// ACP lifecycle status: "pending" | "in_progress" | "completed" | "failed".
-        status: Option<String>,
-        result: Option<String>,
-    },
-    /// A reasoning chunk (from `agent_thought_chunk`).
-    Reasoning(String),
-    /// The agent is blocked awaiting a permission decision for a gated tool call
-    /// (ACP `session/request_permission`). The turn is paused until the client
-    /// responds with a chosen `option_id`. `request_id` is the JSON-serialized
-    /// JSON-RPC id to echo in the response.
-    AwaitingInput {
-        request_id: String,
-        tool_call: String,
-        options: Vec<PermissionOption>,
-    },
-    /// The turn finished. `finish_reason` mirrors ACP `stopReason`
-    /// (e.g. "end_turn", "cancelled").
-    Done { finish_reason: Option<String> },
-    /// An error from the runtime.
-    Error(String),
-}
+// The serde data types (AgentCommand, AgentEvent, PermissionOption) moved to
+// `olympus-proto` (ADR 0008 — proto is the only crate Hall and Envoy share).
+// Re-exported here so existing call sites keep working unchanged.
+pub use olympus_proto::{AgentCommand, AgentEvent, PermissionOption};
 
 /// A runtime that drives an external agent (Hermes via ACP).
 ///
@@ -126,7 +57,9 @@ pub trait AgentRuntime: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::acp::{AcpMessage, AcpNotification, AcpRequest, AcpResponse, Frame};
+    use crate::bridge::acp::{
+        AcpMessage, AcpNotification, AcpRequest, AcpResponse, AgentEventAcpExt, Frame,
+    };
     use serde_json::json;
 
     // ---- Test 1: frame encode/decode round-trips a JSON-RPC message ----
@@ -339,7 +272,13 @@ mod tests {
         };
         let event = AgentEvent::from_notification(&notif).expect("map tool_call");
         match event {
-            AgentEvent::ToolCall { id, name, args, status, result } => {
+            AgentEvent::ToolCall {
+                id,
+                name,
+                args,
+                status,
+                result,
+            } => {
                 assert_eq!(id.as_deref(), Some("tc-1"));
                 assert!(name.contains("terminal") || name.contains("echo") || !name.is_empty());
                 assert!(!args.is_empty());

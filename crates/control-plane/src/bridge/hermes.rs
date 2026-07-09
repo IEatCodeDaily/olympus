@@ -36,16 +36,16 @@ use tracing::debug;
 
 use super::{AgentCommand, AgentEvent, AgentRuntime};
 use crate::adapter::AgentKind;
-use crate::bridge::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest, AcpResponse, Frame};
+use crate::bridge::acp::{
+    AcpId, AcpMessage, AcpNotification, AcpRequest, AcpResponse, AgentEventAcpExt, Frame,
+};
 
 const CLAUDE_CODE_ACP_PACKAGE: &str = "@zed-industries/claude-code-acp@0.16.2";
 const CODEX_ACP_PACKAGE: &str = "@zed-industries/codex-acp@0.16.0";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AcpFraming {
-    NewlineJson,
-    ContentLength,
-}
+// AcpFraming moved to `olympus-proto` (ADR 0008); re-exported so existing
+// call sites keep working unchanged.
+pub use olympus_proto::AcpFraming;
 
 /// Select the ACP adapter command for a session's agent string.
 ///

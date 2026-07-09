@@ -1041,6 +1041,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "olympus-proto",
  "postcard",
  "rand 0.8.6",
  "redb",
@@ -1059,6 +1060,14 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zstd",
+]
+
+[[package]]
+name = "olympus-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

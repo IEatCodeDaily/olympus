@@ -20,26 +20,9 @@ use crate::bridge::AgentRuntime;
 use crate::event::Event;
 use crate::log::Log;
 
-/// What an agent runtime needs to spawn: which agent (Hermes profile) drives it
-/// and on which node. The factory turns this into a concrete runtime.
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeSpec {
-    /// Hermes profile to run as (`None` → the server's default profile).
-    pub agent: Option<String>,
-    /// Node to run on ("local" for now; multi-node is post-MVP).
-    pub node: Option<String>,
-    /// The session space — the agent's working directory. `None` falls back to
-    /// the server's cwd (legacy behavior); production always sets this to the
-    /// per-session space so agents operate in a scoped directory, not the host.
-    pub cwd: Option<String>,
-    /// MCP servers to inject into the ACP session/new request (resolved from
-    /// the registry by the setup adapter). Each value is the harness's native
-    /// MCP server JSON. `None`/empty → no MCP servers (legacy behavior).
-    pub mcp_servers: Vec<serde_json::Value>,
-    /// Extra environment variables for the child process (from the setup
-    /// adapter, e.g. HERMES_SKILLS_PATH). Default empty.
-    pub env: Vec<(String, String)>,
-}
+// RuntimeSpec moved to `olympus-proto` (ADR 0008); re-exported so existing
+// call sites keep working unchanged.
+pub use olympus_proto::RuntimeSpec;
 
 /// A type-erased runtime factory. Production uses HermesAgentRuntime; tests
 /// inject a mock. The spec carries the agent/node binding so the factory can
