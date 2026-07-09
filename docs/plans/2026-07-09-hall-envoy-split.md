@@ -197,7 +197,7 @@ rewires what the previous moved).
 |---|---|---|---|
 | S1 proto | DONE | Terminus (subagent) | see git log (feat(proto)) |
 | S2 envoy lib | DONE | Terminus (subagent, committed by Terminus) | feat(envoy) |
-| S3 binaries+RPC | TODO | — | — |
+| S3 binaries+RPC | PARTIAL | Terminus (direct) | envoy bin + hall bin name + envoy_conn module; RemoteRuntime + UDS session dispatch + integration test TODO |
 | S4 spool/replay | TODO | — | — |
 | S5 drain+triggers | TODO | — | — |
 | S6 cutover | TODO | — | — |

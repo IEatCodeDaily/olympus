@@ -1070,6 +1070,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "hostname",
  "olympus-proto",
  "serde",
  "serde_json",
@@ -1077,6 +1078,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

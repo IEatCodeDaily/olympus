@@ -3,9 +3,9 @@
 //! The `/ws` delta stream lives in [`crate::server::ws`]. This module owns the
 //! router, shared state, the auth middleware, and the read-only REST handlers
 //! that back the UI's session list, transcript view, and search.
-
 pub mod bridge_mgr;
 pub mod dto;
+pub mod envoy_conn;
 pub mod ws;
 
 // Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
