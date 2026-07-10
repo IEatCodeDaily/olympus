@@ -205,6 +205,10 @@ enum StoredVariant {
         project_id: String,
         attached_at: f64,
     },
+    SessionOrganizationAssigned {
+        session_id: String,
+        organization_id: String,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -489,6 +493,13 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             session_id: session_id.clone(),
             project_id: project_id.clone(),
             attached_at: *attached_at,
+        },
+        Event::SessionOrganizationAssigned {
+            session_id,
+            organization_id,
+        } => StoredVariant::SessionOrganizationAssigned {
+            session_id: session_id.clone(),
+            organization_id: organization_id.clone(),
         },
     };
     Ok(StoredEvent { variant })
@@ -803,6 +814,13 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             project_id,
             attached_at,
         },
+        StoredVariant::SessionOrganizationAssigned {
+            session_id,
+            organization_id,
+        } => Event::SessionOrganizationAssigned {
+            session_id,
+            organization_id,
+        },
     })
 }
 
@@ -923,7 +941,10 @@ impl Log {
                 Event::SessionCreated { source, .. } => source == "olympus",
                 Event::SessionUpdated { session_id, .. }
                 | Event::MessageAppended { session_id, .. }
-                | Event::MessageRemoved { session_id, .. } => native_sessions.contains(session_id),
+                | Event::MessageRemoved { session_id, .. }
+                | Event::SessionOrganizationAssigned { session_id, .. } => {
+                    native_sessions.contains(session_id)
+                }
             }
         };
         let survivors: Vec<Event> = all

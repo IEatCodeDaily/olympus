@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const e2ePort = Number(process.env.OLYMPUS_E2E_PORT ?? "5188");
+const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
+
 /**
  * Playwright config for Olympus UI e2e tests.
  * The dev server (vite + MSW mocks) is started automatically by webServer below.
@@ -21,7 +24,7 @@ export default defineConfig({
     ["json", { outputFile: "test-results/results.json" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:5188",
+    baseURL: e2eOrigin,
     trace: "retain-on-failure",
     screenshot: "on",
     video: "on",
@@ -40,8 +43,8 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "VITE_USE_MOCKS=true VITE_API_BASE=http://127.0.0.1:8787 VITE_API_TOKEN=dev-mock-token node_modules/.bin/vite --port 5188 --host 127.0.0.1",
-    url: "http://127.0.0.1:5188",
+      `VITE_USE_MOCKS=true VITE_API_BASE=http://127.0.0.1:8787 node_modules/.bin/vite --port ${e2ePort} --host 127.0.0.1`,
+    url: e2eOrigin,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
   },

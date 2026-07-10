@@ -17,13 +17,11 @@
 import { useRouterState, useNavigate } from "@tanstack/react-router";
 import { Icon, type IconName } from "./components/Icon";
 import { useUIStore } from "./store";
-import { useHealth } from "./hooks/queries";
 import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
+import { useHallAuth } from "./auth";
 import { SessionsView } from "./views/SessionsView";
-import FleetView from "./views/FleetView";
 import { VaultWorkspaceView } from "./views/VaultWorkspaceView";
-import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/PlaceholderViews";
 
 // ── Helpers ────────────────────────────────────────
@@ -40,8 +38,6 @@ const SURFACES: {
 }[] = [
   { surface: "sessions", label: "Sessions", icon: "message-square", path: "/" },
   { surface: "vaults", label: "Vaults", icon: "book", path: "/vaults" },
-  { surface: "projects", label: "Projects", icon: "kanban", path: "/projects" },
-  { surface: "fleet", label: "Fleet", icon: "server", path: "/fleet" },
   { surface: "settings", label: "Settings", icon: "gear", path: "/settings" },
 ];
 
@@ -53,8 +49,25 @@ const SURFACES: {
 
 export function AppShell() {
   const { location } = useRouterState();
-  const { surface, sessionId, page, nodeId } = parseRoute(location.pathname);
+  const { surface, sessionId, page } = parseRoute(location.pathname);
   const { sidebarCollapsed, sidebarWidth } = useUIStore();
+
+  if (surface === "projects" || surface === "fleet") {
+    return (
+      <div className="app">
+        <TopBar activeSurface={surface} />
+        <div className="body">
+          <div className="viewport">
+            <div className="empty-state">
+              <div className="empty-state-msg">
+                This surface is unavailable until its data is organization-owned.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -65,31 +78,22 @@ export function AppShell() {
           <SessionsView sessionId={sessionId} page={page} />
         )}
 
-        {/* Fleet View owns its own sidebar + viewport layout */}
-        {surface === "fleet" && (
-          <FleetView nodeId={nodeId} />
-        )}
-
         {/* Vaults View owns its own sidebar + viewport layout */}
         {surface === "vaults" && (
           <VaultWorkspaceView />
         )}
 
         {/* Other surfaces keep the shell-level sidebar + viewport split */}
-        {!sidebarCollapsed && (surface === "projects" || surface === "settings") && (
+        {!sidebarCollapsed && surface === "settings" && (
           <SecondarySidebar width={sidebarWidth}>
             <PlaceholderSidebar surface={surface} />
           </SecondarySidebar>
         )}
 
         {/* Viewport for shell-managed surfaces (projects, settings) */}
-        {surface === "projects" || surface === "settings" ? (
+        {surface === "settings" ? (
           <div className="viewport">
-            {surface === "projects" ? (
-              <ProjectsView />
-            ) : surface === "settings" ? (
-              <SettingsView />
-            ) : null}
+            <SettingsView />
           </div>
         ) : null}
       </div>
@@ -103,6 +107,7 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
   const navigate = useNavigate();
   const { toggleSidebar } = useUIStore();
   const { theme, toggleTheme } = useTheme();
+  const { user, logout } = useHallAuth();
 
   return (
     <div className="topbar">
@@ -135,9 +140,7 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
         </div>
       </div>
 
-      <div className="tb-center">
-        <SearchPill />
-      </div>
+      <div className="tb-center" />
 
       <div className="tb-right">
         {/* Theme toggle */}
@@ -151,36 +154,28 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
           <Icon name={theme === "obsidian" ? "sun" : "moon"} size={14} />
         </button>
         <OrgChip />
-        <div className="profile" title="rpw">rp</div>
+        <button className="profile" title={`Sign out ${user.username}`} onClick={() => void logout()}>
+          {user.username.slice(0, 2).toLowerCase()}
+        </button>
       </div>
     </div>
   );
 }
 
-function SearchPill() {
-  const { setPaletteOpen } = useUIStore();
-  return (
-    <button
-      type="button"
-      className="tb-search"
-      onClick={() => setPaletteOpen(true)}
-      title="Search (⌘K)"
-    >
-      <Icon name="search" size={13} />
-      <span className="ph">Search…</span>
-      <span className="sp" />
-      <span className="kbd">⌘K</span>
-    </button>
-  );
-}
-
 function OrgChip() {
-  const { data: health } = useHealth() as { data: { hermesProfile?: string } | undefined };
+  const { organization, organizations, selectOrganization } = useHallAuth();
   return (
-    <div className="org" title="Hermes profile">
+    <label className="org" title="Organization">
       <span className="mk" />
-      <span className="nm">{health?.hermesProfile ?? "default"}</span>
-    </div>
+      <select
+        aria-label="Organization"
+        value={organization.id}
+        onChange={(event) => selectOrganization(event.target.value)}
+        style={{ background: "transparent", border: 0, color: "inherit", maxWidth: 180 }}
+      >
+        {organizations.map((org) => <option key={org.id} value={org.id}>{org.displayName}</option>)}
+      </select>
+    </label>
   );
 }
 

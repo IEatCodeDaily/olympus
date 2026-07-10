@@ -105,7 +105,7 @@ impl SessionDto {
         Self {
             id: row.session_id.clone(),
             hermes_id: row.hermes_id.clone(),
-            org_id: "personal".to_string(),
+            org_id: row.org_id.clone(),
             owner_id: "rpw".to_string(),
             context_id: None,
             source: row.source.clone(),
@@ -630,6 +630,7 @@ mod tests {
         SessionRow {
             session_id: "s1".into(),
             hermes_id: "h1".into(),
+            org_id: "personal".into(),
             source: "telegram".into(),
             model: Some("glm-5.2".into()),
             title: Some("hi".into()),

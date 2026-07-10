@@ -236,6 +236,12 @@ pub enum Event {
         project_id: String,
         attached_at: f64,
     },
+    /// Assigns a session to its hard tenancy boundary. Kept as an appended
+    /// variant so existing postcard event discriminants remain stable.
+    SessionOrganizationAssigned {
+        session_id: String,
+        organization_id: String,
+    },
 }
 
 #[cfg(test)]

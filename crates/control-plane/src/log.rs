@@ -38,6 +38,18 @@ impl Log {
             )
             .context("migrating events table to add session_id column")?;
         }
+        let has_org_id = conn
+            .prepare("PRAGMA table_info(sessions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|column| column == "org_id");
+        if !has_org_id {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN org_id TEXT NOT NULL DEFAULT 'personal';
+                 CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);",
+            )
+            .context("migrating sessions table to add org_id column")?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -178,7 +190,7 @@ impl Log {
         let mut stmt = conn.prepare(
             "SELECT session_id, hermes_id, source, model, title, started_at,
                     message_count, input_tokens, output_tokens, archived, pinned,
-                    last_activity, agent, node, parent_session_id, card_id, project_id
+                    last_activity, agent, node, parent_session_id, card_id, project_id, org_id
              FROM sessions ORDER BY started_at DESC, session_id",
         )?;
         let rows = stmt.query_map([], session_row)?;
@@ -191,7 +203,7 @@ impl Log {
         conn.query_row(
             "SELECT session_id, hermes_id, source, model, title, started_at,
                     message_count, input_tokens, output_tokens, archived, pinned,
-                    last_activity, agent, node, parent_session_id, card_id, project_id
+                    last_activity, agent, node, parent_session_id, card_id, project_id, org_id
              FROM sessions WHERE session_id = ?1",
             [id],
             session_row,
@@ -451,7 +463,16 @@ fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             agent,
             node,
         } => {
-            tx.execute("INSERT OR REPLACE INTO sessions(session_id,hermes_id,source,model,title,started_at,message_count,input_tokens,output_tokens,archived,pinned,last_activity,agent,node,parent_session_id,card_id,project_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,0,0,?6,?10,?11,NULL,NULL,NULL)", params![session_id,hermes_id,source,model,title,started_at,*message_count as i64,*input_tokens as i64,*output_tokens as i64,agent,node])?;
+            tx.execute("INSERT OR REPLACE INTO sessions(session_id,hermes_id,source,model,title,started_at,message_count,input_tokens,output_tokens,archived,pinned,last_activity,agent,node,parent_session_id,card_id,project_id,org_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,0,0,?6,?10,?11,NULL,NULL,NULL,'personal')", params![session_id,hermes_id,source,model,title,started_at,*message_count as i64,*input_tokens as i64,*output_tokens as i64,agent,node])?;
+        }
+        Event::SessionOrganizationAssigned {
+            session_id,
+            organization_id,
+        } => {
+            tx.execute(
+                "UPDATE sessions SET org_id=?2 WHERE session_id=?1",
+                params![session_id, organization_id],
+            )?;
         }
         Event::SessionUpdated {
             session_id,
@@ -754,6 +775,7 @@ fn event_type(event: &Event) -> &'static str {
         Event::ProjectUpdated { .. } => "project.updated",
         Event::ProjectDeleted { .. } => "project.deleted",
         Event::SessionProjectAttached { .. } => "session.project_attached",
+        Event::SessionOrganizationAssigned { .. } => "session.organization_assigned",
     }
 }
 fn event_time(event: &Event) -> f64 {
@@ -795,7 +817,8 @@ fn event_session_id(event: &Event) -> Option<&str> {
         | Event::MessageRemoved { session_id, .. }
         | Event::CardSessionLinked { session_id, .. }
         | Event::SessionRepoAttached { session_id, .. }
-        | Event::SessionProjectAttached { session_id, .. } => Some(session_id),
+        | Event::SessionProjectAttached { session_id, .. }
+        | Event::SessionOrganizationAssigned { session_id, .. } => Some(session_id),
         Event::CardAssigned { session_id, .. } => Some(session_id),
         Event::SessionForked {
             child_session_id, ..
@@ -830,7 +853,8 @@ fn is_native(event: &Event, native: &HashSet<String>) -> bool {
         Event::SessionCreated { source, .. } => source == "olympus",
         Event::SessionUpdated { session_id, .. }
         | Event::MessageAppended { session_id, .. }
-        | Event::MessageRemoved { session_id, .. } => native.contains(session_id),
+        | Event::MessageRemoved { session_id, .. }
+        | Event::SessionOrganizationAssigned { session_id, .. } => native.contains(session_id),
     }
 }
 
@@ -853,6 +877,7 @@ fn session_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         parent_session_id: r.get(14)?,
         card_id: r.get(15)?,
         project_id: r.get(16)?,
+        org_id: r.get(17)?,
     })
 }
 fn message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
@@ -908,8 +933,8 @@ const SCHEMA: &str = r#"
 PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-4096; PRAGMA temp_store=MEMORY;
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT NOT NULL,payload BLOB NOT NULL,created_at REAL NOT NULL,session_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,hermes_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT '',model TEXT,title TEXT,started_at REAL NOT NULL,message_count INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,last_activity REAL NOT NULL DEFAULT 0,agent TEXT,node TEXT,parent_session_id TEXT,card_id TEXT,project_id TEXT);
-CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC); CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source); CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived); CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned);
+CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,hermes_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT '',model TEXT,title TEXT,started_at REAL NOT NULL,message_count INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,last_activity REAL NOT NULL DEFAULT 0,agent TEXT,node TEXT,parent_session_id TEXT,card_id TEXT,project_id TEXT,org_id TEXT NOT NULL DEFAULT 'personal');
+CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC); CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source); CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived); CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned); CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);
 CREATE TABLE IF NOT EXISTS messages(session_id TEXT NOT NULL,message_id INTEGER NOT NULL,role TEXT NOT NULL,content TEXT,tool_name TEXT,tool_calls TEXT,reasoning TEXT,timestamp REAL NOT NULL,token_count INTEGER,finish_reason TEXT,PRIMARY KEY(session_id,message_id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(session_id,timestamp);
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(session_id UNINDEXED,message_id UNINDEXED,content,role UNINDEXED,tool_name UNINDEXED,timestamp UNINDEXED,tokenize='porter unicode61');
@@ -945,6 +970,11 @@ mod tests {
             node: None,
         })
         .unwrap();
+        log.append(&Event::SessionOrganizationAssigned {
+            session_id: "s".into(),
+            organization_id: "org-a".into(),
+        })
+        .unwrap();
         log.append(&Event::MessageAppended {
             session_id: "s".into(),
             hermes_session_id: "h".into(),
@@ -959,8 +989,10 @@ mod tests {
             finish_reason: None,
         })
         .unwrap();
-        assert_eq!(log.event_count().unwrap(), 2);
-        assert_eq!(log.get_session("s").unwrap().unwrap().last_activity, 2.0);
+        assert_eq!(log.event_count().unwrap(), 3);
+        let session = log.get_session("s").unwrap().unwrap();
+        assert_eq!(session.last_activity, 2.0);
+        assert_eq!(session.org_id, "org-a");
         assert_eq!(log.recent_messages("s", 50).unwrap().len(), 1);
         assert_eq!(log.search("sqlite", 10).unwrap().len(), 1);
     }

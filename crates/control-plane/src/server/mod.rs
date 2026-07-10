@@ -6,6 +6,7 @@
 pub mod bridge_mgr;
 pub mod dto;
 pub mod envoy_conn;
+mod identity;
 pub mod ws;
 
 // Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
@@ -26,12 +27,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{broadcast, RwLock};
+use tower::ServiceExt;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::bridge::{AgentCommand, AgentEvent};
@@ -75,12 +77,17 @@ pub const IMPORT_IDLE: u8 = 0;
 pub const IMPORT_RUNNING: u8 = 1;
 pub const IMPORT_DONE: u8 = 2;
 
+#[derive(Clone)]
+struct OrganizationScope(String);
+
 /// Shared server state. Cheap to clone (everything behind `Arc`).
 #[derive(Clone)]
 pub struct AppState {
     pub views: Arc<RwLock<ViewManager>>,
     pub search: Arc<RwLock<SearchIndex>>,
     pub token: Arc<String>,
+    pub auth_store: Arc<crate::auth_store::AuthStore>,
+    pub session_cookie_secure: bool,
     pub import_state: ImportState,
     pub hermes_profile: Arc<String>,
     /// Delta fan-out: every view mutation is broadcast here; `/ws` subscribers
@@ -194,6 +201,13 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/repos", get(list_repos).post(register_repo))
         .route("/api/repos/{slug}", get(get_repo).delete(remove_repo))
+        .route("/api/auth/session", get(identity::current_session))
+        .route("/api/auth/logout", post(identity::logout))
+        .route("/api/organizations", get(identity::list_organizations))
+        .route(
+            "/api/organizations/{organization_id}/{*resource}",
+            any(organization_resource_proxy),
+        )
         .route("/api/sessions/{id}/repos", axum::routing::post(attach_repo))
         .route(
             "/api/sessions/{id}/subsessions",
@@ -247,12 +261,119 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
+        .route("/api/auth/login", post(identity::login))
         .merge(protected)
         .merge(enroll)
         .merge(proxy_forward)
         .fallback_service(static_ui_service())
         .layer(cors_layer())
         .with_state(state)
+}
+
+/// Organization-scoped aliases for resource APIs used by authenticated UI clients.
+/// Legacy unscoped routes remain temporarily available for installation-token clients.
+fn organization_resource_routes() -> Router<AppState> {
+    Router::new()
+        .route("/sessions", get(list_sessions).post(create_session))
+        .route("/sessions/{id}", get(get_session).patch(patch_session))
+        .route("/sessions/{id}/fork", post(fork_session))
+        .route("/sessions/{id}/handover", post(handover_session))
+        .route(
+            "/sessions/{id}/messages",
+            get(get_messages).post(post_message),
+        )
+        .route("/sessions/{id}/cancel", post(cancel_session))
+        .route("/sessions/{id}/steer", post(steer_session))
+        .route(
+            "/sessions/{id}/permission",
+            post(respond_permission_handler),
+        )
+        .route(
+            "/sessions/{id}/subsessions",
+            get(list_subsessions).post(create_subsession),
+        )
+        .route("/sessions/{id}/complete", post(complete_session))
+        .route("/vaults", get(list_vaults).post(create_vault))
+        .route("/vaults/{id}/notes", get(list_vault_notes))
+        .route("/vaults/{id}/documents", get(list_vault_documents))
+        .route(
+            "/vaults/{id}/note",
+            get(get_vault_note)
+                .put(put_vault_note)
+                .delete(delete_vault_note),
+        )
+        .route("/vaults/{id}/graph", get(get_vault_graph))
+        .route("/vaults/{id}/collections", get(list_vault_collections))
+        .route(
+            "/vaults/{id}/collections/{path}",
+            get(get_collection_rows),
+        )
+}
+
+async fn organization_resource_proxy(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Response {
+    let original = request.uri();
+    let Some(suffix) = original
+        .path()
+        .strip_prefix("/api/organizations/")
+        .and_then(|path| path.split_once('/').map(|(_, resource)| resource.to_string()))
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let organization_id = original
+        .path()
+        .strip_prefix("/api/organizations/")
+        .and_then(|path| path.split_once('/').map(|(id, _)| id.to_string()))
+        .expect("organization route matched");
+    if let Some(session_id) = suffix
+        .strip_prefix("sessions/")
+        .and_then(|path| path.split('/').next())
+    {
+        let views = state.views.read().await;
+        if views
+            .sessions
+            .get(session_id)
+            .is_none_or(|session| session.org_id != organization_id)
+        {
+            return (StatusCode::NOT_FOUND, "session not found").into_response();
+        }
+    }
+    let rewritten = match original.query() {
+        Some(query) => format!("/{suffix}?{query}"),
+        None => format!("/{suffix}"),
+    };
+    let Ok(uri) = rewritten.parse() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    // Rebuild the request rather than only changing its URI. Axum stores
+    // matched path parameters in request extensions; forwarding those would
+    // leak `organization_id` into the inner router and break its existing
+    // `Path<String>` extractors.
+    let (parts, body) = request.into_parts();
+    let mut request = axum::extract::Request::new(body);
+    *request.method_mut() = parts.method;
+    *request.uri_mut() = uri;
+    *request.version_mut() = parts.version;
+    *request.headers_mut() = parts.headers;
+    request
+        .extensions_mut()
+        .insert(OrganizationScope(organization_id.clone()));
+    let scoped_state = if suffix == "vaults" || suffix.starts_with("vaults/") {
+        let vaults = match state.vaults.for_organization(&organization_id) {
+            Ok(vaults) => Arc::new(vaults),
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        };
+        AppState { vaults, ..state }
+    } else {
+        state
+    };
+    organization_resource_routes()
+        .with_state(scoped_state)
+        .oneshot(request)
+        .await
+        .expect("organization resource router is infallible")
 }
 
 /// Serve the built web UI (ui/dist) for any non-API path. SPA fallback:
@@ -268,8 +389,8 @@ fn static_ui_service() -> tower_http::services::ServeDir<tower_http::services::S
 
 /// CORS for the local web UI. The UI is served from a different port than the
 /// API in dev (Vite on :5173, API on :8787/:8799), so the browser makes
-/// cross-origin requests + preflights. Mirror the Origin policy: reflect any
-/// loopback origin, allow the methods/headers the client uses. `tower-http`
+/// cross-origin requests + preflights. Mirror the exact Hall-origin policy and
+/// reflect only explicitly accepted origins. `tower-http`
 /// answers `OPTIONS` preflight automatically (before the auth middleware), so
 /// the token isn't required on the preflight itself.
 fn cors_layer() -> CorsLayer {
@@ -278,7 +399,13 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(AllowOrigin::predicate(|origin, _parts| {
             origin
                 .to_str()
-                .map(|o| crate::auth::origin_ok(Some(o)))
+                .map(|origin| {
+                    let host = _parts
+                        .headers
+                        .get(axum::http::header::HOST)
+                        .and_then(|value| value.to_str().ok());
+                    crate::auth::browser_origin_allowed(origin, host)
+                })
                 .unwrap_or(false)
         }))
         .allow_methods([
@@ -290,6 +417,7 @@ fn cors_layer() -> CorsLayer {
             Method::OPTIONS,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_credentials(true)
 }
 
 /// Auth middleware: enforce the Origin policy on every request, and the Bearer
@@ -299,23 +427,114 @@ fn cors_layer() -> CorsLayer {
 async fn auth_gate(
     State(state): State<AppState>,
     headers: HeaderMap,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
-    if !crate::auth::origin_ok(origin) {
+    let path = request.uri().path();
+    let is_ws = path == "/ws";
+    let auth = headers.get("authorization").and_then(|v| v.to_str().ok());
+    let bearer_authenticated = crate::auth::bearer_ok(auth, &state.token);
+    let legacy_ws_authenticated = is_ws
+        && request
+            .uri()
+            .query()
+            .and_then(|query| {
+                query
+                    .split('&')
+                    .find_map(|part| part.strip_prefix("token="))
+            })
+            .is_some_and(|token| token == state.token.as_str());
+    let provenance_present = headers.contains_key(axum::http::header::ORIGIN)
+        || headers.contains_key("sec-fetch-site")
+        || identity::session_token(&headers).is_some()
+        || bearer_authenticated
+        || legacy_ws_authenticated;
+    if provenance_present
+        && !crate::auth::request_origin_ok(
+            &headers,
+            bearer_authenticated || legacy_ws_authenticated,
+        )
+    {
         return (StatusCode::FORBIDDEN, "forbidden origin").into_response();
     }
 
-    let path = request.uri().path();
-    let is_ws = path == "/ws";
-    if !is_ws {
-        let auth = headers.get("authorization").and_then(|v| v.to_str().ok());
-        if !crate::auth::bearer_ok(auth, &state.token) {
-            return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    let principal = if bearer_authenticated {
+        Some(crate::auth_store::Principal {
+            user_id: String::new(),
+            username: "operator".to_string(),
+            kind: "operator".to_string(),
+        })
+    } else if let Some(token) = identity::session_token(&headers) {
+        match state
+            .auth_store
+            .resolve_session(&token, identity::unix_timestamp())
+        {
+            Ok(Some(principal)) => Some(principal),
+            Ok(None) => return (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+            Err(error) => {
+                tracing::error!(%error, "resolving Hall login session");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "authentication unavailable",
+                )
+                    .into_response();
+            }
         }
+    } else if !is_ws {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    } else {
+        None
+    };
+
+    if let Some(principal) = principal {
+        if principal.kind == crate::auth_store::Principal::USER_KIND
+            && !user_cookie_path_allowed(path)
+        {
+            return (StatusCode::FORBIDDEN, "operator credential required").into_response();
+        }
+        if let Some(organization_id) = scoped_organization_id(path) {
+            if principal.kind != crate::auth_store::Principal::USER_KIND {
+                return (StatusCode::FORBIDDEN, "user login required").into_response();
+            }
+            match state
+                .auth_store
+                .user_has_organization(&principal.user_id, organization_id)
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    return (StatusCode::FORBIDDEN, "organization access denied").into_response()
+                }
+                Err(error) => {
+                    tracing::error!(%error, "authorizing organization membership");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "authorization unavailable",
+                    )
+                        .into_response();
+                }
+            }
+        }
+        request.extensions_mut().insert(principal);
     }
     next.run(request).await
+}
+
+fn scoped_organization_id(path: &str) -> Option<&str> {
+    let suffix = path.strip_prefix("/api/organizations/")?;
+    let (organization_id, resource) = suffix.split_once('/')?;
+    (!organization_id.is_empty() && !resource.is_empty()).then_some(organization_id)
+}
+
+fn user_cookie_path_allowed(path: &str) -> bool {
+    path == "/ws"
+        || path == "/api/auth/session"
+        || path == "/api/auth/logout"
+        || path == "/api/organizations"
+        || path.starts_with("/api/organizations/")
+        || path == "/api/models"
+        || path == "/api/agents"
+        || (path.starts_with("/api/agents/") && path.ends_with("/models"))
+        || path == "/api/nodes/hall-identity"
 }
 
 // ---- query params ----
@@ -671,6 +890,7 @@ async fn put_registry_entry(
 
 async fn list_sessions(
     State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
     Query(q): Query<SessionsQuery>,
 ) -> impl IntoResponse {
     let views = state.views.read().await;
@@ -690,6 +910,7 @@ async fn list_sessions(
         .sessions
         .list(&filters)
         .into_iter()
+        .filter(|row| scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0))
         .filter(|r| match &sources {
             Some(list) if !list.is_empty() => list.iter().any(|s| s == &r.source),
             _ => true,
@@ -764,10 +985,14 @@ async fn list_sessions(
     Json(json!({ "sessions": rows, "nextCursor": serde_json::Value::Null, "total": total }))
 }
 
-async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_session(
+    State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    Path(id): Path<String>,
+) -> Response {
     let views = state.views.read().await;
     match views.sessions.get(&id) {
-        Some(row) => {
+        Some(row) if scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0) => {
             let mut dto = SessionDto::from_row(row);
             drop(views);
             let in_flight = state.bridge.in_flight_set().await;
@@ -783,7 +1008,7 @@ async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> R
             .to_string();
             Json(dto).into_response()
         }
-        None => (StatusCode::NOT_FOUND, "session not found").into_response(),
+        _ => (StatusCode::NOT_FOUND, "session not found").into_response(),
     }
 }
 
@@ -1566,13 +1791,13 @@ async fn attach_session_project(
     // Validate session exists.
     let session_space = {
         let views = state.views.read().await;
-        if views.sessions.get(&session_id).is_none() {
+        let Some(session) = views.sessions.get(&session_id) else {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "not_found", "message": "session not found" })),
             )
                 .into_response();
-        }
+        };
         // Also validate project exists.
         if views.projects.get(&body.project_id).is_none() {
             return (
@@ -1581,9 +1806,7 @@ async fn attach_session_project(
             )
                 .into_response();
         }
-        drop(views);
-        // Retrieve session space from bridge manager.
-        state.bridge.space_for(&session_id)
+        state.bridge.space_for(&session.org_id, &session_id)
     };
     // Create symlink (best-effort).
     let _ = state
@@ -1659,6 +1882,7 @@ struct ForkSessionBody {
 
 /// Request body for POST /api/sessions/:id/handover.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HandoverBody {
     /// Target agent kind: "claude-code", "codex", or "hermes".
     to_agent_kind: String,
@@ -1818,14 +2042,14 @@ async fn create_subsession(
 ) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
 
-    let (parent_agent, parent_space) = {
+    let (parent_agent, parent_space, parent_organization) = {
         let views = state.views.read().await;
         let Some(parent) = views.sessions.get(&id) else {
             return (StatusCode::NOT_FOUND, "parent session not found").into_response();
         };
         let agent = body.agent.clone().or_else(|| parent.agent.clone());
-        let space = state.bridge.space_path(&id);
-        (agent, space)
+        let space = state.bridge.space_path(&parent.org_id, &id);
+        (agent, space, parent.org_id.clone())
     };
 
     let spec = crate::server::bridge_mgr::RuntimeSpec {
@@ -1836,7 +2060,7 @@ async fn create_subsession(
         env: vec![],
     };
 
-    let ns = match state.bridge.create_draft(&spec) {
+    let ns = match state.bridge.create_draft(&spec, Some(&parent_organization)) {
         Ok(ns) => ns,
         Err(e) => {
             tracing::error!(error = %e, parent = %id, "create_subsession create_draft failed");
@@ -1849,7 +2073,9 @@ async fn create_subsession(
     // Best-effort jj-workspace copy.
     if let (Some(parent_sp), Some(child_sp)) = (
         parent_space.as_ref(),
-        state.bridge.space_path(&ns.session_id),
+        state
+            .bridge
+            .space_path(&parent_organization, &ns.session_id),
     ) {
         if parent_sp.exists() {
             copy_jj_workspaces(parent_sp, &child_sp);
@@ -1872,6 +2098,10 @@ async fn create_subsession(
     {
         let mut views = state.views.write().await;
         views.apply(&created);
+        views.apply(&crate::event::Event::SessionOrganizationAssigned {
+            session_id: ns.session_id.clone(),
+            organization_id: parent_organization.clone(),
+        });
     }
 
     let forked_event = crate::event::Event::SessionForked {
@@ -1959,11 +2189,16 @@ async fn create_subsession(
 async fn list_subsessions(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let children: Vec<SessionDto> = {
         let views = state.views.read().await;
+        let Some(parent) = views.sessions.get(&id) else {
+            return (StatusCode::NOT_FOUND, "parent session not found").into_response();
+        };
         views
             .sessions
             .list(&Filters::default())
             .into_iter()
-            .filter(|row| row.parent_session_id.as_deref() == Some(id.as_str()))
+            .filter(|row| {
+                row.parent_session_id.as_deref() == Some(id.as_str()) && row.org_id == parent.org_id
+            })
             .map(SessionDto::from_row)
             .collect()
     };
@@ -1983,7 +2218,7 @@ async fn complete_session(
             .into_response();
     }
 
-    let (parent_id, child_hermes_id) = {
+    let (parent_id, child_hermes_id, parent_hermes_id) = {
         let views = state.views.read().await;
         let Some(child) = views.sessions.get(&id) else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
@@ -1993,20 +2228,22 @@ async fn complete_session(
                 Json(json!({ "error": "not_a_subsession", "message": "Only subsessions can be completed." })))
                 .into_response();
         };
-        (parent_id.clone(), child.hermes_id.clone())
+        let Some(parent) = views.sessions.get(parent_id) else {
+            return (StatusCode::NOT_FOUND, "parent session not found").into_response();
+        };
+        if parent.org_id != child.org_id {
+            return (StatusCode::NOT_FOUND, "parent session not found").into_response();
+        }
+        (
+            parent_id.clone(),
+            child.hermes_id.clone(),
+            parent.hermes_id.clone(),
+        )
     };
 
     let summary_text = body.summary.as_deref().unwrap_or("");
     let notice = format!("[subsession {id} {verdict}] {summary_text}");
 
-    let parent_hermes_id = {
-        let views = state.views.read().await;
-        views
-            .sessions
-            .get(&parent_id)
-            .map(|r| r.hermes_id.clone())
-            .unwrap_or_default()
-    };
     let next_id = {
         let views = state.views.read().await;
         views
@@ -2117,8 +2354,17 @@ async fn handover_session(
 
     // Create the target session.
     let target_id = format!("oly-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+    if let Err(error) = state.bridge.ensure_space(&source.org_id, &target_id) {
+        tracing::error!(%error, "creating organization-scoped handover workspace");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create handover workspace",
+        )
+            .into_response();
+    }
 
-    // SessionCreated for the target.
+    // Persist the complete handover as one batch. In particular, the target
+    // must never become durable without inheriting the source organization.
     let created = crate::event::Event::SessionCreated {
         session_id: target_id.clone(),
         hermes_id: String::new(),
@@ -2132,22 +2378,13 @@ async fn handover_session(
         agent: Some(to_agent_name.clone()),
         node: source.node.clone(),
     };
-    if let Err(e) = state.log.append(&created) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": e.to_string() })),
-        )
-            .into_response();
-    }
-    {
-        let mut views = state.views.write().await;
-        views.apply(&created);
-    }
-
-    // Translate history: copy messages, and write a context summary for the
-    // target harness (the adapter will materialize CLAUDE.md/AGENTS.md/etc).
-    for (idx, msg) in messages.iter().enumerate() {
-        let _ = state.log.append(&crate::event::Event::MessageAppended {
+    let organization = crate::event::Event::SessionOrganizationAssigned {
+        session_id: target_id.clone(),
+        organization_id: source.org_id.clone(),
+    };
+    let mut events = vec![created, organization];
+    events.extend(messages.iter().enumerate().map(|(idx, msg)| {
+        crate::event::Event::MessageAppended {
             session_id: target_id.clone(),
             hermes_session_id: String::new(),
             message_id: idx as u64,
@@ -2159,25 +2396,9 @@ async fn handover_session(
             timestamp: msg.timestamp,
             token_count: msg.token_count,
             finish_reason: None,
-        });
-    }
-    {
-        let mut views = state.views.write().await;
-        if let Ok(events) = state.log.read_all() {
-            for (_seq, event) in events {
-                match &event {
-                    crate::event::Event::MessageAppended { session_id, .. }
-                        if session_id == &target_id =>
-                    {
-                        views.apply(&event);
-                    }
-                    _ => {}
-                }
-            }
         }
-    }
+    }));
 
-    // Emit SessionHandover (records the transition).
     let handover_event = crate::event::Event::SessionHandover {
         source_session_id: id.clone(),
         target_session_id: target_id.clone(),
@@ -2186,13 +2407,6 @@ async fn handover_session(
         translated_message_count: messages.len() as u64,
         handed_over_at: now,
     };
-    let _ = state.log.append(&handover_event);
-    {
-        let mut views = state.views.write().await;
-        views.apply(&handover_event);
-    }
-
-    // Archive the source session.
     let archive = crate::event::Event::SessionUpdated {
         session_id: id.clone(),
         title: None,
@@ -2204,10 +2418,20 @@ async fn handover_session(
         hermes_id: None,
         pinned: None,
     };
-    let _ = state.log.append(&archive);
+    events.push(handover_event);
+    events.push(archive);
+    if let Err(e) = state.log.append_batch(&events) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "log_error", "message": e.to_string() })),
+        )
+            .into_response();
+    }
     {
         let mut views = state.views.write().await;
-        views.apply(&archive);
+        for event in &events {
+            views.apply(event);
+        }
     }
 
     // Build the DTO for the target session.
@@ -2245,6 +2469,7 @@ async fn handover_session(
 /// (via the body) or later via PATCH, any time before the first send.
 async fn create_session(
     State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
     body: Option<Json<CreateSessionBody>>,
 ) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
@@ -2255,7 +2480,8 @@ async fn create_session(
         mcp_servers: vec![],
         env: vec![],
     };
-    match state.bridge.create_draft(&spec) {
+    let organization_id = scope.as_ref().map(|scope| scope.0 .0.as_str());
+    match state.bridge.create_draft(&spec, organization_id) {
         Ok(ns) => {
             // Apply the one SessionCreated event directly into the view — do NOT
             // re-scan the whole log (that's O(all events) and made create slow).
@@ -2272,9 +2498,17 @@ async fn create_session(
                 agent: body.agent.clone(),
                 node: body.node.clone(),
             };
+            let organization =
+                scope.map(|scope| crate::event::Event::SessionOrganizationAssigned {
+                    session_id: ns.session_id.clone(),
+                    organization_id: scope.0 .0,
+                });
             let dto = {
                 let mut views = state.views.write().await;
                 views.apply(&created);
+                if let Some(event) = organization.as_ref() {
+                    views.apply(event);
+                }
                 views
                     .sessions
                     .get(&ns.session_id)
@@ -2282,7 +2516,16 @@ async fn create_session(
                     .unwrap_or_else(|| SessionDto {
                         id: ns.session_id.clone(),
                         hermes_id: ns.hermes_id.clone(),
-                        org_id: "personal".into(),
+                        org_id: organization
+                            .as_ref()
+                            .and_then(|event| match event {
+                                crate::event::Event::SessionOrganizationAssigned {
+                                    organization_id,
+                                    ..
+                                } => Some(organization_id.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| "personal".into()),
                         owner_id: "rpw".into(),
                         context_id: None,
                         source: "olympus".into(),
@@ -2460,6 +2703,7 @@ async fn fork_session(
             source.model.clone(),
             source.title.clone(),
             messages.len() as u64,
+            Some(&source.org_id),
         )
         .await
     {
@@ -2503,6 +2747,7 @@ async fn fork_session(
                     crate::event::Event::SessionCreated { session_id, .. }
                     | crate::event::Event::MessageAppended { session_id, .. }
                     | crate::event::Event::SessionUpdated { session_id, .. }
+                    | crate::event::Event::SessionOrganizationAssigned { session_id, .. }
                         if session_id == &fork.session_id =>
                     {
                         views.apply(&event);
@@ -2516,7 +2761,7 @@ async fn fork_session(
             None => SessionDto {
                 id: fork.session_id.clone(),
                 hermes_id: fork.hermes_id.clone(),
-                org_id: "personal".into(),
+                org_id: source.org_id.clone(),
                 owner_id: "rpw".into(),
                 context_id: None,
                 source: "olympus".into(),
@@ -2592,7 +2837,7 @@ async fn post_message(
     Path(id): Path<String>,
     Json(body): Json<PostMessageBody>,
 ) -> Response {
-    let (managed, hermes_id, agent, node) = {
+    let (managed, hermes_id, agent, node, organization_id) = {
         let views = state.views.read().await;
         let Some(session) = views.sessions.get(&id) else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
@@ -2603,6 +2848,7 @@ async fn post_message(
             session.hermes_id.clone(),
             session.agent.clone(),
             session.node.clone(),
+            session.org_id.clone(),
         )
     };
 
@@ -2717,7 +2963,7 @@ async fn post_message(
     // spawned runtime runs scoped to it, not the host cwd.
     let cwd = state
         .bridge
-        .space_path(&id)
+        .space_path(&organization_id, &id)
         .map(|p| p.to_string_lossy().into_owned());
 
     // --- ADR 0006 §9.3: resolve the effective setup for this session's
@@ -3860,6 +4106,8 @@ mod tests {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),
             token: Arc::new("testtoken".to_string()),
+            auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
+            session_cookie_secure: true,
             import_state: ImportState::done(),
             hermes_profile: Arc::new("default".into()),
             deltas: tx,
@@ -3892,6 +4140,251 @@ mod tests {
             home: Arc::new(dir.path().to_path_buf()),
         };
         (state, dir)
+    }
+
+    #[tokio::test]
+    async fn login_cookie_authenticates_session_and_organization_routes() {
+        let (state, _dir) = test_state();
+        state
+            .auth_store
+            .bootstrap_admin("admin", "password-123", "default", "Default")
+            .unwrap();
+        let app = build_router(state);
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("origin", "http://127.0.0.1:5173")
+                    .header("host", "127.0.0.1:5173")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"admin","password":"password-123"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let set_cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap();
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+        assert!(set_cookie.contains("Secure"));
+        let cookie = set_cookie.split(';').next().unwrap();
+
+        let current_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/session")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(current_session.status(), StatusCode::OK);
+
+        let organizations = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/organizations")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(organizations.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(organizations.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let organization_id = body["organizations"][0]["id"].as_str().unwrap();
+
+        let scoped_sessions = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/organizations/{organization_id}/sessions"))
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(scoped_sessions.status(), StatusCode::OK);
+
+        let scoped_session = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/organizations/{organization_id}/sessions/s1"))
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(scoped_session.status(), StatusCode::NOT_FOUND);
+
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/organizations/{organization_id}/sessions"))
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let created_id = body["id"].as_str().unwrap();
+        assert_eq!(body["orgId"], organization_id);
+
+        let created_detail = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/organizations/{organization_id}/sessions/{created_id}"
+                    ))
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created_detail.status(), StatusCode::OK);
+
+        let unscoped_cookie_access = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unscoped_cookie_access.status(), StatusCode::FORBIDDEN);
+
+        let handover = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/organizations/{organization_id}/sessions/{created_id}/handover"
+                    ))
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"toAgentKind":"codex"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(handover.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(handover.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["session"]["orgId"], organization_id);
+
+        let scoped_vaults = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/organizations/{organization_id}/vaults"))
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(scoped_vaults.status(), StatusCode::OK);
+
+        let unknown_organization = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/organizations/not-a-membership/sessions")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown_organization.status(), StatusCode::FORBIDDEN);
+
+        let legacy_operator_scoped = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/organizations/{organization_id}/sessions"))
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(legacy_operator_scoped.status(), StatusCode::FORBIDDEN);
+
+        let logout = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/logout")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+        assert!(logout
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0"));
+
+        let revoked_session = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/session")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoked_session.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -3966,6 +4459,8 @@ mod tests {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),
             token: Arc::new("testtoken".to_string()),
+            auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
+            session_cookie_secure: true,
             import_state: ImportState::done(),
             hermes_profile: Arc::new("default".to_string()),
             deltas: tx,
@@ -4338,7 +4833,7 @@ mod tests {
         // Create a draft first.
         let ns = state
             .bridge
-            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default())
+            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default(), None)
             .unwrap();
         {
             let mut views = state.views.write().await;
@@ -4377,7 +4872,7 @@ mod tests {
         let (state, _d) = test_state();
         let ns = state
             .bridge
-            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default())
+            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default(), None)
             .unwrap();
         {
             let mut views = state.views.write().await;
@@ -4438,7 +4933,7 @@ mod tests {
         let (state, _d) = test_state();
         let ns = state
             .bridge
-            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default())
+            .create_draft(&crate::server::bridge_mgr::RuntimeSpec::default(), None)
             .unwrap();
         {
             let mut views = state.views.write().await;

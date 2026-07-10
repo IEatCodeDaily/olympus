@@ -36,6 +36,7 @@ hyper.workspace = true
 hyper-util = { workspace = true }
 http-body-util.workspace = true
 blake3 = "1"
+argon2.workspace = true
 iroh = "1"
 toml = "1.1.2"
 

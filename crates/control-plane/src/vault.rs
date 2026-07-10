@@ -144,6 +144,25 @@ impl VaultStore {
         &self.root
     }
 
+    pub fn for_organization(&self, organization_id: &str) -> Result<Self> {
+        let mut components = Path::new(organization_id).components();
+        if organization_id.is_empty()
+            || !matches!(components.next(), Some(Component::Normal(_)))
+            || components.next().is_some()
+        {
+            bail!("invalid organization id");
+        }
+        let olympus_home = self
+            .root
+            .parent()
+            .and_then(Path::parent)
+            .context("vault store root is not organization-scoped")?;
+        Ok(Self {
+            root: olympus_home.join(organization_id).join("vaults"),
+            jj_mode: self.jj_mode,
+        })
+    }
+
     pub fn list_vaults(&self) -> Result<Vec<VaultSummary>> {
         fs::create_dir_all(&self.root)
             .with_context(|| format!("creating vault root {}", self.root.display()))?;
@@ -1033,6 +1052,22 @@ mod tests {
 
     fn store(tmp: &tempfile::TempDir) -> VaultStore {
         VaultStore::with_jj_mode(tmp.path().join("default"), JjMode::Disabled)
+    }
+
+    #[test]
+    fn organization_stores_are_partitioned_and_reject_path_components() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = store(&tmp);
+        assert_eq!(
+            base.for_organization("org-a").unwrap().root(),
+            tmp.path().join("org-a/vaults")
+        );
+        assert_eq!(
+            base.for_organization("org-b").unwrap().root(),
+            tmp.path().join("org-b/vaults")
+        );
+        assert!(base.for_organization("../outside").is_err());
+        assert!(base.for_organization("").is_err());
     }
 
     #[test]

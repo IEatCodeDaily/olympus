@@ -12,14 +12,38 @@
 ## Transport & auth
 
 - **REST** for queries/mutations; **WSS** (`/ws`) for the reactive delta stream.
-- **Auth gate (mandatory, MVP):** localhost bind by default; per-install bearer
-  token (`~/.olympus/token`, mode 0600). REST: `Authorization: Bearer <token>`.
-  WS: `?token=<token>` query param (browsers can't set headers on WS upgrade).
-  Strict `Origin`/`Host` checks on `/ws` + all `/api/*`. Unauth → `401`.
+- **Browser auth:** Hall-local username/password login creates a revocable opaque
+  session in an `HttpOnly`, `SameSite=Strict` cookie. Browser requests use the
+  serving origin and never receive the installation token.
+- **Legacy operator auth:** the per-install bearer token (`~/.olympus/token`,
+  mode 0600) remains accepted on unscoped REST routes and as `/ws?token=…` for
+  migration and native automation. It is not organization authority.
+- Cookie users are restricted to identity endpoints, explicit organization
+  routes, and Hall-level model/agent/identity discovery. A cookie cannot unlock
+  legacy unscoped operator routes, and a bearer operator cannot enter scoped routes.
+- Exact `Origin`/`Host` checks apply to `/ws` and `/api/*`; configured additional
+  origins include scheme and port and are matched exactly. Unauthenticated
+  requests return `401`; non-member organization scope returns `403`.
 - Base URL (dev): `http://127.0.0.1:8787`. All paths below are under it.
-- Every object carries tenancy fields (`orgId`, `ownerId`) per ADR §3.5; MVP
-  values are `orgId:"personal"`, `ownerId:"rpw"`. UI shows them but does not gate
-  on them yet (single-operator).
+- Browser resource paths are explicit: `/api/organizations/:organizationId/*`.
+  Hall authorizes membership and handlers must also filter by resource owner.
+  Session APIs satisfy this boundary through event-projected ownership. Vault APIs
+  satisfy it through organization-rooted filesystem partitions. Resource classes
+  without durable organization ownership are deliberately absent from the scoped
+  router rather than exposed through an authorization-only alias.
+
+### Identity endpoints
+
+```
+POST /api/auth/login          { username, password } → 200 + Set-Cookie | 401
+GET  /api/auth/session        → 200 { user } | 401
+POST /api/auth/logout         → 204 + expired cookie
+GET  /api/organizations      → 200 { organizations: Organization[] }
+```
+
+Browser WebSockets use `/ws?organization=:organizationId&name=…` and the Hall
+cookie. Membership is checked during upgrade, the hello snapshot is scoped, and
+session frames are filtered by durable session ownership.
 
 ## Core types (TypeScript — shared contract; the UI imports these)
 
@@ -28,7 +52,7 @@
 export interface Session {
   id: string;                 // Olympus session id
   hermesId: string;           // underlying Hermes session id
-  orgId: string;              // "personal" in MVP
+  orgId: string;              // durable Hall organization id; legacy imports may be "personal"
   ownerId: string;            // "rpw" in MVP
   contextId: string | null;   // null until contexts exist
   source: SessionSource;      // origin channel

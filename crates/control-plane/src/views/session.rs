@@ -43,6 +43,7 @@ pub struct Filters {
 pub struct SessionRow {
     pub session_id: String,
     pub hermes_id: String,
+    pub org_id: String,
     pub source: String,
     pub model: Option<String>,
     pub title: Option<String>,
@@ -118,6 +119,7 @@ impl SessionView {
                     SessionRow {
                         session_id: session_id.clone(),
                         hermes_id: hermes_id.clone(),
+                        org_id: "personal".to_string(),
                         source: source.clone(),
                         model: model.clone(),
                         title: title.clone(),
@@ -173,6 +175,14 @@ impl SessionView {
                     if let Some(p) = pinned {
                         row.pinned = *p;
                     }
+                }
+            }
+            Event::SessionOrganizationAssigned {
+                session_id,
+                organization_id,
+            } => {
+                if let Some(row) = self.sessions.get_mut(session_id) {
+                    row.org_id = organization_id.clone();
                 }
             }
             Event::MessageAppended {

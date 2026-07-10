@@ -322,13 +322,13 @@ export const handlers = [
   // ── Vaults ──────────────────────────────────────────
 
   // GET /api/vaults
-  http.get("http://127.0.0.1:8787/api/vaults", async () => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/vaults", async () => {
     await delay(80 + Math.random() * 60);
     return HttpResponse.json({ vaults: VAULTS });
   }),
 
   // POST /api/vaults
-  http.post("http://127.0.0.1:8787/api/vaults", async ({ request }) => {
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/vaults", async ({ request }) => {
     const body = (await request.json()) as {
       name: string;
       backend: { kind: "github"; repository: string; branch: string; syncEngine: "jj-git" };
@@ -354,7 +354,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/notes
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/notes",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/notes",
     ({ params }: { params: { id: string } }) => {
       const tree = buildVaultNoteTree(params.id);
       return HttpResponse.json({ notes: tree });
@@ -363,7 +363,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/documents
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/documents",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/documents",
     ({ params }: { params: { id: string } }) => {
       const store = VAULT_NOTES_MUTABLE[params.id];
       if (!store) return new HttpResponse(null, { status: 404 });
@@ -382,7 +382,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/note?path=...
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/note",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/note",
     ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const doc = buildNoteDoc(params.id, path);
@@ -393,7 +393,7 @@ export const handlers = [
 
   // PUT /api/vaults/:id/note?path=...
   http.put<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/note",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/note",
     async ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const body = (await request.json()) as { markdown?: string; newPath?: string; createOnly?: boolean };
@@ -424,7 +424,7 @@ export const handlers = [
 
   // DELETE /api/vaults/:id/note?path=...
   http.delete<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/note",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/note",
     ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const store = VAULT_NOTES_MUTABLE[params.id];
@@ -441,7 +441,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/graph
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/graph",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/graph",
     ({ params }: { params: { id: string } }) => {
       const store = VAULT_NOTES_MUTABLE[params.id];
       const nodes = store
@@ -469,7 +469,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/collections
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/collections",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/collections",
     ({ params }: { params: { id: string } }) => {
       const store = VAULT_NOTES_MUTABLE[params.id];
       const collections = store
@@ -487,7 +487,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/collections/:path
   http.get<{ id: string; path: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/collections/:path",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/collections/:path",
     ({ params }: { params: { id: string; path: string } }) => {
       // Mock: return a few sample rows
       return HttpResponse.json({
