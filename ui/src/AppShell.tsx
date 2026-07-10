@@ -67,7 +67,7 @@ export function AppShell() {
 
         {/* Fleet View owns its own sidebar + viewport layout */}
         {surface === "fleet" && (
-          <FleetView />
+          <FleetView nodeId={nodeId} />
         )}
 
         {/* Vaults View owns its own sidebar + viewport layout */}

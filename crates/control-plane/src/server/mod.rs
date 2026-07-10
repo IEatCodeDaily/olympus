@@ -162,7 +162,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
         .route("/api/nodes/{id}/drain", post(drain_node))
         .route("/api/nodes/{id}", axum::routing::delete(remove_node))
-        .route("/api/enroll", post(mint_enroll))
         .route("/api/vaults", get(list_vaults).post(create_vault))
         .route("/api/vaults/{id}/notes", get(list_vault_notes))
         .route(
@@ -225,11 +224,14 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::proxy::proxy_forward_root).post(crate::proxy::proxy_forward_root),
         );
 
-    // Enrollment routes are PUBLIC by design: the target host has no API token
-    // yet. Each handler validates the short-lived single-use enroll token from
-    // the path — that token IS the auth (capability model, like the proxy's
-    // per-endpoint auth). Minting (POST /api/enroll, above) stays operator-only.
-    let enroll_public = Router::new()
+    // Enrollment routes. The public routes (install.sh/binary/status/register)
+    // have NO bearer token — the enroll token in the path IS the capability.
+    // The mint route (POST /api/enroll) is operator-only; it's included here
+    // and does its own bearer check via a dedicated middleware layer below.
+    // All enroll routes live in ONE router so axum doesn't shadow /api/enroll
+    // with /api/enroll/{token} during a cross-router merge.
+    let enroll = Router::new()
+        .route("/api/enroll", post(mint_enroll))
         .route("/api/enroll/{token}/install.sh", get(enroll_install_script))
         .route("/api/enroll/{token}/binary", get(enroll_binary))
         .route("/api/enroll/{token}/status", get(enroll_status))
@@ -239,7 +241,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
         .merge(protected)
-        .merge(enroll_public)
+        .merge(enroll)
         .merge(proxy_forward)
         .fallback_service(static_ui_service())
         .layer(cors_layer())
@@ -1032,7 +1034,19 @@ fn derive_base_url(headers: &HeaderMap) -> Option<String> {
 /// POST /api/enroll (operator-authed) — mint a short-lived enroll token and
 /// return the ready-to-paste one-liner. The public URL is derived from the
 /// request's Host header (works for localhost AND the CF-tunnel domain).
-async fn mint_enroll(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// This route is NOT behind the auth_gate middleware (it shares a router
+/// with the public enroll routes); it does its own bearer check inline.
+async fn mint_enroll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    // Inline bearer auth — the enroll router is public, but minting is not.
+    let auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok());
+    if !crate::auth::bearer_ok(auth, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
     // Remote envoys connect over iroh; without a hall identity the installer
     // can't configure the envoy's --hall target. Fail honestly.
     let Some(hall_iroh) = state.hall_iroh_id.as_ref() else {
