@@ -3550,11 +3550,10 @@ mod tests {
         let mut views = ViewManager::new();
         views.replay(&log).unwrap();
 
-        let mut search = SearchIndex::open(&dir.path().join("idx")).unwrap();
-        search.build_from_log(&log).unwrap();
-
         let (tx, _rx) = broadcast::channel(64);
         let log_arc = Arc::new(log);
+        let mut search = SearchIndex::from_log(log_arc.clone());
+        search.build_from_log(&log_arc).unwrap();
         let state = AppState {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),

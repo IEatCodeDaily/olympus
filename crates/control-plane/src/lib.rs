@@ -10,6 +10,7 @@ pub mod edit_model;
 pub mod event;
 pub mod import;
 pub mod irc;
+pub mod legacy_log;
 pub mod log;
 pub mod node;
 pub mod projects;

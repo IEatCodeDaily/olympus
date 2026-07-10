@@ -80,13 +80,11 @@ async fn main() -> Result<()> {
     let token = auth::load_or_create_token()?;
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
-    // ---- open the durable event log; keep Olympus-native records, rebuild the
-    // state.db mirror each boot ----
-    let log_path = home.join("eventlog.redb");
+    // ---- open the SQLite event log (sole source of truth for native data) ----
+    let log_path = home.join("olympus.db");
     let log = Arc::new(Log::open(&log_path).context("opening event log")?);
-    // Drop the previous boot's state.db-imported events (keeping Olympus-native
-    // records: setup declarations, cards, olympus sessions), so the re-import
-    // below is idempotent and the durable declarations survive a restart.
+    // Drop the previous boot's state.db-imported sessions so the re-index is
+    // idempotent (native events survive a restart).
     log.retain_native().context("retaining native events")?;
 
     let state_db = hermes_state_db()?;
@@ -95,17 +93,14 @@ async fn main() -> Result<()> {
     if let Some(ref r) = state_db_reader {
         tracing::info!(db = %r.path().display(), "state.db reader ready (lazy history)");
     }
-    // ---- NATIVE-ONLY boot: rebuild views + search from the retained event log
-    // (Olympus sessions, cards, setup declarations) so the server can start
-    // serving IMMEDIATELY. The Hermes state.db import (1829 sessions, 127K
-    // messages) runs AFTER bind in a background thread — see below.
+    // ---- NATIVE-ONLY boot: rebuild views from the event log (Olympus sessions,
+    // cards, setup). The Hermes state.db session index runs AFTER bind. ----
     let mut views = ViewManager::new();
     views
         .replay(&log)
         .context("replaying native log into views")?;
 
-    let mut search =
-        SearchIndex::open(&home.join("search-index")).context("opening search index")?;
+    let mut search = SearchIndex::from_log(log.clone());
     search
         .build_from_log(&log)
         .context("building search index (native only)")?;
