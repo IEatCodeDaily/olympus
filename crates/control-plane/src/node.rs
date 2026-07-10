@@ -662,7 +662,7 @@ async fn handle_envoy_hello(
 
     // Build a display version from the BuildVersion semver + git hash.
     let version_str = if build_version.git_hash != "unknown" {
-        format!("{} ({})", build_version.semver, &build_version.git_hash)
+        format!("{} ({})", build_version.semver, build_version.git_hash)
     } else {
         build_version.semver.clone()
     };

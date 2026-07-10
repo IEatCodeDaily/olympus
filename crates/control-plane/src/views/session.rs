@@ -210,7 +210,6 @@ impl SessionView {
             Event::SessionForked {
                 parent_session_id,
                 child_session_id,
-                fork_point: _,
                 ..
             } => {
                 // The child session was already created (SessionCreated fires
