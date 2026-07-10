@@ -37,6 +37,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::bridge::{AgentCommand, AgentEvent};
 use crate::log::Log;
 use crate::search::SearchIndex;
+use crate::state_db_reader::StateDbReader;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
 use dto::{
@@ -108,6 +109,11 @@ pub struct AppState {
     pub proxy: crate::proxy::ProxyTable,
     /// Markdown-first knowledge vault storage (ADR 0004).
     pub vaults: Arc<crate::vault::VaultStore>,
+    /// Read-only connection to the Hermes `state.db` for on-demand message
+    /// reads and full-text search (ADR 0009 lazy-history). `None` when no
+    /// state.db exists (fresh install). Replaces the 1.4 GB in-memory message
+    /// mirror + tantivy index.
+    pub state_db: Option<Arc<StateDbReader>>,
     /// Project (context container) storage — dir/manifest/symlink.
     pub projects: Arc<crate::projects::ProjectStore>,
     /// Managed repo store — clone/sync/attach jj workspaces.
@@ -799,8 +805,35 @@ async fn get_messages(
     Path(id): Path<String>,
     Query(q): Query<MessagesQuery>,
 ) -> impl IntoResponse {
-    let views = state.views.read().await;
     let limit = q.limit.unwrap_or(50);
+
+    // Lazy history (ADR 0009): for non-managed (observed) sessions, read
+    // messages on-demand from the Hermes state.db instead of the in-memory
+    // MessageView. Managed (olympus/acp) sessions still use the in-memory
+    // view because their messages are live (streamed from the bridge).
+    if let Some(ref reader) = state.state_db {
+        let views = state.views.read().await;
+        let is_managed = views.sessions.is_managed(&id);
+        drop(views);
+        if !is_managed {
+            match reader.recent_messages(&id, limit) {
+                Ok(rows) => {
+                    let messages: Vec<MessageDto> = rows
+                        .iter()
+                        .map(|row| MessageDto::from_row(&id, row))
+                        .collect();
+                    return Json(
+                        json!({ "messages": messages, "nextCursor": serde_json::Value::Null }),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, session = %id, "state.db message read failed, falling back to views");
+                }
+            }
+        }
+    }
+
+    let views = state.views.read().await;
     let messages: Vec<MessageDto> = views
         .messages
         .recent(&id, limit)
@@ -3546,6 +3579,7 @@ mod tests {
                 dir.path().join("default"),
                 crate::vault::JjMode::Disabled,
             )),
+            state_db: None,
             projects: Arc::new(crate::projects::ProjectStore::new(
                 dir.path().join("default"),
             )),
@@ -3649,6 +3683,7 @@ mod tests {
                 dir.path().join("default"),
                 crate::vault::JjMode::Disabled,
             )),
+            state_db: None,
             projects: Arc::new(crate::projects::ProjectStore::new(
                 dir.path().join("default"),
             )),

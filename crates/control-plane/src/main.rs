@@ -90,6 +90,11 @@ async fn main() -> Result<()> {
     log.retain_native().context("retaining native events")?;
 
     let state_db = hermes_state_db()?;
+    let state_db_reader = olympus_control_plane::state_db_reader::StateDbReader::open(&state_db)
+        .context("opening state.db reader")?;
+    if let Some(ref r) = state_db_reader {
+        tracing::info!(db = %r.path().display(), "state.db reader ready (lazy history)");
+    }
     // ---- NATIVE-ONLY boot: rebuild views + search from the retained event log
     // (Olympus sessions, cards, setup declarations) so the server can start
     // serving IMMEDIATELY. The Hermes state.db import (1829 sessions, 127K
@@ -192,6 +197,7 @@ async fn main() -> Result<()> {
         envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::new(),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
         vaults: Arc::new(VaultStore::new(org_workspace_root(&default_org())?)),
+        state_db: state_db_reader.map(Arc::new),
         projects: Arc::new(olympus_control_plane::projects::ProjectStore::new(
             org_workspace_root(&default_org())?,
         )),
@@ -300,15 +306,10 @@ async fn main() -> Result<()> {
     println!("olympus control plane listening on http://{bind}");
     println!("token: {token}");
 
-    // ---- Background Hermes state.db import (deferred so bind is instant) ----
-    // The server is now serving with native-only data (Olympus sessions,
-    // cards, setup). The Hermes import (1829 sessions, 127K messages) runs
-    // here in a tokio task, appending to the log and replaying into views +
-    // search. The live-sync worker (started above) will also pick up
-    // incremental changes. import_state flips to Done when this completes.
-    //
-    // Uses tokio::task::spawn_blocking for the SQLite-heavy import (blocking
-    // I/O), then async blocks for the view/search rebuild (tokio RwLocks).
+    // ---- Session metadata index (lazy history, ADR 0009) ----
+    // Hall imports ONLY session metadata (id, source, title, model, timestamps)
+    // from state.db — not message bodies. Message reads and full-text search
+    // query state.db on-demand via StateDbReader. This keeps RSS low.
     {
         let bg_log = Arc::clone(&log_arc);
         let bg_views = Arc::clone(&state.views);
@@ -318,28 +319,21 @@ async fn main() -> Result<()> {
         let bg_state_db = state_db.clone();
         tokio::spawn(async move {
             if !bg_state_db.exists() {
-                tracing::warn!(db = %bg_state_db.display(), "state.db not found — skipping import");
+                tracing::warn!(db = %bg_state_db.display(), "state.db not found — skipping session index");
                 bg_import.set_done();
                 return;
             }
-            tracing::info!(db = %bg_state_db.display(), "importing Hermes state.db (background)");
-            // Import is blocking SQLite I/O — run on the blocking pool.
+            tracing::info!(db = %bg_state_db.display(), "indexing Hermes sessions (metadata only)");
             let db = bg_state_db.clone();
             let log_clone = Arc::clone(&bg_log);
-            let import_result = tokio::task::spawn_blocking(move || {
-                let s = import::import_sessions(&db, &log_clone)?;
-                let m = import::import_messages(&db, &log_clone)?;
-                Ok::<_, anyhow::Error>((s, m))
-            })
-            .await;
+            let import_result =
+                tokio::task::spawn_blocking(move || import::import_sessions(&db, &log_clone)).await;
             match import_result {
-                Ok(Ok((s, m))) => {
+                Ok(Ok(s)) => {
                     tracing::info!(
                         sessions = s.session_count,
-                        messages = m.message_count,
-                        "background import complete — replaying into views + search"
+                        "session index complete — replaying into views"
                     );
-                    // Rebuild views + search from the now-complete log.
                     {
                         let mut v = bg_views.write().await;
                         *v = ViewManager::new();
@@ -354,8 +348,8 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                Ok(Err(e)) => tracing::error!(error = %e, "background import failed"),
-                Err(e) => tracing::error!(error = %e, "background import task panicked"),
+                Ok(Err(e)) => tracing::error!(error = %e, "session index failed"),
+                Err(e) => tracing::error!(error = %e, "session index task panicked"),
             }
             bg_import.set_done();
             use olympus_control_plane::server::ws::ServerFrame;

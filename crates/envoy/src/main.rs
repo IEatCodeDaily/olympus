@@ -92,11 +92,20 @@ async fn main() -> Result<()> {
             match olympus_envoy::transport::connect_to_hall(&endpoint, target).await {
                 Ok((send, recv)) => {
                     tracing::info!("connected to Hall via iroh");
-                    if let Err(e) =
-                        run_connection(recv, send, table.clone(), &node_id, &hostname_val, agents.clone())
-                            .await
+                    if let Err(e) = run_connection(
+                        recv,
+                        send,
+                        table.clone(),
+                        &node_id,
+                        &hostname_val,
+                        agents.clone(),
+                    )
+                    .await
                     {
-                        tracing::warn!(error = format!("{e:#}"), "iroh connection ended with error");
+                        tracing::warn!(
+                            error = format!("{e:#}"),
+                            "iroh connection ended with error"
+                        );
                     }
                     tracing::warn!("Hall iroh connection lost; reconnecting…");
                 }
@@ -122,9 +131,15 @@ async fn main() -> Result<()> {
             }
         };
         let (reader, writer) = s.into_split();
-        if let Err(e) =
-            run_connection(reader, writer, table.clone(), &node_id, &hostname_val, agents.clone())
-                .await
+        if let Err(e) = run_connection(
+            reader,
+            writer,
+            table.clone(),
+            &node_id,
+            &hostname_val,
+            agents.clone(),
+        )
+        .await
         {
             tracing::warn!(error = format!("{e:#}"), "connection ended with error");
         }
