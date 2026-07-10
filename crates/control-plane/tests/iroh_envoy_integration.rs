@@ -52,7 +52,15 @@ async fn spawn_hall(
             let c = cs.clone();
             tokio::spawn(async move {
                 if let Ok((send, recv)) = conn.accept_bi().await {
-                    node::handle_envoy_conn(recv, send, r, c).await;
+                    node::handle_envoy_conn(
+                        recv,
+                        send,
+                        r,
+                        c,
+                        node::NodeTransport::Iroh,
+                        Some(peer.to_string()),
+                    )
+                    .await;
                 }
             });
         }

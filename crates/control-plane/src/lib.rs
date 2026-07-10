@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod compress;
 pub mod edit_model;
+pub mod enroll;
 pub mod event;
 pub mod import;
 pub mod irc;

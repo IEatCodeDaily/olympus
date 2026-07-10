@@ -118,6 +118,10 @@ pub struct AppState {
     pub projects: Arc<crate::projects::ProjectStore>,
     /// Managed repo store — clone/sync/attach jj workspaces.
     pub repos: Arc<crate::repos::RepoStore>,
+    /// Envoy enrollment tokens (one-line node setup). Ephemeral by design.
+    pub enroll: crate::enroll::EnrollStore,
+    /// The olympus home dir (`~/.olympus`) — hall.toml allowlist + bin/ live here.
+    pub home: Arc<std::path::PathBuf>,
 }
 
 /// Build the full router (REST + WS) with the auth gate applied to `/api/*` and
@@ -162,6 +166,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/nodes/hall-identity", get(hall_identity))
         .route("/api/nodes/{id}/agents", get(node_agents))
         .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
+        .route("/api/nodes/{id}/drain", post(drain_node))
+        .route("/api/nodes/{id}", axum::routing::delete(remove_node))
+        .route("/api/enroll", post(mint_enroll))
         .route("/api/vaults", get(list_vaults).post(create_vault))
         .route("/api/vaults/{id}/notes", get(list_vault_notes))
         .route("/api/vaults/{id}/documents", get(list_vault_documents))
@@ -225,10 +232,21 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::proxy::proxy_forward_root).post(crate::proxy::proxy_forward_root),
         );
 
+    // Enrollment routes are PUBLIC by design: the target host has no API token
+    // yet. Each handler validates the short-lived single-use enroll token from
+    // the path — that token IS the auth (capability model, like the proxy's
+    // per-endpoint auth). Minting (POST /api/enroll, above) stays operator-only.
+    let enroll_public = Router::new()
+        .route("/api/enroll/{token}/install.sh", get(enroll_install_script))
+        .route("/api/enroll/{token}/binary", get(enroll_binary))
+        .route("/api/enroll/{token}/status", get(enroll_status))
+        .route("/api/enroll/{token}", post(enroll_register));
+
     Router::new()
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
         .merge(protected)
+        .merge(enroll_public)
         .merge(proxy_forward)
         .fallback_service(static_ui_service())
         .layer(cors_layer())
@@ -960,6 +978,259 @@ async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {
 async fn hall_identity(State(state): State<AppState>) -> impl IntoResponse {
     let id = state.hall_iroh_id.as_ref().map(|s| s.as_str().to_string());
     Json(json!({ "irohNodeId": id }))
+}
+
+/// POST /api/nodes/:id/drain — mark a node draining (no new sessions routed
+/// to it). Full ADR 0008 §5 drain choreography (resume-then-flip) is S5; this
+/// sets the registry state the Fleet view + scheduler already respect.
+async fn drain_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.nodes.set_draining(&id).await {
+        Ok(()) => Json(json!({ "ok": true, "status": "draining" })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/nodes/:id — remove a node from the fleet. Deregisters it,
+/// drops its envoy connection, and — for iroh nodes — revokes its key from
+/// the hall.toml allowlist so it cannot silently reconnect.
+async fn remove_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(node) = state.nodes.get(&id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("unknown node: {id}") })),
+        )
+            .into_response();
+    };
+    if node.local {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "the local node cannot be removed" })),
+        )
+            .into_response();
+    }
+
+    // Revoke from the allowlist FIRST (fail-closed: if this errors we still
+    // deregister, but report the revocation failure so the operator knows the
+    // node could reconnect).
+    let mut revoked = false;
+    if let Some(iroh_id) = &node.iroh_node_id {
+        match crate::enroll::allowlist_remove(&state.home, iroh_id) {
+            Ok(r) => revoked = r,
+            Err(e) => {
+                tracing::warn!(node = %id, error = %e, "allowlist revocation failed on node remove");
+            }
+        }
+    }
+
+    state.nodes.deregister(&id).await;
+    if let Some(conn) = state.envoy_conns.remove(&id).await {
+        conn.fail_all().await;
+    }
+    Json(json!({ "ok": true, "allowlistRevoked": revoked })).into_response()
+}
+
+// ── Envoy enrollment (one-line node setup) ──────────────────────────────
+
+/// Derive the externally-reachable base URL from reverse-proxy headers,
+/// validating that the host is a safe hostname (no shell metacharacters).
+/// Returns `None` if the host is missing or contains characters that could
+/// break out of the baked-in shell command in the install script.
+fn derive_base_url(headers: &HeaderMap) -> Option<String> {
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))?
+        .to_str()
+        .ok()?;
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    // Hostname + port only: letters, digits, dot, dash, colon, [ ] (for IPv6).
+    // Reject anything that could inject shell metacharacters into the install
+    // script's curl URL (spaces, $, backticks, |, ;, etc.).
+    let safe = host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+    if !safe || host.is_empty() {
+        return None;
+    }
+    // Proto is also interpolated; restrict to the known-good set.
+    let proto = match proto {
+        "http" | "https" => proto,
+        _ => "http",
+    };
+    Some(format!("{proto}://{host}"))
+}
+
+/// POST /api/enroll (operator-authed) — mint a short-lived enroll token and
+/// return the ready-to-paste one-liner. The public URL is derived from the
+/// request's Host header (works for localhost AND the CF-tunnel domain).
+async fn mint_enroll(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // Remote envoys connect over iroh; without a hall identity the installer
+    // can't configure the envoy's --hall target. Fail honestly.
+    let Some(hall_iroh) = state.hall_iroh_id.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "hall iroh endpoint is not bound — remote enrollment unavailable" })),
+        )
+            .into_response();
+    };
+
+    let Some(base) = derive_base_url(&headers) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "could not derive a safe base URL from the Host header" })),
+        )
+            .into_response();
+    };
+    let token = state.enroll.mint().await;
+    let command = format!("curl -fsSL {base}/api/enroll/{token}/install.sh | bash");
+
+    Json(json!({
+        "token": token,
+        "command": command,
+        "expiresInSecs": crate::enroll::ENROLL_TTL.as_secs(),
+        "hallIrohId": hall_iroh.as_str(),
+    }))
+    .into_response()
+}
+
+/// GET /api/enroll/:token/install.sh — the bootstrap script with the Hall
+/// URL, enroll token, and Hall iroh id baked in. Token-gated.
+async fn enroll_install_script(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.enroll.is_valid(&token).await {
+        return (StatusCode::FORBIDDEN, "enroll token invalid or expired").into_response();
+    }
+    let Some(hall_iroh) = state.hall_iroh_id.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "hall iroh endpoint is not bound",
+        )
+            .into_response();
+    };
+    let Some(base) = derive_base_url(&headers) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "could not derive a safe base URL from the Host header",
+        )
+            .into_response();
+    };
+
+    let script = include_str!("../../../../scripts/envoy-bootstrap.sh")
+        .replace("{{HALL_URL}}", &base)
+        .replace("{{ENROLL_TOKEN}}", &token)
+        .replace("{{HALL_IROH_ID}}", hall_iroh.as_str());
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/x-shellscript; charset=utf-8")],
+        script,
+    )
+        .into_response()
+}
+
+/// GET /api/enroll/:token/binary — serve the olympus-envoy binary from
+/// `<home>/bin/olympus-envoy` (the deployed symlink). Token-gated. Streaming
+/// is unnecessary at ~20MB; read + send is fine for an enrollment path.
+async fn enroll_binary(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    if !state.enroll.is_valid(&token).await {
+        return (StatusCode::FORBIDDEN, "enroll token invalid or expired").into_response();
+    }
+    let path = state.home.join("bin").join("olympus-envoy");
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(path = %path.display(), error = %e, "envoy binary missing for enrollment");
+            (
+                StatusCode::NOT_FOUND,
+                "olympus-envoy binary not found on the hall — run scripts/deploy.sh envoy first",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Body for POST /api/enroll/:token — the installer reporting the new envoy's
+/// iroh node id.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnrollRegisterBody {
+    iroh_node_id: String,
+    /// Informational (the node's chosen id); logged, not trusted for auth.
+    #[serde(default)]
+    node_id: Option<String>,
+}
+
+/// POST /api/enroll/:token — register the envoy's iroh node id: consumes the
+/// token (single registration) and appends the id to the hall.toml allowlist.
+async fn enroll_register(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    Json(body): Json<EnrollRegisterBody>,
+) -> Response {
+    use crate::enroll::ConsumeOutcome;
+    match state.enroll.consume(&token, &body.iroh_node_id).await {
+        ConsumeOutcome::Accepted | ConsumeOutcome::AlreadyRegistered => {}
+        ConsumeOutcome::Rejected => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "enroll token invalid, expired, or already used" })),
+            )
+                .into_response();
+        }
+    }
+    match crate::enroll::allowlist_add(&state.home, &body.iroh_node_id) {
+        Ok(added) => {
+            tracing::info!(
+                iroh = %body.iroh_node_id,
+                node = body.node_id.as_deref().unwrap_or("?"),
+                added,
+                "envoy enrolled via one-line installer"
+            );
+            Json(json!({ "ok": true, "added": added })).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/enroll/:token/status — is the enrolled node online yet? Token-gated
+/// polling endpoint for the installer's final verification step.
+async fn enroll_status(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    if !state.enroll.is_valid(&token).await {
+        return (StatusCode::FORBIDDEN, "enroll token invalid or expired").into_response();
+    }
+    // A freshly-enrolled envoy is the newest iroh-transport node; report all
+    // online iroh nodes so the installer can grep for its own.
+    let nodes = state.nodes.list().await;
+    let online = nodes.iter().any(|n| {
+        n.transport == crate::node::NodeTransport::Iroh
+            && n.status == crate::node::NodeStatus::Online
+    });
+    Json(json!({
+        "online": online,
+        "nodes": nodes
+            .iter()
+            .map(|n| json!({ "nodeId": n.node_id, "status": n.status, "transport": n.transport }))
+            .collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 async fn list_vaults(State(state): State<AppState>) -> Response {
@@ -3603,6 +3874,8 @@ mod tests {
                 dir.path().join("default"),
                 "default",
             )),
+            enroll: crate::enroll::EnrollStore::new(),
+            home: Arc::new(dir.path().to_path_buf()),
         };
         (state, dir)
     }
@@ -3707,6 +3980,8 @@ mod tests {
                 dir.path().join("default"),
                 "default",
             )),
+            enroll: crate::enroll::EnrollStore::new(),
+            home: Arc::new(dir.path().to_path_buf()),
         };
         let app = build_router(state);
 
@@ -4947,6 +5222,13 @@ mod tests {
                 "/api/nodes/nonexistent/agents/refresh",
                 &[200, 404, 501],
             ),
+            ("POST", "/api/nodes/nonexistent/drain", &[404]),
+            ("DELETE", "/api/nodes/nonexistent", &[404]),
+            ("POST", "/api/enroll", &[200, 503]),
+            ("GET", "/api/enroll/badtoken/install.sh", &[403]),
+            ("GET", "/api/enroll/badtoken/binary", &[403]),
+            ("GET", "/api/enroll/badtoken/status", &[403]),
+            ("POST", "/api/enroll/badtoken", &[400, 403, 415, 422]),
             ("GET", "/api/vaults", &[200]),
             ("POST", "/api/vaults", &[400, 422]),
             ("GET", "/api/vaults/nonexistent/notes", &[404]),
@@ -5016,5 +5298,208 @@ mod tests {
             "route contract violations:\n  {}",
             missing.join("\n  ")
         );
+    }
+
+    /// The full enrollment flow against the router: mint (authed) → fetch the
+    /// install script (token-gated, placeholders replaced) → register a node
+    /// id (consumes the token, lands in hall.toml) → second registration with
+    /// a different id is rejected. mint requires the hall iroh identity.
+    #[tokio::test]
+    async fn enroll_flow_mint_script_register() {
+        let (mut state, dir) = test_state();
+        state.hall_iroh_id = Some(Arc::new(
+            "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320".to_string(),
+        ));
+        let app = build_router(state.clone());
+
+        // 1. Mint (operator-authed).
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/enroll")
+                    .header("authorization", "Bearer testtoken")
+                    .header("host", "127.0.0.1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let token = v["token"].as_str().unwrap().to_string();
+        assert!(v["command"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("/api/enroll/{token}/install.sh")));
+
+        // Mint without auth is rejected (the mint endpoint is operator-only).
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/enroll")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // 2. Fetch the install script UNAUTHED (token in path is the capability).
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/enroll/{token}/install.sh"))
+                    .header("host", "127.0.0.1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let script = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let script = String::from_utf8(script.to_vec()).unwrap();
+        assert!(script.contains(&token), "token baked into the script");
+        assert!(
+            !script.contains("{{HALL_URL}}"),
+            "placeholders must be replaced"
+        );
+        assert!(script.contains("83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320"));
+
+        // 3. Register a node id — lands in hall.toml.
+        let envoy_id = "93141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499321";
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/enroll/{token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        "{{\"irohNodeId\":\"{envoy_id}\",\"nodeId\":\"test-node\"}}"
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            crate::enroll::allowlist_list(dir.path()),
+            vec![envoy_id.to_string()]
+        );
+
+        // 4. A DIFFERENT node id on the same token is rejected (single-use).
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/enroll/{token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        "{\"irohNodeId\":\"a3141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499322\"}",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(crate::enroll::allowlist_list(dir.path()).len(), 1);
+    }
+
+    /// mint_enroll fails honestly (503) when the hall has no iroh identity —
+    /// a remote envoy couldn't connect anyway.
+    #[tokio::test]
+    async fn enroll_mint_without_iroh_is_503() {
+        let (state, _dir) = test_state();
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/enroll")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// DELETE /api/nodes/:id revokes the node's iroh key from hall.toml and
+    /// deregisters it; the local node refuses removal.
+    #[tokio::test]
+    async fn remove_node_revokes_allowlist() {
+        let (state, dir) = test_state();
+        let iroh_id = "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320";
+        crate::enroll::allowlist_add(dir.path(), iroh_id).unwrap();
+        state
+            .nodes
+            .register(
+                "remote-1",
+                "remote-host",
+                4,
+                "0.1",
+                false,
+                crate::node::NodeTransport::Iroh,
+                Some(iroh_id.to_string()),
+                vec![],
+            )
+            .await;
+        state
+            .nodes
+            .register(
+                "local",
+                "localhost",
+                4,
+                "0.1",
+                true,
+                crate::node::NodeTransport::Local,
+                None,
+                vec![],
+            )
+            .await;
+        let app = build_router(state.clone());
+
+        // Local node cannot be removed.
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/nodes/local")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // Remote node removal deregisters + revokes.
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/nodes/remote-1")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(state.nodes.get("remote-1").await.is_none());
+        assert!(crate::enroll::allowlist_list(dir.path()).is_empty());
     }
 }

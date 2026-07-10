@@ -42,6 +42,18 @@ pub enum NodeStatus {
     Offline,
 }
 
+/// How a node is connected to the Hall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeTransport {
+    /// In-process (the Hall's own host).
+    Local,
+    /// Unix domain socket (same host, separate process).
+    Uds,
+    /// iroh QUIC tunnel (remote host).
+    Iroh,
+}
+
 /// A registered node in the fleet.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +74,11 @@ pub struct NodeInfo {
     pub local: bool,
     /// Seconds since last heartbeat.
     pub last_heartbeat_ago_secs: u64,
+    /// How this node is connected (local / uds / iroh).
+    pub transport: NodeTransport,
+    /// The node's iroh public key (set for iroh-connected envoys; used to
+    /// revoke it from the allowlist on Remove).
+    pub iroh_node_id: Option<String>,
     /// Agents this node's envoy has discovered on its host (Hermes profiles +
     /// installed CLI harnesses). Populated by the node's envoy — for the local
     /// node, by in-process discovery at boot and on manual refresh. Empty until
@@ -79,6 +96,8 @@ struct NodeEntry {
     version: String,
     local: bool,
     last_heartbeat: Instant,
+    transport: NodeTransport,
+    iroh_node_id: Option<String>,
     agents: Vec<AgentInfo>,
 }
 
@@ -103,6 +122,8 @@ impl NodeRegistry {
     /// Register or re-register a node (hello handshake). Updates all fields.
     /// `agents` is the node's envoy-discovered agent list (empty for a remote
     /// node until it reports; the local node passes its in-process discovery).
+    /// `iroh_node_id` is the peer's iroh public key for iroh-connected envoys.
+    #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &self,
         node_id: &str,
@@ -110,6 +131,8 @@ impl NodeRegistry {
         slots_total: u32,
         version: &str,
         local: bool,
+        transport: NodeTransport,
+        iroh_node_id: Option<String>,
         agents: Vec<AgentInfo>,
     ) {
         let now = Instant::now();
@@ -125,6 +148,8 @@ impl NodeRegistry {
                 version: version.to_string(),
                 local,
                 last_heartbeat: now,
+                transport,
+                iroh_node_id,
                 agents,
             },
         );
@@ -240,6 +265,8 @@ impl NodeRegistry {
                 version: e.version.clone(),
                 local: e.local,
                 last_heartbeat_ago_secs: now.duration_since(e.last_heartbeat).as_secs(),
+                transport: e.transport,
+                iroh_node_id: e.iroh_node_id.clone(),
                 agents: e.agents.clone(),
             })
             .collect()
@@ -257,6 +284,8 @@ impl NodeRegistry {
             version: e.version.clone(),
             local: e.local,
             last_heartbeat_ago_secs: Instant::now().duration_since(e.last_heartbeat).as_secs(),
+            transport: e.transport,
+            iroh_node_id: e.iroh_node_id.clone(),
             agents: e.agents.clone(),
         })
     }
@@ -389,16 +418,28 @@ async fn handle_uds_conn(
     envoy_conns: crate::server::envoy_conn::EnvoyConnections,
 ) {
     let (reader, writer) = stream.into_split();
-    handle_envoy_conn(reader, writer, registry, envoy_conns).await;
+    handle_envoy_conn(
+        reader,
+        writer,
+        registry,
+        envoy_conns,
+        NodeTransport::Uds,
+        None,
+    )
+    .await;
 }
 
 /// Transport-generic envoy connection handler: the same JSON-lines dispatch
 /// runs over UDS (local) and iroh QUIC streams (remote, S7). ADR 0008 §1.
+/// `transport` + `peer_iroh_id` describe HOW the envoy reached us (shown in
+/// the Fleet view; the iroh id also enables allowlist revocation on Remove).
 pub async fn handle_envoy_conn<R, W>(
     reader: R,
     writer: W,
     registry: NodeRegistry,
     envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+    transport: NodeTransport,
+    peer_iroh_id: Option<String>,
 ) where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
@@ -444,6 +485,8 @@ pub async fn handle_envoy_conn<R, W>(
                         &envoy_conns,
                         w,
                         &mut connected_node,
+                        transport,
+                        peer_iroh_id.clone(),
                     )
                     .await;
                     match new_conn {
@@ -495,6 +538,8 @@ pub async fn handle_envoy_conn<R, W>(
                         slots_total,
                         &version,
                         false,
+                        transport,
+                        peer_iroh_id.clone(),
                         Vec::new(),
                     )
                     .await;
@@ -562,12 +607,15 @@ enum HelloOutcome {
 
 /// Handle a v2 EnvoyFrame::Hello: validate protocol version, register the node,
 /// create the EnvoyConnection with the writer, and return the connection.
+#[allow(clippy::too_many_arguments)]
 async fn handle_envoy_hello(
     frame: olympus_proto::frames::EnvoyFrame,
     registry: &NodeRegistry,
     envoy_conns: &crate::server::envoy_conn::EnvoyConnections,
     writer: crate::server::envoy_conn::BoxedWriter,
     connected_node: &mut Option<String>,
+    transport: NodeTransport,
+    peer_iroh_id: Option<String>,
 ) -> HelloOutcome {
     use olympus_proto::frames::EnvoyFrame;
     use olympus_proto::version::PROTOCOL_VERSION;
@@ -626,6 +674,8 @@ async fn handle_envoy_hello(
             slots_total,
             &version_str,
             false,
+            transport,
+            peer_iroh_id,
             agents_parsed,
         )
         .await;
@@ -784,7 +834,15 @@ pub async fn run_iroh_accept_loop(
             // The envoy opens the bi-stream; hall accepts it.
             match conn.accept_bi().await {
                 Ok((send, recv)) => {
-                    handle_envoy_conn(recv, send, reg, conns).await;
+                    handle_envoy_conn(
+                        recv,
+                        send,
+                        reg,
+                        conns,
+                        NodeTransport::Iroh,
+                        Some(peer.to_string()),
+                    )
+                    .await;
                 }
                 Err(e) => {
                     tracing::debug!(error = %e, "iroh accept_bi failed");
@@ -803,8 +861,17 @@ mod tests {
     #[tokio::test]
     async fn register_and_list() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
-            .await;
+        reg.register(
+            "node-1",
+            "host-1",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -816,8 +883,17 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_updates_slots() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
-            .await;
+        reg.register(
+            "node-1",
+            "host-1",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
 
         reg.heartbeat("node-1", 2).await.unwrap();
 
@@ -835,8 +911,17 @@ mod tests {
     #[tokio::test]
     async fn deregister_removes_node() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
-            .await;
+        reg.register(
+            "node-1",
+            "host-1",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
         assert_eq!(reg.list().await.len(), 1);
 
         reg.deregister("node-1").await;
@@ -846,11 +931,29 @@ mod tests {
     #[tokio::test]
     async fn re_register_updates_fields() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 2, "0.1", false, vec![])
-            .await;
+        reg.register(
+            "node-1",
+            "host-1",
+            2,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
         // Re-register with updated capacity
-        reg.register("node-1", "host-1", 8, "0.2", false, vec![])
-            .await;
+        reg.register(
+            "node-1",
+            "host-1",
+            8,
+            "0.2",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
 
         let nodes = reg.list().await;
         assert_eq!(nodes.len(), 1);
@@ -861,8 +964,17 @@ mod tests {
     #[tokio::test]
     async fn local_node_never_evicted() {
         let reg = NodeRegistry::new();
-        reg.register("local", "localhost", 4, "0.1", true, vec![])
-            .await;
+        reg.register(
+            "local",
+            "localhost",
+            4,
+            "0.1",
+            true,
+            NodeTransport::Local,
+            None,
+            vec![],
+        )
+        .await;
 
         // Even after a long wait, local node stays.
         sleep(Duration::from_millis(50)).await;
@@ -874,8 +986,17 @@ mod tests {
     #[tokio::test]
     async fn set_draining_changes_status() {
         let reg = NodeRegistry::new();
-        reg.register("node-1", "host-1", 4, "0.1", false, vec![])
-            .await;
+        reg.register(
+            "node-1",
+            "host-1",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
 
         reg.set_draining("node-1").await.unwrap();
         let nodes = reg.list().await;
@@ -885,8 +1006,28 @@ mod tests {
     #[tokio::test]
     async fn online_count() {
         let reg = NodeRegistry::new();
-        reg.register("n1", "h1", 4, "0.1", false, vec![]).await;
-        reg.register("n2", "h2", 4, "0.1", false, vec![]).await;
+        reg.register(
+            "n1",
+            "h1",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
+        reg.register(
+            "n2",
+            "h2",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
         reg.set_draining("n2").await.unwrap();
 
         assert_eq!(reg.online_count().await, 1);
@@ -895,7 +1036,17 @@ mod tests {
     #[tokio::test]
     async fn get_single_node() {
         let reg = NodeRegistry::new();
-        reg.register("n1", "h1", 4, "0.1", false, vec![]).await;
+        reg.register(
+            "n1",
+            "h1",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Uds,
+            None,
+            vec![],
+        )
+        .await;
 
         let node = reg.get("n1").await.unwrap();
         assert_eq!(node.node_id, "n1");

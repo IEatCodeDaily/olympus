@@ -107,9 +107,21 @@ export interface NodeInfo {
   version: string;
   local: boolean;
   lastHeartbeatAgoSecs: number;
+  /** How the node is connected to the Hall. */
+  transport: "local" | "uds" | "iroh";
+  /** The node's iroh public key (iroh-connected envoys only). */
+  irohNodeId?: string | null;
   // Agents this node's envoy discovered on its host (per-node, not global).
   // Optional: a remote node may not have reported yet.
   agents?: AgentInfo[];
+}
+
+/** POST /api/enroll response — the one-line setup command. */
+export interface EnrollResponse {
+  token: string;
+  command: string;
+  expiresInSecs: number;
+  hallIrohId: string;
 }
 
 export interface NodesResponse {
