@@ -45,11 +45,12 @@ impl Log {
             .any(|column| column == "org_id");
         if !has_org_id {
             conn.execute_batch(
-                "ALTER TABLE sessions ADD COLUMN org_id TEXT NOT NULL DEFAULT 'personal';
-                 CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);",
+                "ALTER TABLE sessions ADD COLUMN org_id TEXT NOT NULL DEFAULT 'personal';",
             )
             .context("migrating sessions table to add org_id column")?;
         }
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);")
+            .context("indexing sessions by organization")?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -934,7 +935,7 @@ PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAG
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT NOT NULL,payload BLOB NOT NULL,created_at REAL NOT NULL,session_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,hermes_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT '',model TEXT,title TEXT,started_at REAL NOT NULL,message_count INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,last_activity REAL NOT NULL DEFAULT 0,agent TEXT,node TEXT,parent_session_id TEXT,card_id TEXT,project_id TEXT,org_id TEXT NOT NULL DEFAULT 'personal');
-CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC); CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source); CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived); CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned); CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC); CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source); CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived); CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned);
 CREATE TABLE IF NOT EXISTS messages(session_id TEXT NOT NULL,message_id INTEGER NOT NULL,role TEXT NOT NULL,content TEXT,tool_name TEXT,tool_calls TEXT,reasoning TEXT,timestamp REAL NOT NULL,token_count INTEGER,finish_reason TEXT,PRIMARY KEY(session_id,message_id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(session_id,timestamp);
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(session_id UNINDEXED,message_id UNINDEXED,content,role UNINDEXED,tool_name UNINDEXED,timestamp UNINDEXED,tokenize='porter unicode61');
@@ -952,6 +953,45 @@ CREATE TABLE IF NOT EXISTS session_repos(session_id TEXT NOT NULL,slug TEXT NOT 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_migrates_sessions_without_organization_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("olympus.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sessions(
+                    session_id TEXT PRIMARY KEY,
+                    hermes_id TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    model TEXT,
+                    title TEXT,
+                    started_at REAL NOT NULL,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    last_activity REAL NOT NULL DEFAULT 0,
+                    agent TEXT,
+                    node TEXT,
+                    parent_session_id TEXT,
+                    card_id TEXT,
+                    project_id TEXT
+                 );
+                 INSERT INTO sessions(session_id, started_at) VALUES ('legacy', 1.0);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let log = Log::open(&path).unwrap();
+        assert_eq!(
+            log.get_session("legacy").unwrap().unwrap().org_id,
+            "personal"
+        );
+    }
+
     #[test]
     fn append_is_atomic_and_queries_projection() {
         let dir = tempfile::tempdir().unwrap();
