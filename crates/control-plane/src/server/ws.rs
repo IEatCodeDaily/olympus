@@ -702,6 +702,8 @@ mod tests {
             )),
             projects: Arc::new(crate::projects::ProjectStore::new(dir.path().join("p"))),
             repos: Arc::new(crate::repos::RepoStore::new(dir.path().join("r"), "r")),
+            enroll: crate::enroll::EnrollStore::new(),
+            home: Arc::new(dir.path().to_path_buf()),
         }
     }
 }

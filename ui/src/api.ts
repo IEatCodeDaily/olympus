@@ -20,6 +20,7 @@ import type {
   ModelsResponse,
   AgentsResponse,
   NodesResponse,
+  EnrollResponse,
   HealthResponse,
   SetupResponse,
   SetupQueryParams,
@@ -152,6 +153,40 @@ export async function fetchNodes(): Promise<NodesResponse> {
   const res = await fetch(`${BASE}/api/nodes`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`nodes ${res.status}`);
   return res.json() as Promise<NodesResponse>;
+}
+
+/** Mint an enroll token — returns the one-line envoy setup command. */
+export async function mintEnroll(): Promise<EnrollResponse> {
+  const res = await fetch(`${BASE}/api/enroll`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `enroll ${res.status}`);
+  }
+  return res.json() as Promise<EnrollResponse>;
+}
+
+/** Mark a node draining (no new sessions routed to it). */
+export async function drainNode(nodeId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/nodes/${encodeURIComponent(nodeId)}/drain`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`drain ${res.status}`);
+}
+
+/** Remove a node from the fleet (deregisters + revokes its allowlist entry). */
+export async function removeNode(nodeId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/nodes/${encodeURIComponent(nodeId)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `remove node ${res.status}`);
+  }
 }
 
 export async function healthCheck(): Promise<HealthResponse> {

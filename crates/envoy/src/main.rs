@@ -40,13 +40,6 @@ const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .compact()
-        .init();
-
-    let socket = resolve_socket()?;
-    let mock = flag_present("--mock");
     let node_id = arg_value("--node-id").unwrap_or_else(|| {
         std::env::var("OLYMPUS_NODE_ID").unwrap_or_else(|_| {
             hostname::get()
@@ -55,6 +48,27 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|| "envoy".to_string())
         })
     });
+
+    // `--print-node-id`: generate/load the iroh identity for this node id and
+    // print ONLY the public key on stdout, then exit. Used by the one-line
+    // bootstrap installer to register the id with the Hall's allowlist BEFORE
+    // the service starts (fail-closed enrollment). Must run BEFORE tracing
+    // init — the fmt subscriber writes to stdout and would pollute the
+    // captured output.
+    if flag_present("--print-node-id") {
+        let state_dir = envoy_state_dir(&node_id)?;
+        let secret = olympus_envoy::transport::load_or_create_secret(&state_dir)?;
+        println!("{}", secret.public());
+        return Ok(());
+    }
+
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .compact()
+        .init();
+
+    let socket = resolve_socket()?;
+    let mock = flag_present("--mock");
     let hostname_val = hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
@@ -92,11 +106,20 @@ async fn main() -> Result<()> {
             match olympus_envoy::transport::connect_to_hall(&endpoint, target).await {
                 Ok((send, recv)) => {
                     tracing::info!("connected to Hall via iroh");
-                    if let Err(e) =
-                        run_connection(recv, send, table.clone(), &node_id, &hostname_val, agents.clone())
-                            .await
+                    if let Err(e) = run_connection(
+                        recv,
+                        send,
+                        table.clone(),
+                        &node_id,
+                        &hostname_val,
+                        agents.clone(),
+                    )
+                    .await
                     {
-                        tracing::warn!(error = format!("{e:#}"), "iroh connection ended with error");
+                        tracing::warn!(
+                            error = format!("{e:#}"),
+                            "iroh connection ended with error"
+                        );
                     }
                     tracing::warn!("Hall iroh connection lost; reconnecting…");
                 }
@@ -122,9 +145,15 @@ async fn main() -> Result<()> {
             }
         };
         let (reader, writer) = s.into_split();
-        if let Err(e) =
-            run_connection(reader, writer, table.clone(), &node_id, &hostname_val, agents.clone())
-                .await
+        if let Err(e) = run_connection(
+            reader,
+            writer,
+            table.clone(),
+            &node_id,
+            &hostname_val,
+            agents.clone(),
+        )
+        .await
         {
             tracing::warn!(error = format!("{e:#}"), "connection ended with error");
         }

@@ -51,6 +51,7 @@ export const NODES: NodeInfo[] = [
     version: "0.1",
     local: true,
     lastHeartbeatAgoSecs: 1,
+    transport: "local",
   },
   {
     nodeId: "gpu-box",
@@ -61,6 +62,8 @@ export const NODES: NodeInfo[] = [
     version: "0.1",
     local: false,
     lastHeartbeatAgoSecs: 165,
+    transport: "iroh",
+    irohNodeId: "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320",
   },
   {
     nodeId: "edge-mini",
@@ -71,6 +74,8 @@ export const NODES: NodeInfo[] = [
     version: "0.1",
     local: false,
     lastHeartbeatAgoSecs: 5400,
+    transport: "iroh",
+    irohNodeId: "93141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499321",
   },
 ];
 

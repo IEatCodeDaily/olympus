@@ -199,6 +199,8 @@ async fn main() -> Result<()> {
             &org_workspace_root(&default_org())?,
             &default_org(),
         )),
+        enroll: olympus_control_plane::enroll::EnrollStore::new(),
+        home: Arc::new(home.clone()),
         hall_iroh_id: None, // set below after endpoint creation
     };
 
