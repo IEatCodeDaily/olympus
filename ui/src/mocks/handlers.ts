@@ -33,8 +33,22 @@ import type {
 // ── REST Handlers ─────────────────────────────────────
 
 export const handlers = [
+  http.get("http://127.0.0.1:8787/api/auth/session", () =>
+    HttpResponse.json({ user: { userId: "mock-user", username: "demo", kind: "user" } }),
+  ),
+  http.post("http://127.0.0.1:8787/api/auth/login", () =>
+    HttpResponse.json({ user: { userId: "mock-user", username: "demo", kind: "user" } }),
+  ),
+  http.post("http://127.0.0.1:8787/api/auth/logout", () =>
+    new HttpResponse(null, { status: 204 }),
+  ),
+  http.get("http://127.0.0.1:8787/api/organizations", () =>
+    HttpResponse.json({ organizations: [
+      { id: "mock-org", slug: "demo", displayName: "Demo Organization", role: "owner" },
+    ] }),
+  ),
   // GET /api/sessions
-  http.get("http://127.0.0.1:8787/api/sessions", async ({ request }: { request: Request }) => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/sessions", async ({ request }: { request: Request }) => {
     const url = new URL(request.url);
     const sourceParam = url.searchParams.get("source");
     const model = url.searchParams.get("model");
@@ -80,7 +94,7 @@ export const handlers = [
   }),
 
   // GET /api/sessions/:id
-  http.get<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id", ({ params }: { params: { id: string } }) => {
+  http.get<{ id: string }>("http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id", ({ params }: { params: { id: string } }) => {
     const sess = SESSIONS.find((s) => s.id === params.id);
     if (!sess) return new HttpResponse(null, { status: 404 });
     return HttpResponse.json(sess);
@@ -89,7 +103,7 @@ export const handlers = [
   // POST /api/sessions — optimistic create (no runtime spawned). Mirrors the
   // backend: instant draft with source=olympus, managed=true, empty hermesId,
   // optional agent/node binding from the body.
-  http.post("http://127.0.0.1:8787/api/sessions", async ({ request }) => {
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/sessions", async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as {
       agent?: string;
       node?: string;
@@ -127,7 +141,7 @@ export const handlers = [
 
   // PATCH /api/sessions/:id — bind/rebind agent, node, model, title.
   http.patch<{ id: string }>(
-    "http://127.0.0.1:8787/api/sessions/:id",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id",
     async ({ params, request }) => {
       const sess = SESSIONS.find((s) => s.id === params.id);
       if (!sess) return new HttpResponse(null, { status: 404 });
@@ -153,7 +167,7 @@ export const handlers = [
   // sessions are read-only (409); managed sessions lazily "spawn" and echo a
   // reply over the next tick (mock).
   http.post<{ id: string }>(
-    "http://127.0.0.1:8787/api/sessions/:id/messages",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id/messages",
     async ({ params, request }) => {
       const sess = SESSIONS.find((s) => s.id === params.id);
       if (!sess) return new HttpResponse(null, { status: 404 });
@@ -228,7 +242,7 @@ export const handlers = [
   ),
 
   // POST /api/sessions/:id/fork
-  http.post<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id/fork", ({ params }) => {
+  http.post<{ id: string }>("http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id/fork", ({ params }) => {
     const source = SESSIONS.find((session) => session.id === params.id);
     if (!source) return new HttpResponse(null, { status: 404 });
     const id = `${source.id}-fork`;
@@ -257,7 +271,7 @@ export const handlers = [
 
   // GET /api/sessions/:id/messages
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/sessions/:id/messages",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id/messages",
     ({ params }: { params: { id: string } }) => {
       const msgs = MESSAGES_BY_SESSION[params.id] ?? [];
       return HttpResponse.json<MessagesResponse>({
@@ -268,7 +282,7 @@ export const handlers = [
   ),
 
   // GET /api/search
-  http.get("http://127.0.0.1:8787/api/search", async ({ request }: { request: Request }) => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/search", async ({ request }: { request: Request }) => {
     const q = new URL(request.url).searchParams.get("q") ?? "";
     await delay(200 + Math.random() * 300); // simulate tantivy latency
     return HttpResponse.json<SearchResponse>({
@@ -287,14 +301,14 @@ export const handlers = [
   }),
 
   // GET /api/usage
-  http.get("http://127.0.0.1:8787/api/usage", async ({ request }) => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/usage", async ({ request }) => {
     const range = (new URL(request.url).searchParams.get("range") ?? "24h") as UsageRange;
     await delay(120 + Math.random() * 160);
     return HttpResponse.json<UsageResponse>(USAGE_BY_RANGE[range] ?? USAGE_BY_RANGE["24h"]);
   }),
 
   // GET /api/nodes
-  http.get("http://127.0.0.1:8787/api/nodes", async () => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/nodes", async () => {
     await delay(250 + Math.random() * 250);
     return HttpResponse.json<NodesResponse>({ nodes: NODES });
   }),
@@ -311,7 +325,7 @@ export const handlers = [
   }),
 
   // GET /api/workflows
-  http.get("http://127.0.0.1:8787/api/workflows", async () => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/workflows", async () => {
     await delay(220 + Math.random() * 220);
     return HttpResponse.json<WorkflowsResponse>({
       workflows: WORKFLOWS,
@@ -322,13 +336,13 @@ export const handlers = [
   // ── Vaults ──────────────────────────────────────────
 
   // GET /api/vaults
-  http.get("http://127.0.0.1:8787/api/vaults", async () => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/vaults", async () => {
     await delay(80 + Math.random() * 60);
     return HttpResponse.json({ vaults: VAULTS });
   }),
 
   // POST /api/vaults
-  http.post("http://127.0.0.1:8787/api/vaults", async ({ request }) => {
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/vaults", async ({ request }) => {
     const body = (await request.json()) as { name: string };
     const id = body.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     const vault = { id, name: body.name, noteCount: 0, updatedAt: Math.floor(Date.now() / 1000) };
@@ -339,7 +353,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/notes
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/notes",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/notes",
     ({ params }: { params: { id: string } }) => {
       const tree = VAULT_NOTES[params.id] ?? [];
       return HttpResponse.json({ notes: tree });
@@ -348,7 +362,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/note?path=...
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/note",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/note",
     ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const doc = buildNoteDoc(params.id, path);
@@ -359,7 +373,7 @@ export const handlers = [
 
   // PUT /api/vaults/:id/note?path=...
   http.put<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/note",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/note",
     async ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const body = (await request.json()) as { markdown?: string; newPath?: string };
@@ -382,7 +396,7 @@ export const handlers = [
 
   // DELETE /api/vaults/:id/note?path=...
   http.delete<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/note",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/note",
     ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const store = VAULT_NOTES_MUTABLE[params.id];
@@ -394,7 +408,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/graph
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/graph",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/graph",
     ({ params }: { params: { id: string } }) => {
       const store = VAULT_NOTES_MUTABLE[params.id];
       const nodes = store
@@ -422,7 +436,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/collections
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/collections",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/collections",
     ({ params }: { params: { id: string } }) => {
       const store = VAULT_NOTES_MUTABLE[params.id];
       const collections = store
@@ -440,7 +454,7 @@ export const handlers = [
 
   // GET /api/vaults/:id/collections/:path
   http.get<{ id: string; path: string }>(
-    "http://127.0.0.1:8787/api/vaults/:id/collections/:path",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/vaults/:id/collections/:path",
     ({ params }: { params: { id: string; path: string } }) => {
       // Mock: return a few sample rows
       return HttpResponse.json({

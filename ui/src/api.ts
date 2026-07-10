@@ -34,11 +34,48 @@ import type {
   VaultSummary,
   NoteTreeEntry,
 } from "./types";
-const BASE = import.meta.env.VITE_API_BASE as string;
-const T = import.meta.env.VITE_API_TOKEN as string;
+// A production Web UI is permanently bound to the Hall that served it. The
+// configurable base exists only for Vite development; production REST and WS
+// URLs always derive from window.location.origin.
+const BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE as string) : "";
+const browserFetch = window.fetch.bind(window);
+let organizationId: string | null = null;
+
+export function setApiOrganization(id: string | null): void {
+  organizationId = id;
+  closeWs();
+}
+
+function organizationPath(path: string): string {
+  if (!organizationId || !path.startsWith("/api/")) return path;
+  if (
+    path.startsWith("/api/auth/") ||
+    path === "/api/organizations" ||
+    path.startsWith("/api/health") ||
+    path.startsWith("/api/metrics") ||
+    path === "/api/models" ||
+    path === "/api/agents" ||
+    path.startsWith("/api/agents/") ||
+    path === "/api/nodes/hall-identity"
+  ) return path;
+  return `/api/organizations/${encodeURIComponent(organizationId)}${path.slice(4)}`;
+}
+
+async function fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  let scoped = input;
+  if (typeof input === "string") {
+    const path = BASE && input.startsWith(BASE) ? input.slice(BASE.length) : input;
+    if (path.startsWith("/api/")) {
+      scoped = `${BASE}${organizationPath(path)}`;
+    }
+  }
+  return browserFetch(scoped, { ...init, credentials: "include" });
+}
+
+export { fetch as apiFetch };
 
 export function authHeaders(): Record<string, string> {
-  return { Authorization: "Bearer " + T };
+  return {};
 }
 
 function jsonHeaders(): Record<string, string> {
@@ -408,7 +445,7 @@ function getWsUrl(): string {
   // anon-<N> server-side when absent.
   const name = getDisplayName();
   const params = new URLSearchParams();
-  if (T) params.set("token", T);
+  if (organizationId) params.set("organization", organizationId);
   if (name) params.set("name", name);
   const qs = params.toString();
   return `${proto}://${u.host}/ws${qs ? `?${qs}` : ""}`;

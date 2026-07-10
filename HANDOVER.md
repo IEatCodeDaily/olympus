@@ -22,8 +22,8 @@ cd ~/olympus && cargo build --release && systemctl --user restart olympus.servic
 cd ~/olympus/ui && npm run typecheck && npm run build
 ```
 
-Token: `~/.olympus/token` (regenerated each server restart — keep
-`ui/.env.local` `VITE_API_TOKEN` in sync or the WS 401s).
+Browser access uses a Hall-local login cookie. `~/.olympus/token` remains only
+for native/operator automation and must never be placed in a Vite environment.
 
 ## Hard-won landmines (read before debugging)
 

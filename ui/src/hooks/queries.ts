@@ -184,7 +184,7 @@ export function useVaultNote(vaultId: string | null, path: string | null) {
  *
  * Call this once at the app root.
  */
-export function useLiveSync() {
+export function useLiveSync(organizationId: string) {
   const qc = useQueryClient();
 
   const handleFrame = useCallback(
@@ -228,5 +228,5 @@ export function useLiveSync() {
     connectWs();
     const unsub = onFrame(handleFrame);
     return unsub;
-  }, [handleFrame]);
+  }, [handleFrame, organizationId]);
 }

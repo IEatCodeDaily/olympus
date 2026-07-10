@@ -10,7 +10,7 @@ import { useNavigate } from "@tanstack/react-router";
 import ForceGraph2D from "react-force-graph-2d";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../../../components/Icon";
-import { authHeaders } from "../../../api";
+import { apiFetch } from "../../../api";
 
 interface GraphNode {
   id: string;
@@ -39,9 +39,8 @@ export function GraphPage({ vaultId }: { vaultId: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["vaultGraph", vaultId],
     queryFn: async () => {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_BASE ?? ""}/api/vaults/${vaultId}/graph`,
-        { headers: authHeaders() },
+      const res = await apiFetch(
+        `/api/vaults/${vaultId}/graph`,
       );
       if (!res.ok) throw new Error(`graph ${res.status}`);
       return res.json() as Promise<VaultGraphData>;

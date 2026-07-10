@@ -95,15 +95,17 @@ impl BridgeManager {
     }
 
     /// The on-disk path of a session's space, if a spaces root is configured.
-    pub fn space_path(&self, session_id: &str) -> Option<PathBuf> {
-        self.spaces_root.as_ref().map(|r| r.join(session_id))
+    pub fn space_path(&self, organization_id: &str, session_id: &str) -> Option<PathBuf> {
+        self.spaces_root
+            .as_ref()
+            .map(|root| root.join(organization_id).join("sessions").join(session_id))
     }
 
     /// Materialize a session's space directory (idempotent). Returns the path,
     /// or `None` if no spaces root is configured (tests). A bare space is just
     /// an empty dir; it becomes a jj worktree only when a repo is attached.
-    pub fn ensure_space(&self, session_id: &str) -> Result<Option<PathBuf>> {
-        let Some(path) = self.space_path(session_id) else {
+    pub fn ensure_space(&self, organization_id: &str, session_id: &str) -> Result<Option<PathBuf>> {
+        let Some(path) = self.space_path(organization_id, session_id) else {
             return Ok(None);
         };
         std::fs::create_dir_all(&path)
@@ -112,8 +114,8 @@ impl BridgeManager {
     }
 
     /// Remove a session's space directory (best-effort GC on archive/delete).
-    pub fn remove_space(&self, session_id: &str) {
-        if let Some(path) = self.space_path(session_id) {
+    pub fn remove_space(&self, organization_id: &str, session_id: &str) {
+        if let Some(path) = self.space_path(organization_id, session_id) {
             if path.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&path) {
                     tracing::warn!(error = %e, path = %path.display(), "failed to remove session space");
@@ -125,8 +127,8 @@ impl BridgeManager {
     /// Return the string path of a session's space directory, or `None` if
     /// no spaces root is configured (used by attach_session_project to locate
     /// the space for symlinking).
-    pub fn space_for(&self, session_id: &str) -> Option<String> {
-        self.space_path(session_id)
+    pub fn space_for(&self, organization_id: &str, session_id: &str) -> Option<String> {
+        self.space_path(organization_id, session_id)
             .map(|p| p.to_string_lossy().into_owned())
     }
 
@@ -241,7 +243,11 @@ impl BridgeManager {
     ///
     /// `hermes_id` is empty until the runtime actually starts and captures it;
     /// it is backfilled via a `SessionUpdated{hermes_id}` event on first send.
-    pub fn create_draft(&self, spec: &RuntimeSpec) -> Result<NewSession> {
+    pub fn create_draft(
+        &self,
+        spec: &RuntimeSpec,
+        organization_id: Option<&str>,
+    ) -> Result<NewSession> {
         let now = chrono_epoch_pub();
         // A durable id, stable from birth: `<utc>-<node>-<hash>`. There is no
         // draft→real rename — only the space and agent session are lazy.
@@ -250,9 +256,9 @@ impl BridgeManager {
         // Eagerly materialize the session space (the agent's working directory).
         // A bare space is just an empty dir; cheap, and it means an agent is
         // never spawned without a scoped cwd. GC'd on archive/delete.
-        let space = self.ensure_space(&session_id)?;
+        let space = self.ensure_space(organization_id.unwrap_or("personal"), &session_id)?;
 
-        let event = Event::SessionCreated {
+        let created = Event::SessionCreated {
             session_id: session_id.clone(),
             hermes_id: String::new(),
             source: "olympus".into(),
@@ -265,9 +271,16 @@ impl BridgeManager {
             agent: spec.agent.clone(),
             node: spec.node.clone(),
         };
+        let mut events = vec![created];
+        if let Some(organization_id) = organization_id {
+            events.push(Event::SessionOrganizationAssigned {
+                session_id: session_id.clone(),
+                organization_id: organization_id.to_string(),
+            });
+        }
         self.log
-            .append(&event)
-            .context("appending SessionCreated (draft)")?;
+            .append_batch(&events)
+            .context("appending draft session events")?;
 
         Ok(NewSession {
             session_id,
@@ -307,16 +320,17 @@ impl BridgeManager {
         model: Option<String>,
         title: Option<String>,
         message_count: u64,
+        organization_id: Option<&str>,
     ) -> Result<ForkedSession> {
         let forked = self.table.fork_runtime(source_hermes_id).await?;
         let hermes_id = forked.hermes_id;
         let session_id = format!("oly-{}", &hermes_id[..hermes_id.len().min(8)]);
 
         // A fork is a real managed session — give it its own space too.
-        let _ = self.ensure_space(&session_id);
+        let _ = self.ensure_space(organization_id.unwrap_or("personal"), &session_id);
 
         let now = chrono_epoch_pub();
-        self.log.append(&Event::SessionCreated {
+        let created = Event::SessionCreated {
             session_id: session_id.clone(),
             hermes_id: hermes_id.clone(),
             source: "olympus".into(),
@@ -328,7 +342,15 @@ impl BridgeManager {
             output_tokens: 0,
             agent: None,
             node: None,
-        })?;
+        };
+        let mut events = vec![created];
+        if let Some(organization_id) = organization_id {
+            events.push(Event::SessionOrganizationAssigned {
+                session_id: session_id.clone(),
+                organization_id: organization_id.to_string(),
+            });
+        }
+        self.log.append_batch(&events)?;
 
         self.table.register(&session_id, forked.runtime).await;
 
@@ -581,10 +603,10 @@ mod space_tests {
         let (_f, log) = test_log();
         let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
             .with_spaces_root(&tmp);
-        let path = mgr.ensure_space("sess-1").unwrap().unwrap();
+        let path = mgr.ensure_space("org-a", "sess-1").unwrap().unwrap();
         assert!(path.exists() && path.is_dir());
-        assert!(path.ends_with("sess-1"));
-        mgr.remove_space("sess-1");
+        assert!(path.ends_with("org-a/sessions/sess-1"));
+        mgr.remove_space("org-a", "sess-1");
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -593,8 +615,8 @@ mod space_tests {
     fn no_spaces_root_means_no_space() {
         let (_f, log) = test_log();
         let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory());
-        assert!(mgr.space_path("sess-1").is_none());
-        assert!(mgr.ensure_space("sess-1").unwrap().is_none());
+        assert!(mgr.space_path("org-a", "sess-1").is_none());
+        assert!(mgr.ensure_space("org-a", "sess-1").unwrap().is_none());
     }
 
     #[test]
@@ -603,7 +625,7 @@ mod space_tests {
         let (_f, log) = test_log();
         let mgr = BridgeManager::with_factory(log, crate::server::test_support::mock_factory())
             .with_spaces_root(&tmp);
-        let ns = mgr.create_draft(&RuntimeSpec::default()).unwrap();
+        let ns = mgr.create_draft(&RuntimeSpec::default(), None).unwrap();
         // id is <stamp>-<hash> (no node segment, ADR 0005 §6).
         assert_eq!(ns.session_id.matches('-').count(), 1);
         let space = ns.space.expect("space path should be set");

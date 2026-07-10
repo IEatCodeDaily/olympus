@@ -7,7 +7,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../../../components/Icon";
-import { authHeaders } from "../../../api";
+import { apiFetch } from "../../../api";
 
 interface CollectionSummary {
   name: string;
@@ -26,9 +26,8 @@ export function TablesPage({ vaultId }: { vaultId: string }) {
   const { data: collectionsData } = useQuery({
     queryKey: ["vaultCollections", vaultId],
     queryFn: async () => {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_BASE ?? ""}/api/vaults/${vaultId}/collections`,
-        { headers: authHeaders() },
+      const res = await apiFetch(
+        `/api/vaults/${vaultId}/collections`,
       );
       if (!res.ok) return { collections: [] };
       return res.json() as Promise<{ collections: CollectionSummary[] }>;
@@ -43,9 +42,8 @@ export function TablesPage({ vaultId }: { vaultId: string }) {
     queryKey: ["collectionRows", vaultId, selectedCollection],
     queryFn: async () => {
       if (!selectedCollection) return null;
-      const res = await fetch(
-        `${import.meta.env.VITE_API_BASE ?? ""}/api/vaults/${vaultId}/collections/${encodeURIComponent(selectedCollection)}`,
-        { headers: authHeaders() },
+      const res = await apiFetch(
+        `/api/vaults/${vaultId}/collections/${encodeURIComponent(selectedCollection)}`,
       );
       if (!res.ok) throw new Error(`collection ${res.status}`);
       return res.json() as Promise<CollectionData>;

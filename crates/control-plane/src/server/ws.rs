@@ -1,6 +1,7 @@
 //! WebSocket delta stream (`/ws`) — the reactive half of the contract.
 //!
-//! Clients connect to `ws://127.0.0.1:8787/ws?token=…&name=…`. On connect the
+//! Browser clients connect with their Hall cookie and `?organization=…`; legacy
+//! operator clients may temporarily use `?token=…`. On connect the
 //! server sends a `hello` frame with the current snapshot, then forwards every
 //! [`ServerFrame`] broadcast by the view layer. The envelope mirrors
 //! `docs/api-contract.md` §ServerFrame exactly (tagged `kind`, camelCase).
@@ -177,6 +178,7 @@ pub enum ClientFrame {
 #[derive(Debug, Deserialize)]
 pub struct WsQuery {
     token: Option<String>,
+    organization: Option<String>,
     #[serde(default)]
     name: Option<String>,
 }
@@ -188,18 +190,86 @@ pub struct WsQuery {
 pub async fn ws_handler(
     State(state): State<AppState>,
     Query(q): Query<WsQuery>,
+    headers: axum::http::HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let ok = q
+    let authorization = match authorize_ws(&state, &q, &headers) {
+        Ok(authorization) => authorization,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    let who = resolve_name(q.name);
+    ws.on_upgrade(move |socket| handle_socket(socket, state, who, authorization))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct WsAuthorization {
+    organization_id: Option<String>,
+    user_id: Option<String>,
+    session_token: Option<String>,
+}
+
+fn authorize_ws(
+    state: &AppState,
+    q: &WsQuery,
+    headers: &axum::http::HeaderMap,
+) -> Result<WsAuthorization, (StatusCode, &'static str)> {
+    let legacy_ok = q
         .token
         .as_deref()
         .map(|t| t == state.token.as_str())
         .unwrap_or(false);
-    if !ok {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    let session_token = super::identity::session_token(headers);
+    let cookie_principal = session_token
+        .as_deref()
+        .and_then(|token| {
+            state
+                .auth_store
+                .resolve_session(token, super::identity::unix_timestamp())
+                .ok()
+        })
+        .flatten();
+    let cookie_organization = match (cookie_principal.as_ref(), q.organization.as_ref()) {
+        (Some(principal), Some(organization_id)) => match state
+            .auth_store
+            .user_has_organization(&principal.user_id, organization_id)
+        {
+            Ok(true) => Some(organization_id.clone()),
+            _ => return Err((StatusCode::FORBIDDEN, "organization access denied")),
+        },
+        (Some(_), None) => return Err((StatusCode::BAD_REQUEST, "organization required")),
+        (None, _) => None,
+    };
+    if !legacy_ok && cookie_principal.is_none() {
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized"));
     }
-    let who = resolve_name(q.name);
-    ws.on_upgrade(move |socket| handle_socket(socket, state, who))
+    Ok(WsAuthorization {
+        organization_id: cookie_organization,
+        user_id: cookie_principal.map(|principal| principal.user_id),
+        session_token,
+    })
+}
+
+fn websocket_authorization_is_current(state: &AppState, authorization: &WsAuthorization) -> bool {
+    match (
+        authorization.session_token.as_deref(),
+        authorization.user_id.as_deref(),
+        authorization.organization_id.as_deref(),
+    ) {
+        (Some(token), Some(user_id), Some(organization_id)) => {
+            let principal = state
+                .auth_store
+                .resolve_session(token, super::identity::unix_timestamp())
+                .ok()
+                .flatten();
+            principal.is_some_and(|principal| principal.user_id == user_id)
+                && state
+                    .auth_store
+                    .user_has_organization(user_id, organization_id)
+                    .unwrap_or(false)
+        }
+        (None, None, None) => true,
+        _ => false,
+    }
 }
 
 /// Decide whether a frame should be delivered to a connection given its
@@ -232,14 +302,37 @@ fn should_deliver(frame: &ServerFrame, subscriptions: &Option<HashSet<String>>) 
     }
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
-    // Greet with the current snapshot.
-    let hello = ServerFrame::Hello {
-        snapshot: Snapshot {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    who: String,
+    authorization: WsAuthorization,
+) {
+    let organization_id = authorization.organization_id.clone();
+    // Greet with a snapshot scoped to the authenticated organization. Legacy
+    // operator connections retain the installation-wide aggregate.
+    let snapshot = if let Some(organization_id) = organization_id.as_deref() {
+        let views = state.views.read().await;
+        let sessions: Vec<_> = views
+            .sessions
+            .list(&crate::views::Filters::default())
+            .into_iter()
+            .filter(|session| session.org_id == organization_id)
+            .collect();
+        Snapshot {
+            sessions: sessions.len() as u64,
+            messages: sessions
+                .iter()
+                .map(|session| views.messages.count(&session.session_id))
+                .sum(),
+        }
+    } else {
+        Snapshot {
             sessions: state.snapshot_sessions,
             messages: state.snapshot_messages,
-        },
+        }
     };
+    let hello = ServerFrame::Hello { snapshot };
     if send_frame(&mut socket, &hello).await.is_err() {
         return;
     }
@@ -247,14 +340,26 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
     let mut rx = state.deltas.subscribe();
     // None = firehose (default); Some(set) = subscription-filtered.
     let mut subscriptions: Option<HashSet<String>> = None;
+    let mut membership_check = tokio::time::interval(std::time::Duration::from_secs(30));
 
     loop {
         tokio::select! {
+            _ = membership_check.tick(), if authorization.user_id.is_some() => {
+                if !websocket_authorization_is_current(&state, &authorization) {
+                    break;
+                }
+            }
             // Forward broadcast deltas to the client (filtered by subscription).
             delta = rx.recv() => {
                 match delta {
                     Ok(frame) => {
                         if should_deliver(&frame, &subscriptions)
+                            && frame_belongs_to_organization(
+                                &frame,
+                                organization_id.as_deref(),
+                                &state,
+                            )
+                            .await
                             && send_frame(&mut socket, &frame).await.is_err()
                         {
                             break;
@@ -270,7 +375,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        handle_client_frame(text.as_str(), &who, &state, &mut subscriptions);
+                        handle_client_frame(
+                            text.as_str(),
+                            &who,
+                            organization_id.as_deref(),
+                            &state,
+                            &mut subscriptions,
+                        ).await;
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}
@@ -281,10 +392,43 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
     }
 }
 
+async fn frame_belongs_to_organization(
+    frame: &ServerFrame,
+    organization_id: Option<&str>,
+    state: &AppState,
+) -> bool {
+    let Some(organization_id) = organization_id else {
+        return true;
+    };
+    match frame {
+        ServerFrame::SessionAdded { session } => session.org_id == organization_id,
+        ServerFrame::SessionUpdated { session_id, .. }
+        | ServerFrame::MessageAppended { session_id, .. }
+        | ServerFrame::MessageDelta { session_id, .. }
+        | ServerFrame::MessageToolCall { session_id, .. }
+        | ServerFrame::MessageReasoning { session_id, .. }
+        | ServerFrame::MessageDone { session_id, .. }
+        | ServerFrame::SessionLog { session_id, .. }
+        | ServerFrame::PermissionRequired { session_id, .. }
+        | ServerFrame::UserTyping { session_id, .. } => state
+            .views
+            .read()
+            .await
+            .sessions
+            .get(session_id)
+            .is_some_and(|session| session.org_id == organization_id),
+        // Removal currently carries no ownership metadata and occurs after the
+        // row is gone. Deny it rather than risk a cross-organization leak.
+        ServerFrame::SessionRemoved { .. } | ServerFrame::CardsChanged => false,
+        ServerFrame::Hello { .. } | ServerFrame::SyncStatus { .. } => true,
+    }
+}
+
 /// Parse and apply a single inbound client frame.
-fn handle_client_frame(
+async fn handle_client_frame(
     raw: &str,
     who: &str,
+    organization_id: Option<&str>,
     state: &AppState,
     subscriptions: &mut Option<HashSet<String>>,
 ) {
@@ -312,6 +456,18 @@ fn handle_client_frame(
             }
         }
         ClientFrame::Typing { session_id } => {
+            if let Some(organization_id) = organization_id {
+                let allowed = state
+                    .views
+                    .read()
+                    .await
+                    .sessions
+                    .get(&session_id)
+                    .is_some_and(|session| session.org_id == organization_id);
+                if !allowed {
+                    return;
+                }
+            }
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -585,8 +741,8 @@ mod tests {
         assert!(!should_deliver(&s2_typing, &subscribed));
     }
 
-    #[test]
-    fn unsubscribe_all_reverts_to_firehose() {
+    #[tokio::test]
+    async fn unsubscribe_all_reverts_to_firehose() {
         let mut subs: Option<HashSet<String>> =
             Some(HashSet::from(["s1".to_string(), "s2".to_string()]));
         let state = make_test_state();
@@ -594,9 +750,11 @@ mod tests {
         handle_client_frame(
             r#"{"kind":"unsubscribe","sessionIds":["s1"]}"#,
             "x",
+            None,
             &state,
             &mut subs,
-        );
+        )
+        .await;
         let set = subs.as_ref().unwrap();
         assert!(set.contains("s2") && !set.contains("s1"));
 
@@ -604,19 +762,21 @@ mod tests {
         handle_client_frame(
             r#"{"kind":"unsubscribe","sessionIds":["s2"]}"#,
             "x",
+            None,
             &state,
             &mut subs,
-        );
+        )
+        .await;
         assert!(subs.is_none());
 
         // Bare unsubscribe also reverts to firehose.
         subs = Some(HashSet::from(["s3".to_string()]));
-        handle_client_frame(r#"{"kind":"unsubscribe"}"#, "x", &state, &mut subs);
+        handle_client_frame(r#"{"kind":"unsubscribe"}"#, "x", None, &state, &mut subs).await;
         assert!(subs.is_none());
     }
 
-    #[test]
-    fn typing_broadcast_produces_frame_with_ttl() {
+    #[tokio::test]
+    async fn typing_broadcast_produces_frame_with_ttl() {
         let mut subs: Option<HashSet<String>> = None;
         let state = make_test_state();
 
@@ -626,9 +786,11 @@ mod tests {
         handle_client_frame(
             r#"{"kind":"typing","sessionId":"s9"}"#,
             "alice",
+            None,
             &state,
             &mut subs,
-        );
+        )
+        .await;
 
         // The frame was broadcast on the delta channel — receive it and
         // verify the shape + that expiresAt is ~5s in the future.
@@ -654,6 +816,133 @@ mod tests {
         assert!(subs.is_none());
     }
 
+    #[tokio::test]
+    async fn organization_filter_blocks_other_sessions_and_global_cards() {
+        let state = make_test_state();
+        add_session(&state, "s-a", "org-a").await;
+        add_session(&state, "s-b", "org-b").await;
+        let own = ServerFrame::MessageDelta {
+            session_id: "s-a".into(),
+            message_id: 1,
+            text_delta: "own".into(),
+        };
+        let other = ServerFrame::MessageDelta {
+            session_id: "s-b".into(),
+            message_id: 2,
+            text_delta: "other".into(),
+        };
+
+        assert!(frame_belongs_to_organization(&own, Some("org-a"), &state).await);
+        assert!(!frame_belongs_to_organization(&other, Some("org-a"), &state).await);
+        assert!(
+            !frame_belongs_to_organization(&ServerFrame::CardsChanged, Some("org-a"), &state,)
+                .await
+        );
+        assert!(frame_belongs_to_organization(&other, None, &state).await);
+    }
+
+    #[tokio::test]
+    async fn organization_client_cannot_spoof_typing_for_another_session() {
+        let state = make_test_state();
+        add_session(&state, "s-b", "org-b").await;
+        let mut rx = state.deltas.subscribe();
+        let mut subscriptions = None;
+
+        handle_client_frame(
+            r#"{"kind":"typing","sessionId":"s-b"}"#,
+            "alice",
+            Some("org-a"),
+            &state,
+            &mut subscriptions,
+        )
+        .await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn websocket_authorization_requires_cookie_membership_scope() {
+        let state = make_test_state();
+        state
+            .auth_store
+            .bootstrap_admin("admin", "password-123", "default", "Default")
+            .unwrap();
+        let principal = state
+            .auth_store
+            .authenticate("admin", "password-123")
+            .unwrap()
+            .unwrap();
+        let organization = state
+            .auth_store
+            .organizations_for_user(&principal.user_id)
+            .unwrap()
+            .remove(0);
+        let session = state
+            .auth_store
+            .create_session(
+                &principal.user_id,
+                super::super::identity::unix_timestamp(),
+                60,
+            )
+            .unwrap();
+        let headers = axum::http::HeaderMap::from_iter([(
+            axum::http::header::COOKIE,
+            format!("olympus_session={}", session.token)
+                .parse()
+                .unwrap(),
+        )]);
+
+        let missing_scope = WsQuery {
+            token: None,
+            organization: None,
+            name: None,
+        };
+        assert_eq!(
+            authorize_ws(&state, &missing_scope, &headers)
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let member_scope = WsQuery {
+            token: None,
+            organization: Some(organization.id),
+            name: None,
+        };
+        let authorized = authorize_ws(&state, &member_scope, &headers).unwrap();
+        assert_eq!(authorized.organization_id, member_scope.organization);
+        assert_eq!(
+            authorized.user_id.as_deref(),
+            Some(principal.user_id.as_str())
+        );
+        let nonmember_scope = WsQuery {
+            token: None,
+            organization: Some("another-org".into()),
+            name: None,
+        };
+        assert_eq!(
+            authorize_ws(&state, &nonmember_scope, &headers)
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert!(websocket_authorization_is_current(&state, &authorized));
+        state.auth_store.revoke_session(&session.token).unwrap();
+        assert!(!websocket_authorization_is_current(&state, &authorized));
+        let legacy = WsQuery {
+            token: Some("t".into()),
+            organization: None,
+            name: None,
+        };
+        assert_eq!(
+            authorize_ws(&state, &legacy, &axum::http::HeaderMap::new()).unwrap(),
+            WsAuthorization {
+                organization_id: None,
+                user_id: None,
+                session_token: None,
+            }
+        );
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────
 
     fn now_secs() -> f64 {
@@ -661,6 +950,27 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs_f64()
+    }
+
+    async fn add_session(state: &AppState, session_id: &str, organization_id: &str) {
+        let mut views = state.views.write().await;
+        views.apply(&crate::event::Event::SessionCreated {
+            session_id: session_id.into(),
+            hermes_id: format!("hermes-{session_id}"),
+            source: "cli".into(),
+            model: None,
+            title: None,
+            started_at: 1.0,
+            message_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            agent: None,
+            node: None,
+        });
+        views.apply(&crate::event::Event::SessionOrganizationAssigned {
+            session_id: session_id.into(),
+            organization_id: organization_id.into(),
+        });
     }
 
     /// A minimal AppState whose only useful field is `deltas` (a broadcast
@@ -680,6 +990,8 @@ mod tests {
                 crate::search::SearchIndex::open(&dir.path().join("idx")).unwrap(),
             )),
             token: Arc::new("t".into()),
+            auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
+            session_cookie_secure: true,
             import_state: ImportState(Arc::new(std::sync::atomic::AtomicU8::new(IMPORT_DONE))),
             hermes_profile: Arc::new("p".into()),
             deltas: tokio::sync::broadcast::channel(64).0,

@@ -5,7 +5,7 @@
 export interface Session {
   id: string;                 // Olympus session id
   hermesId: string;           // underlying Hermes session id
-  orgId: string;              // "personal" in MVP
+  orgId: string;              // durable Hall organization id; legacy imports may be "personal"
   ownerId: string;            // "rpw" in MVP
   contextId: string | null;   // null until contexts exist
   source: SessionSource;      // origin channel

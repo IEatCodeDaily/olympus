@@ -103,64 +103,54 @@ fn split_bearer(value: &str) -> Option<&str> {
     parts.next().map(str::trim)
 }
 
-/// Is this `Origin` header acceptable?
-///
-/// Policy (fail-closed): absent Origin (curl, native clients) is allowed; a
-/// present Origin must be a loopback http(s) origin. Any other Origin — a
-/// hostile page on `http://evil.example`, or even a non-loopback host — is
-/// rejected. "localhost == trusted" alone is NOT sufficient; we require the
-/// loopback scheme+host shape explicitly.
-pub fn origin_ok(origin: Option<&str>) -> bool {
-    let Some(origin) = origin else { return true };
-    let origin = origin.trim();
-    if origin.is_empty() || origin.eq_ignore_ascii_case("null") {
-        // "null" origin (sandboxed iframe, file://) is explicitly untrusted.
-        return origin.is_empty();
+/// Validate browser provenance against the exact Hall origin. Native clients
+/// may omit Origin only when they present a valid non-cookie credential.
+pub fn request_origin_ok(headers: &axum::http::HeaderMap, native_credential: bool) -> bool {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    if let Some(origin) = origin {
+        let host = headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok());
+        return browser_origin_allowed(origin, host);
     }
-    let rest = match origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"))
-    {
-        Some(r) => r,
-        None => return false,
-    };
-    // Strip an optional path (Origin normally has none), then extract the host,
-    // handling bracketed IPv6 like `[::1]:5173`.
-    let authority = rest.split('/').next().unwrap_or(rest);
-    let host = if let Some(after) = authority.strip_prefix('[') {
-        // `[::1]:port` or `[::1]` → take up to the closing bracket.
-        after.split(']').next().unwrap_or(after)
-    } else {
-        // `host:port` or `host` → strip the port.
-        authority.split(':').next().unwrap_or(authority)
-    };
-    if host == "127.0.0.1" || host == "localhost" || host == "::1" {
-        return true;
-    }
-    // Extra allowed origins for tunnel/reverse-proxy access (cloudflared etc.).
-    // OLYMPUS_ALLOWED_ORIGINS is a comma-separated list of exact hostnames,
-    // e.g. "olympus.entelechia.cloud". HTTPS-only hosts still pass because we
-    // compare the host component, not the scheme; the tunnel terminates TLS.
-    host_in_allowlist(host, allowed_extra_hosts())
+    native_credential
+        || headers
+            .get("sec-fetch-site")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("same-origin"))
 }
 
-/// Pure comparison for testability: is `host` in the allowlist (exact,
-/// case-insensitive)?
-fn host_in_allowlist(host: &str, allowed: &[String]) -> bool {
-    allowed.iter().any(|a| host.eq_ignore_ascii_case(a))
+pub fn browser_origin_allowed(origin: &str, host: Option<&str>) -> bool {
+    origin_allowed(origin, host, allowed_extra_origins())
 }
 
-/// Hostnames from OLYMPUS_ALLOWED_ORIGINS (comma-separated), cached on first
-/// read. Empty/absent → no extra origins.
-fn allowed_extra_hosts() -> &'static Vec<String> {
+fn origin_allowed(origin: &str, host: Option<&str>, allowed: &[String]) -> bool {
+    let Ok(uri) = origin.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.path() != "/" {
+        return false;
+    }
+    let Some(authority) = uri.authority().map(|authority| authority.as_str()) else {
+        return false;
+    };
+    host.is_some_and(|host| authority.eq_ignore_ascii_case(host))
+        || allowed.iter().any(|allowed| origin == allowed)
+}
+
+/// Exact origins from OLYMPUS_ALLOWED_ORIGINS, for the Vite development server
+/// or an explicitly configured reverse-proxy origin.
+fn allowed_extra_origins() -> &'static Vec<String> {
     use std::sync::OnceLock;
-    static HOSTS: OnceLock<Vec<String>> = OnceLock::new();
-    HOSTS.get_or_init(|| {
+    static ORIGINS: OnceLock<Vec<String>> = OnceLock::new();
+    ORIGINS.get_or_init(|| {
         std::env::var("OLYMPUS_ALLOWED_ORIGINS")
             .unwrap_or_default()
             .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
             .collect()
     })
 }
@@ -201,41 +191,40 @@ mod tests {
     }
 
     #[test]
-    fn origin_ok_allows_loopback_and_absent_rejects_foreign() {
-        assert!(origin_ok(None), "absent Origin (curl) allowed");
-        assert!(origin_ok(Some("http://127.0.0.1:5173")));
-        assert!(origin_ok(Some("http://localhost:8787")));
-        assert!(origin_ok(Some("https://localhost")));
-        assert!(origin_ok(Some("http://[::1]:5173")));
-
-        assert!(
-            !origin_ok(Some("http://evil.example")),
-            "foreign origin rejected"
-        );
-        assert!(!origin_ok(Some("https://attacker.test:443")));
-        assert!(!origin_ok(Some("null")), "null origin rejected");
-        assert!(
-            !origin_ok(Some("ftp://127.0.0.1")),
-            "non-http scheme rejected"
-        );
+    fn origin_must_match_exact_host_or_explicit_origin() {
+        let allowed = vec!["https://olympus.entelechia.cloud".to_string()];
+        assert!(origin_allowed(
+            "http://127.0.0.1:5173",
+            Some("127.0.0.1:5173"),
+            &[]
+        ));
+        assert!(!origin_allowed(
+            "http://127.0.0.1:9999",
+            Some("127.0.0.1:5173"),
+            &[]
+        ));
+        assert!(origin_allowed(
+            "https://olympus.entelechia.cloud",
+            Some("127.0.0.1:8787"),
+            &allowed
+        ));
+        assert!(!origin_allowed(
+            "http://olympus.entelechia.cloud",
+            Some("127.0.0.1:8787"),
+            &allowed
+        ));
+        assert!(!origin_allowed("null", None, &allowed));
+        assert!(!origin_allowed("ftp://127.0.0.1", None, &allowed));
     }
 
     #[test]
-    fn host_allowlist_matches_exact_and_case_insensitive() {
-        let allowed = vec!["olympus.entelechia.cloud".to_string()];
-        assert!(host_in_allowlist("olympus.entelechia.cloud", &allowed));
-        assert!(host_in_allowlist("OLYMPUS.Entelechia.Cloud", &allowed));
-        // No suffix/prefix tricks
-        assert!(!host_in_allowlist(
-            "evil-olympus.entelechia.cloud",
-            &allowed
-        ));
-        assert!(!host_in_allowlist(
-            "olympus.entelechia.cloud.evil.com",
-            &allowed
-        ));
-        assert!(!host_in_allowlist("entelechia.cloud", &allowed));
-        // Empty allowlist rejects everything
-        assert!(!host_in_allowlist("olympus.entelechia.cloud", &[]));
+    fn absent_origin_requires_native_credential_or_same_origin_fetch_metadata() {
+        let mut headers = axum::http::HeaderMap::new();
+        assert!(!request_origin_ok(&headers, false));
+        assert!(request_origin_ok(&headers, true));
+        headers.insert("sec-fetch-site", "same-origin".parse().unwrap());
+        assert!(request_origin_ok(&headers, false));
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        assert!(!request_origin_ok(&headers, false));
     }
 }

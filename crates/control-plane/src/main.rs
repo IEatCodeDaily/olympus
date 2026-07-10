@@ -78,6 +78,26 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&home).with_context(|| format!("creating {}", home.display()))?;
 
     let token = auth::load_or_create_token()?;
+    let auth_store = Arc::new(
+        olympus_control_plane::auth_store::AuthStore::open(&home.join("auth.sqlite"))
+            .context("opening Hall authentication store")?,
+    );
+    let bootstrap_username = std::env::var("OLYMPUS_ADMIN_USERNAME").ok();
+    let bootstrap_password = std::env::var("OLYMPUS_ADMIN_PASSWORD").ok();
+    // Agent runtimes are child processes. Remove one-shot bootstrap secrets
+    // before any runtime can inherit the Hall environment.
+    std::env::remove_var("OLYMPUS_ADMIN_USERNAME");
+    std::env::remove_var("OLYMPUS_ADMIN_PASSWORD");
+    match (bootstrap_username, bootstrap_password) {
+        (Some(username), Some(password)) => auth_store
+            .bootstrap_admin(&username, &password, &default_org(), "Default")
+            .context("bootstrapping Hall administrator")?,
+        (None, None) => {}
+        _ => {
+            anyhow::bail!("OLYMPUS_ADMIN_USERNAME and OLYMPUS_ADMIN_PASSWORD must be set together")
+        }
+    }
+    let session_cookie_secure = std::env::var("OLYMPUS_INSECURE_COOKIES").as_deref() != Ok("1");
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
     // ---- open the durable event log; keep Olympus-native records, rebuild the
@@ -161,11 +181,10 @@ async fn main() -> Result<()> {
                 },
             ),
         )
-        // Session spaces live at ~/.olympus/<org>/sessions/<session_id>/ (ADR 0005
-        // §4). Seed the org root + sessions dir; spaces are created eagerly per
-        // session in create_draft. Node is NOT in the session id (ADR 0005 §6) —
-        // it's inferred from the chosen agent and stored as a session field.
-        .with_spaces_root(org_workspace_root(&default_org())?.join("sessions")),
+        // Session spaces live at ~/.olympus/<organization_id>/sessions/<session_id>/
+        // (ADR 0005 §4). BridgeManager derives the organization directory from
+        // validated session ownership for every creation/runtime path.
+        .with_spaces_root(olympus_home()?),
     );
     let sync_connected = Arc::new(AtomicBool::new(false));
 
@@ -179,6 +198,8 @@ async fn main() -> Result<()> {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
+        auth_store,
+        session_cookie_secure,
         import_state: ImportState::running(), // Hermes import runs after bind (below)
         hermes_profile: Arc::new(profile),
         deltas,
