@@ -169,11 +169,11 @@ fn parse_fallback_models(yaml: &str) -> Vec<(String, String)> {
 /// start with a digit (version numbers), and doesn't contain spaces with
 /// "cli" (version strings like "codex-cli 0.133.0").
 fn is_valid_model_id(s: &str) -> bool {
-    !(s.is_empty()
-        || s.starts_with(char::is_numeric)
-        || s.contains(" cli ")
-        || s.contains("-cli ")
-        || !s.chars().any(|c| c.is_alphanumeric()))
+    !s.is_empty()
+        && !s.starts_with(char::is_numeric)
+        && !s.contains(" cli ")
+        && !s.contains("-cli ")
+        && s.chars().any(|c| c.is_alphanumeric())
 }
 
 /// One agent built from a config file path. `id`/`is_default` are supplied by

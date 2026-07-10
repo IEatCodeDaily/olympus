@@ -694,6 +694,7 @@ mod tests {
             irc: IrcBus::new(),
             nodes: NodeRegistry::new(),
             envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
             proxy: ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("v"),

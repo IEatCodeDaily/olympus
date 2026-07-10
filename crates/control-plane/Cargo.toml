@@ -36,6 +36,8 @@ hyper.workspace = true
 hyper-util = { workspace = true }
 http-body-util.workspace = true
 blake3 = "1"
+iroh = "1"
+toml = "1.1.2"
 
 [dev-dependencies]
 tempfile = "3"

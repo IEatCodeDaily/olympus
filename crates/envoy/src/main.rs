@@ -73,13 +73,44 @@ async fn main() -> Result<()> {
         production_factory()
     };
 
+    // Reconnect loops below: Hall restarts must NOT kill this envoy
+    // (ADR 0008 §2). The runtime table (and its ACP children) survives across
+    // reconnects; each new connection re-sends hello.
+    let table = Arc::new(table);
+
+    // Transport selection: `--hall iroh:<node-id>` connects via iroh (public
+    // n0 relays, ADR 0008 §1 / S7); otherwise UDS (default local path).
+    let hall = arg_value("--hall").or_else(|| std::env::var("OLYMPUS_HALL").ok());
+    if let Some(target) = hall.as_deref().and_then(|h| h.strip_prefix("iroh:")) {
+        let state_dir = envoy_state_dir(&node_id)?;
+        let secret = olympus_envoy::transport::load_or_create_secret(&state_dir)?;
+        let my_id = secret.public();
+        tracing::info!(envoy_node_id = %my_id, hall = %target, "connecting to Hall via iroh");
+        println!("envoy iroh node id: {my_id}  (add to hall.toml allowed_envoys)");
+        let endpoint = olympus_envoy::transport::bind_endpoint(secret).await?;
+        loop {
+            match olympus_envoy::transport::connect_to_hall(&endpoint, target).await {
+                Ok((send, recv)) => {
+                    tracing::info!("connected to Hall via iroh");
+                    if let Err(e) =
+                        run_connection(recv, send, table.clone(), &node_id, &hostname_val, agents.clone())
+                            .await
+                    {
+                        tracing::warn!(error = format!("{e:#}"), "iroh connection ended with error");
+                    }
+                    tracing::warn!("Hall iroh connection lost; reconnecting…");
+                }
+                Err(e) => {
+                    tracing::warn!(error = format!("{e:#}"), "iroh connect failed, retrying…");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+
     let stream = connect_with_retry(&socket).await?;
     tracing::info!("connected to Hall UDS");
 
-    // Reconnect loop: Hall restarts must NOT kill this envoy (ADR 0008 §2).
-    // The runtime table (and its ACP children) survives across reconnects;
-    // each new connection re-sends hello with the current live runtimes.
-    let table = Arc::new(table);
     let mut stream = Some(stream);
     loop {
         let s = match stream.take() {
@@ -90,8 +121,10 @@ async fn main() -> Result<()> {
                 s
             }
         };
+        let (reader, writer) = s.into_split();
         if let Err(e) =
-            run_connection(s, table.clone(), &node_id, &hostname_val, agents.clone()).await
+            run_connection(reader, writer, table.clone(), &node_id, &hostname_val, agents.clone())
+                .await
         {
             tracing::warn!(error = format!("{e:#}"), "connection ended with error");
         }
@@ -100,10 +133,22 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Per-envoy state dir (iroh key lives here): ~/.olympus/envoy/<node-id>/.
+fn envoy_state_dir(node_id: &str) -> Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home)
+        .join(".olympus")
+        .join("envoy")
+        .join(node_id))
+}
+
+/// Type-erased writer — UDS write half locally, iroh QUIC SendStream remotely.
+type BoxedWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
+
 /// Shared connection state: the writer (mutex-guarded), the runtime table, and
 /// per-session counters.
 struct Conn {
-    writer: Mutex<BufWriter<tokio::net::unix::OwnedWriteHalf>>,
+    writer: Mutex<BufWriter<BoxedWriter>>,
     table: Arc<RuntimeTable>,
     seq: Mutex<HashMap<String, u64>>,
     turn: Mutex<HashMap<String, u64>>,
@@ -164,16 +209,20 @@ impl Conn {
 }
 
 /// Run the full connection lifecycle: hello → heartbeat loop + read loop.
-async fn run_connection(
-    stream: UnixStream,
+async fn run_connection<R, W>(
+    reader: R,
+    writer: W,
     table: Arc<RuntimeTable>,
     node_id: &str,
     hostname: &str,
     agents: Vec<discovery::AgentInfo>,
-) -> Result<()> {
-    let (reader, writer) = stream.into_split();
+) -> Result<()>
+where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
     let conn = Arc::new(Conn {
-        writer: Mutex::new(BufWriter::new(writer)),
+        writer: Mutex::new(BufWriter::new(Box::new(writer) as BoxedWriter)),
         table,
         seq: Mutex::new(HashMap::new()),
         turn: Mutex::new(HashMap::new()),
