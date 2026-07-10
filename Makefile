@@ -81,7 +81,7 @@ deploy-envoy:
 	@echo "Started olympus-envoy@$$N, polling /api/nodes until online…"
 	@TOKEN=$$(cat ~/.olympus/token); \
 	for i in $$(seq 1 30); do \
-		online=$$(curl -sf -H "Authorization: Bearer $$TOKEN" \
+		online=$$(curl -sf -H "Authorization: Bearer $${TOKEN}" \
 			http://127.0.0.1:8799/api/nodes \
 			| grep -c "envoy-$$N" || true); \
 		if [ "$$online" -gt 0 ]; then \
