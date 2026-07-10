@@ -62,64 +62,64 @@ test.describe("Vaults @desktop-only", () => {
     );
   });
 
-  test("vault list renders", async ({ page }, testInfo) => {
+  test("sidebar follows the vault workflow and folder index opens", async ({ page }, testInfo) => {
     await page.goto("/vaults");
-    // Wait for either vault list or empty state
-    await page.waitForTimeout(2_000);
-
+    await expect(page.getByRole("button", { name: /Vault Engineering/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Note" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Graph View" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Table View" })).toBeVisible();
+    await expect(page.getByRole("tree", { name: "Vault files" })).toBeVisible();
     await snap(page, testInfo, "vaults-loaded");
 
-    // The route opens the first vault and note when mock data is available.
-    await expect(page.getByRole("button", { name: "New vault" })).toBeVisible();
-    await expect(page.getByTestId("vnotename")).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("treeitem").filter({ hasText: "redb" }).first().getByRole("button").first().click();
+    await expect(page.getByTestId("vnotename")).toContainText("index.md");
+    await expect(page.getByRole("tab", { name: "redb" })).toBeVisible();
+    await expect(page).toHaveURL(/note=redb%2Findex\.md/);
   });
 
-  test("create vault flow", async ({ page }, testInfo) => {
+  test("creates a configured GitHub vault", async ({ page }, testInfo) => {
     await page.goto("/vaults");
-    await page.waitForTimeout(2_000);
-
-    // Look for a "create" or "new" button
-    const createBtn = page.getByRole("button", { name: /new vault|create/i }).first();
-    if ((await createBtn.count()) === 0) return; // no create affordance in mock
-
-    await createBtn.click();
-    await page.waitForTimeout(500);
-
+    await page.getByRole("button", { name: /Vault Engineering/ }).click();
+    await page.getByRole("menuitem", { name: "Create vault…" }).click();
     await snap(page, testInfo, "create-vault-dialog");
-
-    // If there's an input, type a name
-    const nameInput = page.locator("input[type=text], input[placeholder*='name']").first();
-    if ((await nameInput.count()) > 0) {
-      await nameInput.fill("Test Vault");
-      const confirmBtn = page.getByRole("button", { name: /create|confirm|ok/i }).first();
-      if ((await confirmBtn.count()) > 0) {
-        await confirmBtn.click();
-        await page.waitForTimeout(500);
-      }
-    }
+    const dialog = page.getByRole("dialog", { name: "Create vault" });
+    await dialog.getByLabel("Vault name").fill("Test Vault");
+    await dialog.getByRole("textbox", { name: "Repository", exact: true }).fill("IEatCodeDaily/test-vault");
+    await dialog.getByRole("button", { name: "Create vault" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("button", { name: /Vault Test Vault/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Note" })).toBeVisible();
   });
 
-  test("open vault detail and navigate tabs", async ({ page }, testInfo) => {
-    await page.goto("/vaults");
-    await page.waitForTimeout(2_000);
+  test("creates a note, opens views as tabs, and changes layout", async ({ page }, testInfo) => {
+    await page.goto("/vaults/engineering");
+    await page.getByRole("button", { name: "New Note" }).click();
+    const dialog = page.getByRole("dialog", { name: "New note" });
+    await dialog.getByLabel("Title").fill("Workspace note");
+    await dialog.getByLabel("File path").fill("workspace-note.md");
+    await dialog.getByRole("button", { name: "Create note" }).click();
+    await expect(page.getByRole("tab", { name: /Workspace note/ })).toBeVisible();
+    await expect(page.getByTestId("vnotename")).toContainText("workspace-note.md");
+    await expect(page.getByTestId("mdbody")).toContainText("Workspace note");
 
-    // Click first vault if available
-    const vaultItem = page.locator("[data-vault-id], .ol-card").first();
-    if ((await vaultItem.count()) === 0) return;
+    await page.getByRole("button", { name: "New Note" }).click();
+    const duplicateDialog = page.getByRole("dialog", { name: "New note" });
+    await duplicateDialog.getByLabel("Title").fill("Replacement");
+    await duplicateDialog.getByLabel("File path").fill("workspace-note.md");
+    await duplicateDialog.getByRole("button", { name: "Create note" }).click();
+    await expect(duplicateDialog.getByRole("alert")).toContainText("note already exists");
+    await duplicateDialog.getByRole("button", { name: "Cancel" }).click();
 
-    await vaultItem.click();
-    await page.waitForTimeout(1_000);
+    await page.getByRole("button", { name: "Graph View" }).click();
+    await page.getByRole("button", { name: "Table View" }).click();
+    await expect(page.getByRole("tab", { name: "Graph View" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Table View" })).toBeVisible();
+    await page.getByRole("button", { name: "Two columns" }).click();
+    await expect(page.locator(".vault-pane")).toHaveCount(2);
+    await snap(page, testInfo, "vault-tabs-and-columns");
 
-    await snap(page, testInfo, "vault-detail");
-
-    // If there are tabs, try clicking them
-    const tabs = page.locator(".rs-tab, [role=tab]");
-    const tabCount = await tabs.count();
-    for (let i = 0; i < Math.min(tabCount, 3); i++) {
-      await tabs.nth(i).click();
-      await page.waitForTimeout(300);
-    }
-
-    await snap(page, testInfo, "vault-tab-switched");
+    const file = page.getByRole("treeitem").filter({ hasText: "workspace-note.md" });
+    await file.click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "Details" })).toBeVisible();
   });
 });
