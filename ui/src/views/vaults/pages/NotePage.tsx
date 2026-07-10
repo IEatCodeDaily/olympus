@@ -2,11 +2,11 @@
 //
 // Renders a single note with a view/edit toggle:
 //   - View: richly rendered markdown (react-markdown + remark-gfm).
-//   - Edit: textarea source editor.
+//   - Edit: Milkdown rich editor with an exact CodeMirror source fallback.
 // On save, serializes to .md via PUT /api/vaults/:id/note (V-BE handles the
 // jj snapshot commit). Shows LINKED NOTES footer with clickable wikilinks.
 
-import { useState, useEffect, useRef } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,6 +15,13 @@ import { useVaultNote } from "../../../hooks/queries";
 import { putVaultNote, deleteVaultNote } from "../../../api";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "../../../hooks/queries";
+import { collectVaultSuggestions, splitVaultMarkdown } from "../editor/vaultMarkdown";
+
+const VaultMarkdownEditor = lazy(() =>
+  import("../editor/VaultMarkdownEditor").then((module) => ({
+    default: module.VaultMarkdownEditor,
+  })),
+);
 
 interface NotePageProps {
   vaultId: string;
@@ -32,7 +39,6 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const navigate = useNavigate();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Sync local draft when the note changes or loads
   useEffect(() => {
@@ -97,7 +103,6 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
   const handleStartEdit = () => {
     setEditing(true);
     setDraft(note.markdown);
-    setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
   const handleCancel = () => {
@@ -133,6 +138,7 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
   };
 
   const fileName = notePath.split("/").pop() ?? notePath;
+  const suggestions = collectVaultSuggestions(draft, note.linkedNotes);
 
   return (
     <div className="vault-content">
@@ -146,6 +152,7 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
             {editing ? (
               <>
                 <button
+                  type="button"
                   className="btn pri"
                   onClick={handleSave}
                   disabled={saving || !dirty}
@@ -154,6 +161,7 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
                   {saving ? "Saving…" : "Save"}
                 </button>
                 <button
+                  type="button"
                   className="btn"
                   onClick={handleCancel}
                   disabled={saving}
@@ -164,10 +172,10 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
               </>
             ) : (
               <>
-                <button className="btn" onClick={handleStartEdit} data-testid="vedit">
+                <button type="button" className="btn" onClick={handleStartEdit} data-testid="vedit">
                   Edit
                 </button>
-                <button className="btn" onClick={handleDelete} data-testid="vdelete">
+                <button type="button" className="btn" onClick={handleDelete} data-testid="vdelete">
                   Delete
                 </button>
               </>
@@ -193,17 +201,17 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
 
         {/* Editor or rendered markdown */}
         {editing ? (
-          <textarea
-            ref={textareaRef}
-            className="vault-editor mono"
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setDirty(e.target.value !== note.markdown);
-            }}
-            data-testid="vsrc"
-            spellCheck={false}
-          />
+          <Suspense fallback={<div className="vault-editor-loading">Loading editor…</div>}>
+            <VaultMarkdownEditor
+              key={`${vaultId}:${notePath}`}
+              markdown={draft}
+              suggestions={suggestions}
+              onChange={(markdown) => {
+                setDraft(markdown);
+                setDirty(markdown !== note.markdown);
+              }}
+            />
+          </Suspense>
         ) : (
           <div className="md" data-testid="mdbody" style={{ maxWidth: 680 }}>
             <ReactMarkdown
@@ -218,6 +226,7 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
                     return (
                       <a
                         className="vault-link-pill"
+                        href={href}
                         onClick={(e) => {
                           e.preventDefault();
                           onNavigateNote(path);
@@ -248,6 +257,7 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
                   {i > 0 && <span style={{ color: "var(--faint)" }}> · </span>}
                   <a
                     className="vault-link-pill"
+                    href={`?note=${encodeURIComponent(resolveLink(notePath, link))}`}
                     style={{ color: "var(--silver)", cursor: "pointer" }}
                     onClick={(e) => {
                       e.preventDefault();
@@ -268,8 +278,7 @@ export function NotePage({ vaultId, notePath, onNavigateNote }: NotePageProps) {
 
 /** Strip YAML frontmatter (---\n...\n---) from markdown for rendering. */
 function stripFrontmatter(md: string): string {
-  const m = md.match(/^---\n[\s\S]*?\n---\n(.*)$/);
-  return m ? m[1] : md;
+  return splitVaultMarkdown(md).body;
 }
 
 /**
