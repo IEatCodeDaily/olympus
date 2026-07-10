@@ -613,6 +613,25 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   font-family: var(--font-mono);
 }
 
+.vault-markdown-editor { position: relative; width: 100%; max-width: 680px; }
+.vault-editor-loading { width: 100%; max-width: 680px; min-height: 420px; display: grid; place-items: center; border: var(--border-w) solid var(--border); border-radius: var(--radius-md); color: var(--faint); }
+.vault-editor-toolbar { display: flex; justify-content: flex-end; gap: var(--space-2); margin-bottom: var(--space-3); }
+.vault-editor-toolbar .btn.on { background: var(--silver-wash); border-color: var(--silver-line); color: var(--silver); }
+.vault-source-warning { margin-bottom: var(--space-3); padding: var(--space-3) var(--space-4); border: var(--border-w) solid var(--warn-line); border-radius: var(--radius); background: var(--warn-wash); color: var(--dim); font-size: var(--fs-12); }
+.vault-source-editor, .vault-rich-editor { overflow: hidden; min-height: 420px; border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-elev); }
+.vault-source-editor .cm-editor { min-height: 420px; }
+.vault-source-editor .cm-scroller { font-family: var(--font-mono); }
+.vault-rich-editor { position: relative; }
+.vault-rich-editor .milkdown { min-height: 420px; }
+.vault-rich-editor .ProseMirror { min-height: 360px; padding: var(--space-8); color: var(--text); }
+.vault-frontmatter { margin-bottom: var(--space-3); padding: var(--space-3) var(--space-4); border: var(--border-w) solid var(--border); border-radius: var(--radius); color: var(--dim); font-size: var(--fs-11); }
+.vault-frontmatter pre { overflow-x: auto; margin: var(--space-3) 0 0; color: var(--faint); font-family: var(--font-mono); white-space: pre-wrap; }
+.vault-suggestions { position: absolute; z-index: 30; left: var(--space-8); bottom: var(--space-6); display: flex; flex-direction: column; min-width: 240px; max-height: 220px; overflow-y: auto; padding: var(--space-2); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-md); background: var(--chrome); box-shadow: var(--shadow-pop); }
+.vault-suggestion { display: flex; justify-content: space-between; gap: var(--space-5); padding: var(--space-3) var(--space-4); border: 0; border-radius: var(--radius); background: none; color: var(--text); cursor: pointer; text-align: left; }
+.vault-suggestion:hover, .vault-suggestion.selected { background: var(--hover); }
+.vault-suggestion .mono { color: var(--faint); font-size: var(--fs-10); }
+.vault-suggestion-empty { padding: var(--space-3); color: var(--faint); font-size: var(--fs-11); }
+
 .vault-linked {
   padding-top: var(--space-6);
   border-top: var(--border-w) solid var(--border);
