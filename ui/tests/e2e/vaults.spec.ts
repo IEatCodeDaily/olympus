@@ -52,10 +52,11 @@ test.describe("Vaults @desktop-only", () => {
     await page.keyboard.press("Escape");
     await page.keyboard.press("Control+a");
     await page.keyboard.type("See [[event");
-    await expect(page.getByRole("listbox", { name: "note suggestions" })).toBeVisible();
-    await expect(page.getByRole("option").first()).toContainText("event-log-design");
-    await page.getByRole("option").first().click();
-    await expect(page.getByRole("listbox", { name: "note suggestions" })).toBeHidden();
+    const noteSuggestions = page.getByRole("listbox", { name: "note suggestions" });
+    await expect(noteSuggestions).toBeVisible();
+    await expect(noteSuggestions.getByRole("option").first()).toContainText("event-log-design");
+    await noteSuggestions.getByRole("option").first().click();
+    await expect(noteSuggestions).toBeHidden();
     await page.getByRole("button", { name: "Source" }).click();
     await expect(page.getByTestId("vsrc").locator(".cm-content")).toContainText(
       "[[event-log-design.md|event-log-design]]",

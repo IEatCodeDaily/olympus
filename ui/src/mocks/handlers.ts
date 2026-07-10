@@ -33,8 +33,20 @@ import type {
 // ── REST Handlers ─────────────────────────────────────
 
 export const handlers = [
+  // Hall-local identity. E2E runs as an already authenticated organization
+  // member so feature tests exercise the application rather than the login
+  // form. Login/logout remain available for dedicated auth flows.
+  http.get("http://127.0.0.1:8787/api/auth/session", () => HttpResponse.json({
+    user: { userId: "user-rpw", username: "rpw", kind: "user" },
+  })),
+  http.get("http://127.0.0.1:8787/api/organizations", () => HttpResponse.json({
+    organizations: [{ id: "personal", slug: "personal", displayName: "Personal", role: "owner" }],
+  })),
+  http.post("http://127.0.0.1:8787/api/auth/login", () => HttpResponse.json({ ok: true })),
+  http.post("http://127.0.0.1:8787/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
+
   // GET /api/sessions
-  http.get("http://127.0.0.1:8787/api/sessions", async ({ request }: { request: Request }) => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/sessions", async ({ request }: { request: Request }) => {
     const url = new URL(request.url);
     const sourceParam = url.searchParams.get("source");
     const model = url.searchParams.get("model");
@@ -80,7 +92,7 @@ export const handlers = [
   }),
 
   // GET /api/sessions/:id
-  http.get<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id", ({ params }: { params: { id: string } }) => {
+  http.get<{ id: string }>("http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id", ({ params }: { params: { id: string } }) => {
     const sess = SESSIONS.find((s) => s.id === params.id);
     if (!sess) return new HttpResponse(null, { status: 404 });
     return HttpResponse.json(sess);
@@ -89,7 +101,7 @@ export const handlers = [
   // POST /api/sessions — optimistic create (no runtime spawned). Mirrors the
   // backend: instant draft with source=olympus, managed=true, empty hermesId,
   // optional agent/node binding from the body.
-  http.post("http://127.0.0.1:8787/api/sessions", async ({ request }) => {
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/sessions", async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as {
       agent?: string;
       node?: string;
@@ -127,7 +139,7 @@ export const handlers = [
 
   // PATCH /api/sessions/:id — bind/rebind agent, node, model, title.
   http.patch<{ id: string }>(
-    "http://127.0.0.1:8787/api/sessions/:id",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id",
     async ({ params, request }) => {
       const sess = SESSIONS.find((s) => s.id === params.id);
       if (!sess) return new HttpResponse(null, { status: 404 });
@@ -153,7 +165,7 @@ export const handlers = [
   // sessions are read-only (409); managed sessions lazily "spawn" and echo a
   // reply over the next tick (mock).
   http.post<{ id: string }>(
-    "http://127.0.0.1:8787/api/sessions/:id/messages",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id/messages",
     async ({ params, request }) => {
       const sess = SESSIONS.find((s) => s.id === params.id);
       if (!sess) return new HttpResponse(null, { status: 404 });
@@ -228,7 +240,7 @@ export const handlers = [
   ),
 
   // POST /api/sessions/:id/fork
-  http.post<{ id: string }>("http://127.0.0.1:8787/api/sessions/:id/fork", ({ params }) => {
+  http.post<{ id: string }>("http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id/fork", ({ params }) => {
     const source = SESSIONS.find((session) => session.id === params.id);
     if (!source) return new HttpResponse(null, { status: 404 });
     const id = `${source.id}-fork`;
@@ -257,7 +269,7 @@ export const handlers = [
 
   // GET /api/sessions/:id/messages
   http.get<{ id: string }>(
-    "http://127.0.0.1:8787/api/sessions/:id/messages",
+    "http://127.0.0.1:8787/api/organizations/:organizationId/sessions/:id/messages",
     ({ params }: { params: { id: string } }) => {
       const msgs = MESSAGES_BY_SESSION[params.id] ?? [];
       return HttpResponse.json<MessagesResponse>({
@@ -268,7 +280,7 @@ export const handlers = [
   ),
 
   // GET /api/search
-  http.get("http://127.0.0.1:8787/api/search", async ({ request }: { request: Request }) => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/search", async ({ request }: { request: Request }) => {
     const q = new URL(request.url).searchParams.get("q") ?? "";
     await delay(200 + Math.random() * 300); // simulate tantivy latency
     return HttpResponse.json<SearchResponse>({
@@ -287,14 +299,14 @@ export const handlers = [
   }),
 
   // GET /api/usage
-  http.get("http://127.0.0.1:8787/api/usage", async ({ request }) => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/usage", async ({ request }) => {
     const range = (new URL(request.url).searchParams.get("range") ?? "24h") as UsageRange;
     await delay(120 + Math.random() * 160);
     return HttpResponse.json<UsageResponse>(USAGE_BY_RANGE[range] ?? USAGE_BY_RANGE["24h"]);
   }),
 
   // GET /api/nodes
-  http.get("http://127.0.0.1:8787/api/nodes", async () => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/nodes", async () => {
     await delay(250 + Math.random() * 250);
     return HttpResponse.json<NodesResponse>({ nodes: NODES });
   }),
@@ -311,7 +323,7 @@ export const handlers = [
   }),
 
   // GET /api/workflows
-  http.get("http://127.0.0.1:8787/api/workflows", async () => {
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/workflows", async () => {
     await delay(220 + Math.random() * 220);
     return HttpResponse.json<WorkflowsResponse>({
       workflows: WORKFLOWS,
