@@ -322,7 +322,6 @@ async fn main() -> Result<()> {
         "olympus control plane listening"
     );
     println!("olympus control plane listening on http://{bind}");
-    println!("token: {token}");
 
     // ---- Session metadata index (lazy history, ADR 0009) ----
     // Hall imports ONLY session metadata (id, source, title, model, timestamps)
