@@ -239,27 +239,20 @@ async fn main() -> Result<()> {
         })
         .expect("spawn live sync thread");
 
-    let app = server::build_router(state.clone());
-
-    // Spawn the UDS listener for node (envoy) registration.
-    let uds_path = home.join("control.sock");
-    {
-        let reg = node_registry.clone();
-        let conns = state.envoy_conns.clone();
-        tokio::spawn(async move {
-            olympus_control_plane::node::run_uds_listener(uds_path, reg, conns).await;
-        });
-    }
-
     // Spawn the iroh listener for REMOTE envoys (ADR 0008 §1, S7). Public n0
     // relays; peers are gated by the node-id allowlist in ~/.olympus/hall.toml
     // (`allowed_envoys = ["<node-id>", ...]`) — fail closed: no file or empty
     // list means no remote envoys can connect (the endpoint still binds and
     // prints its node id so the operator can set up the allowlist).
+    //
+    // Must run BEFORE build_router: the router clones AppState, so
+    // hall_iroh_id has to be set first or /api/nodes/hall-identity would
+    // forever report null.
     {
         match olympus_control_plane::node::create_iroh_endpoint(&home).await {
             Ok((endpoint, node_id)) => {
                 println!("hall iroh node id: {node_id}");
+                tracing::info!(node_id = %node_id, "hall iroh endpoint bound");
                 state.hall_iroh_id = Some(Arc::new(node_id.to_string()));
                 let reg = node_registry.clone();
                 let conns = state.envoy_conns.clone();
@@ -281,6 +274,18 @@ async fn main() -> Result<()> {
                 );
             }
         }
+    }
+
+    let app = server::build_router(state.clone());
+
+    // Spawn the UDS listener for node (envoy) registration.
+    let uds_path = home.join("control.sock");
+    {
+        let reg = node_registry.clone();
+        let conns = state.envoy_conns.clone();
+        tokio::spawn(async move {
+            olympus_control_plane::node::run_uds_listener(uds_path, reg, conns).await;
+        });
     }
 
     let bind = std::env::var("OLYMPUS_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
