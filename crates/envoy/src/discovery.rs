@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const CLAUDE_CODE_AGENT_ID: &str = "claude-code";
 const CODEX_AGENT_ID: &str = "codex";
@@ -29,7 +29,7 @@ const CLAUDE_CODE_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "c
 const CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5.5-codex", "gpt-5.4", "gpt-5.4-mini"];
 
 /// One drivable agent (Hermes profile or local CLI harness) as the UI consumes it.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
     /// Agent id passed back in `POST /api/sessions { agent }`.
@@ -113,7 +113,7 @@ fn parse_fallback_models(yaml: &str) -> Vec<(String, String)> {
     let mut in_fallback = false;
     let (mut cur_model, mut cur_provider): (Option<String>, Option<String>) = (None, None);
 
-    let mut flush =
+    let flush =
         |m: &mut Option<String>, p: &mut Option<String>, out: &mut Vec<(String, String)>| {
             if let (Some(model), Some(provider)) = (m.take(), p.take()) {
                 if is_valid_model_id(&model) {
@@ -171,7 +171,8 @@ fn parse_fallback_models(yaml: &str) -> Vec<(String, String)> {
 fn is_valid_model_id(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with(char::is_numeric)
-        && !(s.contains(" cli ") || s.contains("-cli "))
+        && !s.contains(" cli ")
+        && !s.contains("-cli ")
         && s.chars().any(|c| c.is_alphanumeric())
 }
 

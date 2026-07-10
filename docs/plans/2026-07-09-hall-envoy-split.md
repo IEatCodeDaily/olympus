@@ -156,19 +156,50 @@ is a follow-up op task, not a gate.
 
 ---
 
+## Milestone S8 (parallel, anytime — Hall+UI only) — session-scoped streaming & typing presence
+
+**Goal:** per-session WS subscriptions + ephemeral typing indicators; groundwork
+for future multi-user shared sessions (identity itself is out of scope).
+
+- WS inbound gains frames: `subscribe {sessionIds}` / `unsubscribe` — Hall
+  filters broadcast frames per connection (unsubscribed connections still get
+  session-list-level frames, not message/delta streams). Default on connect:
+  firehose (backward compatible).
+- WS connect accepts `?name=` display name (falls back to `anon-<n>`); no auth
+  change — attribution only, real identity comes with shared sessions later.
+- Typing presence: inbound `typing {sessionId}` (client debounces ~3 s) →
+  broadcast `UserTyping {sessionId, who, expiresAt}` to that session's
+  subscribers. Ephemeral: NEVER event-logged, no replay, TTL-expired
+  client-side. UI: "«name» is typing…" row in chat view (Discord-style).
+- User messages already fan out live via MessageAppended; agent streaming
+  already per-session via text_delta sessionId — this milestone only scopes
+  delivery and adds presence.
+- Tests: subscription filtering (two WS clients, one subscribed — only it gets
+  deltas); typing frame round-trip + TTL expiry; locale files for new UI
+  strings.
+
+**Gates:** `make verify`; manual: two browser tabs on one session — typing in
+tab A shows indicator in tab B; a third tab on a different session sees
+nothing.
+
+---
+
 ## Sequencing
 
-S1 → S2 → S3 → S4 → S5 → S6, with S7 branching off after S3. One worker per
-milestone; no parallelism within S1–S6 (each rewires what the previous moved).
+S1 → S2 → S3 → S4 → S5 → S6, with S7 branching off after S3. S8 is
+Hall+UI-only and can run parallel to any of S2–S7 (touches ws.rs + UI, no
+envoy surface). One worker per milestone; no parallelism within S1–S6 (each
+rewires what the previous moved).
 
 ## Status Ledger
 
 | Milestone | Status | Worker | Commit |
 |---|---|---|---|
-| S1 proto | TODO | — | — |
-| S2 envoy lib | TODO | — | — |
-| S3 binaries+RPC | TODO | — | — |
+| S1 proto | DONE | Terminus (subagent) | see git log (feat(proto)) |
+| S2 envoy lib | DONE | Terminus (subagent, committed by Terminus) | feat(envoy) |
+| S3 binaries+RPC | DONE | glm52 worker (committed by Terminus) | feat(hall): UDS session dispatch + RemoteRuntime |
 | S4 spool/replay | TODO | — | — |
 | S5 drain+triggers | TODO | — | — |
-| S6 cutover | TODO | — | — |
-| S7 iroh | TODO | — | — |
+| S6 cutover | DONE | glm52 worker | feat(hall): S6 cutover — retire monolith, systemd units, deploy scripts |
+| S7 iroh | DONE | glm52 (Zephyr) | feat(hall): iroh remote transport |
+| S8 streaming+typing | DONE | Zephyr (glm52) | feat(ws): session-scoped subs + typing presence |

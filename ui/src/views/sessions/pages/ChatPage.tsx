@@ -30,6 +30,8 @@ import {
   forkSession,
   onFrame,
   respondPermission,
+  sendFrame,
+  getDisplayName,
 } from "../../../api";
 import type { Message, ServerFrame, ToolCall } from "../../../types";
 import { MessageBubble } from "../components/MessageBubble";
@@ -110,6 +112,15 @@ export function ChatPage({
   // The model/thinking used for the last send — reused when the queue drains.
   const lastSendOpts = useRef<{ model?: string; thinking?: string }>({});
 
+  // ── S8: session-scoped WS subscription + typing presence ────────────
+  // Who is typing in THIS session right now (sessionId, who) → expiresAt.
+  // Filtered to the current session on receive; TTL-expired client-side.
+  const [typers, setTypers] = useState<Map<string, number>>(new Map());
+  // Debounce timer ref for outbound typing frames (~3 s).
+  const typingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Our own display name (so we don't show our own typing indicator).
+  const myName = useMemo(() => getDisplayName(), []);
+
   // ── Reset ALL transient state when switching sessions (Bug: thinking leak) ──
   // Without this, agentStatus/streamingText/sending from the previous session
   // persist across the route transition because React Router reuses the same
@@ -122,12 +133,47 @@ export function ChatPage({
     setPermission(null);
     setText("");
     setQueue(loadQueue(sessionId));
+    setTypers(new Map());
   }, [sessionId]);
 
   // Persist queue on every change.
   useEffect(() => {
     saveQueue(sessionId, queue);
   }, [sessionId, queue]);
+
+  // ── S8: Subscribe to this session's message stream on mount ──────────
+  // The server defaults to firehose, so we explicitly narrow to this session
+  // to avoid flooding every open tab with every session's deltas. We
+  // unsubscribe on unmount / session switch. (Backward compatible: the
+  // server still delivers session-list-level frames regardless.)
+  useEffect(() => {
+    sendFrame({ kind: "subscribe", sessionIds: [sessionId] });
+    return () => {
+      sendFrame({ kind: "unsubscribe", sessionIds: [sessionId] });
+    };
+  }, [sessionId]);
+
+  // ── S8: TTL sweep for expired typers ──────────────────────────────────
+  // A cheap interval that prunes any typer whose expiresAt has passed.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTypers((prev) => {
+        if (prev.size === 0) return prev;
+        const now = Date.now() / 1000;
+        let changed = false;
+        const next = new Map();
+        for (const [who, expiresAt] of prev) {
+          if (expiresAt > now) {
+            next.set(who, expiresAt);
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // ── Rehydrate thinking state on refresh/mount ─────────────────────
   // The server's liveness is authoritative: "running" means the drain loop is
@@ -357,6 +403,17 @@ export function ChatPage({
       ) {
         setPendingSteers(new Set());
       }
+      // S8: typing presence from other users in this session.
+      if (frame.kind === "user.typing" && frame.sessionId === sessionId) {
+        // Don't show our own typing indicator.
+        if (frame.who && frame.who !== myName) {
+          setTypers((prev) => {
+            const next = new Map(prev);
+            next.set(frame.who, frame.expiresAt);
+            return next;
+          });
+        }
+      }
     });
     return unsub;
   }, [sessionId]);
@@ -479,8 +536,28 @@ export function ChatPage({
       const el = e.target;
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 150) + "px";
+
+      // S8: send a typing frame, rate-limited to once per ~3 s so we don't
+      // flood the server. The FIRST keystroke sends immediately; subsequent
+      // keystrokes within 3 s are suppressed (the server TTL is 5 s so there's
+      // no gap). Only sent when there's actual text.
+      if (e.target.value.trim()) {
+        if (!typingDebounceRef.current) {
+          sendFrame({ kind: "typing", sessionId });
+          typingDebounceRef.current = setTimeout(() => {
+            typingDebounceRef.current = null;
+          }, 3000);
+        }
+      } else {
+        // Field cleared — cancel any pending re-enable so the next keystroke
+        // sends fresh.
+        if (typingDebounceRef.current) {
+          clearTimeout(typingDebounceRef.current);
+          typingDebounceRef.current = null;
+        }
+      }
     },
-    [],
+    [sessionId],
   );
 
   // ── Fork (fixed-position modal) ───────────────────────────────────
@@ -563,6 +640,17 @@ export function ChatPage({
                   <i /><i /><i />
                 </span>
                 <span className="thinking-label">{thinkingHint}</span>
+              </div>
+            )}
+            {/* S8: user typing indicator — other people typing in this session */}
+            {typers.size > 0 && (
+              <div className="typing-row">
+                <span className="typing-dots" aria-label="typing">
+                  <i /><i /><i />
+                </span>
+                <span className="who-name">
+                  {[...typers.keys()].join(", ")} {typers.size === 1 ? "is" : "are"} typing…
+                </span>
               </div>
             )}
             {/* Permission prompt — agent blocked on a gated tool call */}

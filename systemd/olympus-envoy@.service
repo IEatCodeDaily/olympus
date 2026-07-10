@@ -1,0 +1,22 @@
+[Unit]
+Description=Olympus Envoy %i — agent runtime holder (ACP children)
+# After= only (boot ordering hint). NO Requires=: envoys must survive hall
+# restarts (ADR 0008 §2) — envoy reconnects to the hall socket on its own.
+After=olympus-hall.service
+
+[Service]
+Type=simple
+# Per-instance env: OLYMPUS_NODE_ID = envoy-%i (the node id registered with Hall).
+Environment="OLYMPUS_NODE_ID=envoy-%i"
+# PATH must include ~/.local/bin for hermes, jj, gh, npx (postmortem 0001).
+Environment="PATH=/home/rpw/.local/bin:/home/rpw/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/rpw/.olympus/bin/olympus-envoy
+# on-failure (not always): a drained envoy that exits 0 stays down (ADR §5).
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

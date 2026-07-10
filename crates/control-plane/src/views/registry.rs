@@ -13,19 +13,9 @@ use std::collections::HashMap;
 
 use crate::event::Event;
 
-/// A registry entry — one definition for one (kind, slug) pair.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RegistryEntry {
-    pub kind: String, // "skill" | "mcp" | "plugin" | "hook"
-    pub slug: String,
-    /// Harness-agnostic definition (JSON string):
-    /// - MCP → `{"command":"...","args":[...],"env":{...}}`
-    /// - skill → `{"dir":"/path/to/skill"}` or a content-addressed ref
-    /// - plugin → `{"kind":"install|service", ...}`
-    /// - hook → harness-specific JSON
-    pub definition: String,
-    pub registered_at: f64,
-}
+// RegistryEntry moved to `olympus-envoy` (ADR 0008 S2) — the adapter consumes
+// resolved entries envoy-side. Re-exported so existing call sites keep working.
+pub use olympus_envoy::adapter::RegistryEntry;
 
 /// In-memory projection of the registry from the event log (ADR 0006 §9.4).
 pub struct RegistryView {
@@ -155,6 +145,20 @@ pub struct DriftReport {
 impl Default for RegistryView {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The registry view is the hall-side implementation of the envoy adapter's
+/// resolver seam: it resolves declared slugs to concrete definitions that the
+/// setup adapter then materializes into the session space.
+impl olympus_envoy::adapter::SlugResolver for RegistryView {
+    fn resolve_batch_owned(
+        &self,
+        kind: &str,
+        slugs: &[String],
+    ) -> (Vec<RegistryEntry>, Vec<String>) {
+        let (found, missing) = self.resolve_batch(kind, slugs);
+        (found.into_iter().cloned().collect(), missing)
     }
 }
 

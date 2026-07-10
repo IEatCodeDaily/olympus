@@ -309,6 +309,15 @@ impl SessionView {
     pub fn get(&self, session_id: &str) -> Option<&SessionRow> {
         self.sessions.get(session_id)
     }
+
+    /// Whether a session is managed (olympus/acp source) — its messages are
+    /// live-streamed from the bridge, not read from state.db.
+    pub fn is_managed(&self, session_id: &str) -> bool {
+        self.sessions
+            .get(session_id)
+            .map(|r| r.source == "acp" || r.source == "olympus")
+            .unwrap_or(false)
+    }
 }
 
 impl Default for SessionView {

@@ -1,0 +1,22 @@
+[Unit]
+Description=Olympus Hall — control plane (event log, views, REST/WS API)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rpw/olympus
+Environment="OLYMPUS_BIND=127.0.0.1:8799"
+Environment="OLYMPUS_UI_DIST=/home/rpw/olympus/ui/dist"
+Environment="OLYMPUS_ALLOWED_ORIGINS=olympus.entelechia.cloud"
+# PATH must include ~/.local/bin for hermes, jj, gh, npx (postmortem 0001).
+Environment="PATH=/home/rpw/.local/bin:/home/rpw/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/rpw/.olympus/bin/olympus-hall
+Restart=always
+RestartSec=5
+RestartMaxDelaySec=60
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

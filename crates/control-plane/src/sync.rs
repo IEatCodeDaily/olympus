@@ -62,13 +62,13 @@ pub struct SessionMeta {
     pub output_tokens: u64,
 }
 
-/// Sync worker state: tail cursors and the Hermes-row→Olympus-message mapping
-/// for the sessions currently tracked by the worker.
+/// Sync worker state: lightweight tail cursor + session signatures.
+/// Does NOT hold per-message ID mappings (that was 560 MB of heap for 137K
+/// messages). Instead, the tail cursor catches new messages; sequential
+/// Olympus IDs are derived from COUNT(*) per session at read time.
 #[derive(Debug, Clone)]
 pub struct SyncState {
     pub last_seen_id: u64,
-    pub next_message_id_by_session: HashMap<String, u64>,
-    pub message_ids_by_session_db_id: HashMap<String, HashMap<u64, u64>>,
     pub session_signatures: HashMap<String, SessionSignature>,
 }
 
@@ -83,33 +83,8 @@ impl SyncState {
     pub fn new() -> Self {
         Self {
             last_seen_id: 0,
-            next_message_id_by_session: HashMap::new(),
-            message_ids_by_session_db_id: HashMap::new(),
             session_signatures: HashMap::new(),
         }
-    }
-
-    pub fn seed_session_from_rows(&mut self, session_id: &str, rows: &[LiveMessageRow]) {
-        let mut next = self
-            .next_message_id_by_session
-            .get(session_id)
-            .copied()
-            .unwrap_or(0);
-        let db_to_olympus = self
-            .message_ids_by_session_db_id
-            .entry(session_id.to_string())
-            .or_default();
-
-        for row in rows {
-            if db_to_olympus.contains_key(&row.id) {
-                continue;
-            }
-            db_to_olympus.insert(row.id, next);
-            next += 1;
-        }
-
-        self.next_message_id_by_session
-            .insert(session_id.to_string(), next);
     }
 
     pub fn knows_session(&self, session_id: &str) -> bool {
@@ -142,21 +117,44 @@ pub fn list_session_ids(conn: &Connection) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Seed a sync state from the current DB snapshot so tail/reconcile can assign
-/// stable Olympus message ids from the live Hermes rows.
+/// Seed sync state from state.db using lightweight SQL aggregates only — no
+/// message bodies loaded. Sets the tail cursor to MAX(id) and builds session
+/// signatures from COUNT(*) + MAX(id) per session.
 pub fn seed_state_from_db(conn: &Connection, sync_state: &mut SyncState) -> Result<()> {
-    for session_id in list_session_ids(conn)? {
-        let rows = load_active_messages(conn, &session_id)?;
-        let signature = SessionSignature {
-            max_id: rows.iter().map(|row| row.id).max().unwrap_or(0),
-            row_count: rows.len() as u64,
-        };
-        sync_state.last_seen_id = sync_state.last_seen_id.max(signature.max_id);
-        sync_state
-            .session_signatures
-            .insert(session_id.clone(), signature);
-        sync_state.seed_session_from_rows(&session_id, &rows);
+    // Tail cursor: the highest message id across ALL sessions.
+    sync_state.last_seen_id = conn
+        .query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
+
+    // Per-session signatures via GROUP BY (no message bodies).
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT session_id, COUNT(*) as cnt, MAX(id) as max_id
+        FROM messages
+        WHERE active = 1 AND compacted = 0
+        GROUP BY session_id
+        "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            SessionSignature {
+                max_id: row.get::<_, i64>(1)? as u64,
+                row_count: row.get::<_, i64>(2)? as u64,
+            },
+        ))
+    })?;
+    for row in rows {
+        let (session_id, sig) = row?;
+        sync_state.session_signatures.insert(session_id, sig);
     }
+    tracing::info!(
+        last_seen_id = sync_state.last_seen_id,
+        sessions = sync_state.session_signatures.len(),
+        "sync state seeded (no message bodies in RAM)"
+    );
     Ok(())
 }
 
@@ -236,31 +234,26 @@ pub fn poll_message_tail(
 pub fn tail_rows_to_events(sync_state: &mut SyncState, rows: Vec<LiveMessageRow>) -> Vec<Event> {
     let mut out = Vec::new();
     for row in rows {
+        // Unknown sessions wait for reconciliation, which registers session
+        // metadata first. This keeps ordering clean (session before messages)
+        // and avoids fanning out messages for a session the UI doesn't know yet.
         if !sync_state.knows_session(&row.session_id) {
             continue;
         }
-        let db_to_olympus = sync_state
-            .message_ids_by_session_db_id
-            .entry(row.session_id.clone())
-            .or_default();
-        if db_to_olympus.contains_key(&row.id) {
-            continue;
-        }
 
-        let next = sync_state
-            .next_message_id_by_session
-            .get(&row.session_id)
-            .copied()
-            .unwrap_or(0);
-        db_to_olympus.insert(row.id, next);
-        sync_state
-            .next_message_id_by_session
-            .insert(row.session_id.clone(), next + 1);
+        // Assign the next sequential message_id from the session's signature.
+        let sig = sync_state
+            .session_signatures
+            .get_mut(&row.session_id)
+            .unwrap();
+        let message_id = sig.row_count;
+        sig.row_count += 1;
+        sig.max_id = sig.max_id.max(row.id);
 
         out.push(Event::MessageAppended {
             session_id: row.session_id.clone(),
             hermes_session_id: row.hermes_session_id.clone(),
-            message_id: next,
+            message_id,
             role: row.role,
             content: row.content,
             tool_name: row.tool_name,
@@ -301,59 +294,6 @@ pub fn load_session_meta(conn: &Connection, session_id: &str) -> Result<Option<S
     }))
 }
 
-fn load_active_messages(conn: &Connection, session_id: &str) -> Result<Vec<LiveMessageRow>> {
-    let mut stmt = conn.prepare(
-        r#"
-        SELECT
-            id,
-            session_id,
-            role,
-            content,
-            tool_name,
-            tool_calls,
-            reasoning,
-            timestamp,
-            token_count,
-            finish_reason,
-            active,
-            compacted
-        FROM messages
-        WHERE session_id = ?1
-        ORDER BY id ASC
-        "#,
-    )?;
-
-    let mut rows = stmt.query(params![session_id])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let active: i64 = row.get("active")?;
-        let compacted: i64 = row.get("compacted")?;
-        if active == 0 || compacted == 1 {
-            continue;
-        }
-        let session_id: String = row.get("session_id")?;
-        out.push(LiveMessageRow {
-            id: row.get("id")?,
-            session_id: session_id.clone(),
-            hermes_session_id: session_id,
-            message_id: 0,
-            role: row.get("role")?,
-            content: row.get("content")?,
-            tool_name: row.get("tool_name")?,
-            tool_calls: row.get("tool_calls")?,
-            reasoning: row.get("reasoning")?,
-            timestamp: row.get("timestamp")?,
-            token_count: row
-                .get::<_, Option<i64>>("token_count")?
-                .map(|value| value as u64),
-            finish_reason: row.get("finish_reason")?,
-            active: true,
-            compacted: false,
-        });
-    }
-    Ok(out)
-}
-
 /// Reconcile one session's current hot window against the live DB state.
 ///
 /// The returned events are ordered so callers can remove stale rows before
@@ -362,7 +302,7 @@ pub fn reconcile_session(
     conn: &Connection,
     sync_state: &mut SyncState,
     session_view: &SessionView,
-    message_view: &MessageView,
+    _message_view: &MessageView,
     session_id: &str,
 ) -> Result<Vec<Event>> {
     let Some(meta) = load_session_meta(conn, session_id)? else {
@@ -370,11 +310,15 @@ pub fn reconcile_session(
     };
     let session_exists = session_view.get(session_id).is_some();
 
-    let current = load_active_messages(conn, session_id)?;
-    let signature = SessionSignature {
-        max_id: current.iter().map(|row| row.id).max().unwrap_or(0),
-        row_count: current.len() as u64,
-    };
+    // Lightweight signature via SQL aggregate — no message bodies.
+    let (max_id, row_count): (u64, u64) = conn
+        .query_row(
+            "SELECT COALESCE(MAX(id),0), COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1 AND compacted = 0",
+            params![session_id],
+            |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+        )?;
+    let signature = SessionSignature { max_id, row_count };
+
     if sync_state.session_signatures.get(session_id).copied() == Some(signature) {
         let current_row = session_view.get(session_id);
         let meta_changed = match current_row {
@@ -394,21 +338,6 @@ pub fn reconcile_session(
         .session_signatures
         .insert(session_id.to_string(), signature);
 
-    let window_size = message_view.window_size();
-    let desired_window: Vec<_> = current
-        .iter()
-        .skip(current.len().saturating_sub(window_size))
-        .cloned()
-        .collect();
-
-    let current_map = sync_state
-        .message_ids_by_session_db_id
-        .entry(session_id.to_string())
-        .or_default();
-
-    let desired_db_ids: std::collections::HashSet<u64> =
-        desired_window.iter().map(|row| row.id).collect();
-
     let mut events = Vec::new();
     if !session_exists {
         events.push(Event::SessionCreated {
@@ -425,53 +354,6 @@ pub fn reconcile_session(
             node: None,
         });
     }
-    let mut stale_db_ids: Vec<u64> = current_map
-        .keys()
-        .copied()
-        .filter(|db_id| !desired_db_ids.contains(db_id))
-        .collect();
-    stale_db_ids.sort_unstable();
-    for db_id in stale_db_ids {
-        if let Some(message_id) = current_map.remove(&db_id) {
-            events.push(Event::MessageRemoved {
-                session_id: session_id.to_string(),
-                hermes_session_id: session_id.to_string(),
-                message_id,
-            });
-        }
-    }
-
-    let mut next_message_id = sync_state
-        .next_message_id_by_session
-        .get(session_id)
-        .copied()
-        .unwrap_or(0);
-
-    for row in desired_window {
-        if current_map.contains_key(&row.id) {
-            continue;
-        }
-        let message_id = next_message_id;
-        next_message_id += 1;
-        current_map.insert(row.id, message_id);
-        events.push(Event::MessageAppended {
-            session_id: session_id.to_string(),
-            hermes_session_id: session_id.to_string(),
-            message_id,
-            role: row.role.clone(),
-            content: row.content.clone(),
-            tool_name: row.tool_name.clone(),
-            tool_calls: row.tool_calls.clone(),
-            reasoning: row.reasoning.clone(),
-            timestamp: row.timestamp,
-            token_count: row.token_count,
-            finish_reason: row.finish_reason.clone(),
-        });
-    }
-
-    sync_state
-        .next_message_id_by_session
-        .insert(session_id.to_string(), next_message_id);
 
     let current_row = session_view.get(session_id);
     let meta_changed = match current_row {
@@ -484,16 +366,7 @@ pub fn reconcile_session(
         None => true,
     };
 
-    let window_changed = events.iter().any(|event| {
-        matches!(
-            event,
-            Event::MessageRemoved { .. } | Event::MessageAppended { .. }
-        )
-    });
-    let has_refresh = events
-        .iter()
-        .any(|event| matches!(event, Event::SessionUpdated { .. }));
-    if session_exists && (meta_changed || window_changed) && !has_refresh {
+    if session_exists && meta_changed {
         events.push(Event::SessionUpdated {
             session_id: session_id.to_string(),
             title: meta.title,
@@ -849,6 +722,8 @@ mod tests {
         )
         .unwrap();
 
+        // Lazy history: reconcile emits the SessionCreated metadata event but
+        // NOT message bodies — those live in state.db and are read on demand.
         assert!(
             matches!(events.first(), Some(Event::SessionCreated { session_id, hermes_id, source, model, title, message_count, input_tokens, output_tokens, .. })
             if session_id == "sess-new"
@@ -861,8 +736,10 @@ mod tests {
                 && *output_tokens == 22)
         );
         assert!(
-            matches!(events.get(1), Some(Event::MessageAppended { session_id, content, message_id, .. })
-            if session_id == "sess-new" && content.as_deref() == Some("hello from live db") && *message_id == 0)
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::MessageAppended { .. })),
+            "reconcile no longer emits message bodies (lazy history)"
         );
     }
 
@@ -912,22 +789,29 @@ mod tests {
 
         let snapshot = views.blocking_read();
         assert!(snapshot.sessions.get("sess-live").is_some());
-        let recent = snapshot.messages.recent("sess-live", 10);
-        assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].content.as_deref(), Some("live hello"));
         drop(snapshot);
 
+        // Lazy history: the event log holds the SessionCreated metadata event
+        // but NOT message bodies — message content lives in state.db and is
+        // read on demand via StateDbReader, not mirrored into the log.
         let events = log.read_all().unwrap();
         assert!(
             matches!(events.first().map(|(_, event)| event), Some(Event::SessionCreated { session_id, .. }) if session_id == "sess-live")
         );
         assert!(
-            matches!(events.get(1).map(|(_, event)| event), Some(Event::MessageAppended { session_id, content, .. }) if session_id == "sess-live" && content.as_deref() == Some("live hello"))
+            !events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::MessageAppended { .. })),
+            "message bodies are not mirrored into the event log (lazy history)"
         );
     }
 
     #[test]
-    fn reconcile_session_emits_removals_appends_and_meta_updates() {
+    fn reconcile_session_emits_meta_updates() {
+        // With lazy history, reconcile no longer emits MessageRemoved/
+        // MessageAppended (message reconciliation happens on-demand at read
+        // time via StateDbReader). It only emits SessionUpdated when session
+        // metadata (title/model/archived/message_count) changes.
         let db = create_state_db();
         let conn = Connection::open(db.path()).unwrap();
         seed_session(&conn, "sess-1", "old title", "glm-5.2", 2);
@@ -948,71 +832,9 @@ mod tests {
             agent: None,
             node: None,
         });
-        views.apply(&Event::MessageAppended {
-            session_id: "sess-1".into(),
-            hermes_session_id: "sess-1".into(),
-            message_id: 0,
-            role: "user".into(),
-            content: Some("keep".into()),
-            tool_name: None,
-            tool_calls: None,
-            reasoning: None,
-            timestamp: 1.0,
-            token_count: None,
-            finish_reason: None,
-        });
-        views.apply(&Event::MessageAppended {
-            session_id: "sess-1".into(),
-            hermes_session_id: "sess-1".into(),
-            message_id: 1,
-            role: "assistant".into(),
-            content: Some("drop".into()),
-            tool_name: None,
-            tool_calls: None,
-            reasoning: None,
-            timestamp: 2.0,
-            token_count: None,
-            finish_reason: None,
-        });
 
         let mut sync = SyncState::new();
-        sync.seed_session_from_rows(
-            "sess-1",
-            &[
-                LiveMessageRow {
-                    id: 1,
-                    session_id: "sess-1".into(),
-                    hermes_session_id: "sess-1".into(),
-                    message_id: 0,
-                    role: "user".into(),
-                    content: Some("keep".into()),
-                    tool_name: None,
-                    tool_calls: None,
-                    reasoning: None,
-                    timestamp: 1.0,
-                    token_count: None,
-                    finish_reason: None,
-                    active: true,
-                    compacted: false,
-                },
-                LiveMessageRow {
-                    id: 2,
-                    session_id: "sess-1".into(),
-                    hermes_session_id: "sess-1".into(),
-                    message_id: 1,
-                    role: "assistant".into(),
-                    content: Some("drop".into()),
-                    tool_name: None,
-                    tool_calls: None,
-                    reasoning: None,
-                    timestamp: 2.0,
-                    token_count: None,
-                    finish_reason: None,
-                    active: true,
-                    compacted: false,
-                },
-            ],
-        );
+        seed_state_from_db(&conn, &mut sync).unwrap();
 
         conn.execute(
             "UPDATE messages SET active = 0, compacted = 1 WHERE id = 2",
@@ -1031,10 +853,6 @@ mod tests {
             reconcile_session(&conn, &mut sync, &views.sessions, &views.messages, "sess-1")
                 .unwrap();
 
-        assert!(matches!(
-            events.first(),
-            Some(Event::MessageRemoved { message_id: 1, .. })
-        ));
         assert!(events.iter().any(|event| matches!(
             event,
             Event::SessionUpdated {
@@ -1044,6 +862,11 @@ mod tests {
                 message_count: Some(1),
                 ..
             } if title.as_deref() == Some("new title") && model.as_deref() == Some("claude-sonnet-4")
+        )));
+        // No message-body events from reconcile anymore.
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::MessageRemoved { .. } | Event::MessageAppended { .. }
         )));
     }
 }

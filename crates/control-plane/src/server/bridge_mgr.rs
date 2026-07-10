@@ -20,31 +20,14 @@ use crate::bridge::AgentRuntime;
 use crate::event::Event;
 use crate::log::Log;
 
-/// What an agent runtime needs to spawn: which agent (Hermes profile) drives it
-/// and on which node. The factory turns this into a concrete runtime.
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeSpec {
-    /// Hermes profile to run as (`None` → the server's default profile).
-    pub agent: Option<String>,
-    /// Node to run on ("local" for now; multi-node is post-MVP).
-    pub node: Option<String>,
-    /// The session space — the agent's working directory. `None` falls back to
-    /// the server's cwd (legacy behavior); production always sets this to the
-    /// per-session space so agents operate in a scoped directory, not the host.
-    pub cwd: Option<String>,
-    /// MCP servers to inject into the ACP session/new request (resolved from
-    /// the registry by the setup adapter). Each value is the harness's native
-    /// MCP server JSON. `None`/empty → no MCP servers (legacy behavior).
-    pub mcp_servers: Vec<serde_json::Value>,
-    /// Extra environment variables for the child process (from the setup
-    /// adapter, e.g. HERMES_SKILLS_PATH). Default empty.
-    pub env: Vec<(String, String)>,
-}
+// RuntimeSpec moved to `olympus-proto` (ADR 0008); re-exported so existing
+// call sites keep working unchanged.
+pub use olympus_proto::RuntimeSpec;
 
-/// A type-erased runtime factory. Production uses HermesAgentRuntime; tests
-/// inject a mock. The spec carries the agent/node binding so the factory can
-/// route to the right Hermes profile.
-pub type RuntimeFactory = Arc<dyn Fn(&RuntimeSpec) -> Arc<dyn AgentRuntime> + Send + Sync>;
+// The per-session runtime mechanics (runtimes HashMap + factory +
+// ensure/send/stop) moved to `olympus-envoy` as `RuntimeTable` (ADR 0008 S2).
+// Re-exported so existing call sites keep working unchanged.
+pub use olympus_envoy::runtime_table::{RuntimeFactory, RuntimeTable};
 
 /// The result of creating a new managed session: the Olympus session id and the
 /// Hermes session id captured from the ACP `session/new` response.
@@ -68,10 +51,8 @@ pub struct ForkedSession {
 pub struct BridgeManager {
     /// Event log (for appending SessionCreated / MessageAppended events).
     log: Arc<Log>,
-    /// Factory that produces a fresh runtime per session.
-    factory: RuntimeFactory,
-    /// Active runtimes keyed by Olympus session id.
-    runtimes: RwLock<HashMap<String, Arc<dyn AgentRuntime>>>,
+    /// Per-session runtime mechanics (envoy-side: runtimes map + factory).
+    table: RuntimeTable,
     /// Sessions with a turn currently in-flight (prompt sent, awaiting Done).
     /// Authoritative liveness signal for Olympus-managed sessions.
     in_flight: RwLock<HashSet<String>>,
@@ -97,8 +78,7 @@ impl BridgeManager {
     pub fn with_factory(log: Arc<Log>, factory: RuntimeFactory) -> Self {
         Self {
             log,
-            factory,
-            runtimes: RwLock::new(HashMap::new()),
+            table: RuntimeTable::with_factory(factory),
             in_flight: RwLock::new(HashSet::new()),
             steer_pending: RwLock::new(HashMap::new()),
             awaiting_input: RwLock::new(HashMap::new()),
@@ -244,11 +224,9 @@ impl BridgeManager {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no pending permission request for session"))?;
         let runtime = self
-            .runtimes
-            .read()
-            .await
+            .table
             .get(session_id)
-            .cloned()
+            .await
             .ok_or_else(|| anyhow::anyhow!("no runtime for session"))?;
         runtime.respond_permission(&request_id, option_id).await?;
         self.clear_awaiting_input(session_id).await;
@@ -316,28 +294,9 @@ impl BridgeManager {
         spec: &RuntimeSpec,
         resume_hermes_id: Option<&str>,
     ) -> Result<(Arc<dyn AgentRuntime>, String)> {
-        if let Some(rt) = self.runtimes.read().await.get(session_id).cloned() {
-            let hid = rt.hermes_session_id().await.unwrap_or_default();
-            return Ok((rt, hid));
-        }
-
-        let runtime = (self.factory)(spec);
-        let resume = resume_hermes_id.filter(|s| !s.is_empty());
-        runtime
-            .start(resume)
+        self.table
+            .ensure_runtime(session_id, spec, resume_hermes_id)
             .await
-            .context("starting agent runtime (lazy)")?;
-        let hermes_id = runtime
-            .hermes_session_id()
-            .await
-            .unwrap_or_else(|| format!("sess-{}", chrono_millis()));
-
-        self.runtimes
-            .write()
-            .await
-            .insert(session_id.to_string(), runtime.clone());
-
-        Ok((runtime, hermes_id))
     }
 
     /// Fork an existing Hermes session into a new managed Olympus session,
@@ -349,16 +308,8 @@ impl BridgeManager {
         title: Option<String>,
         message_count: u64,
     ) -> Result<ForkedSession> {
-        let runtime = (self.factory)(&RuntimeSpec::default());
-        runtime
-            .fork_session(source_hermes_id)
-            .await
-            .context("forking agent runtime session")?;
-
-        let hermes_id = runtime
-            .hermes_session_id()
-            .await
-            .unwrap_or_else(|| format!("fork-{}", chrono_millis()));
+        let forked = self.table.fork_runtime(source_hermes_id).await?;
+        let hermes_id = forked.hermes_id;
         let session_id = format!("oly-{}", &hermes_id[..hermes_id.len().min(8)]);
 
         // A fork is a real managed session — give it its own space too.
@@ -379,10 +330,7 @@ impl BridgeManager {
             node: None,
         })?;
 
-        self.runtimes
-            .write()
-            .await
-            .insert(session_id.clone(), runtime);
+        self.table.register(&session_id, forked.runtime).await;
 
         Ok(ForkedSession {
             session_id,
@@ -394,7 +342,7 @@ impl BridgeManager {
     /// can drain its event stream. Returns None if the session is not managed
     /// (or unknown).
     pub async fn get_runtime(&self, session_id: &str) -> Option<Arc<dyn AgentRuntime>> {
-        self.runtimes.read().await.get(session_id).cloned()
+        self.table.get(session_id).await
     }
 
     /// Append a SessionUpdated event that backfills the real Hermes id captured
@@ -558,6 +506,7 @@ pub fn chrono_epoch_pub() -> f64 {
 }
 
 /// Current epoch milliseconds as u128 (for unique id generation).
+#[allow(dead_code)]
 fn chrono_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

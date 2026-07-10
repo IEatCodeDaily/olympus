@@ -419,8 +419,30 @@ function getWsUrl(): string {
   const origin = BASE || window.location.origin;
   const u = new URL(origin);
   const proto = u.protocol === "https:" ? "wss" : "ws";
-  const q = T ? `?token=${T}` : "";
-  return `${proto}://${u.host}/ws${q}`;
+  // S8: send a stable display name for typing attribution. Falls back to
+  // anon-<N> server-side when absent.
+  const name = getDisplayName();
+  const params = new URLSearchParams();
+  if (T) params.set("token", T);
+  if (name) params.set("name", name);
+  const qs = params.toString();
+  return `${proto}://${u.host}/ws${qs ? `?${qs}` : ""}`;
+}
+
+/** A stable display name for this browser (used for typing attribution, S8). */
+export function getDisplayName(): string | null {
+  try {
+    let name = localStorage.getItem("olympus-display-name");
+    if (!name) {
+      // Derive a friendly default from the OS, else a stable random handle.
+      const n = Math.floor(Math.random() * 9000 + 1000);
+      name = `friend-${n}`;
+      localStorage.setItem("olympus-display-name", name);
+    }
+    return name;
+  } catch {
+    return null;
+  }
 }
 
 export function connectWs(): void {

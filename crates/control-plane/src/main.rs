@@ -1,8 +1,14 @@
-//! Olympus control plane — single-binary entrypoint.
+//! Olympus Hall — the control-plane entrypoint (ADR 0008 S6).
 //!
 //! On boot: import the operator's Hermes `state.db` into a fresh event log,
 //! build the in-memory views + search index from that log, then serve the REST
 //! + WSS API on `127.0.0.1:8787` behind the per-install token.
+//!
+//! Hall owns the event log, views, search, REST/WS, and the fleet node
+//! registry. Agent runtimes (the actual `hermes acp` children) live in the
+//! separate `olympus-envoy` binary — Hall drives them over UDS via the
+//! `EnvoyFrame` wire protocol. The local node is `olympus-envoy@1` over UDS,
+//! not an in-process pseudo-envoy.
 //!
 //! The event log is rebuilt from `state.db` on every boot for the MVP (cheap,
 //! deterministic, no migration story needed yet). Live sync (ADR §6.7) lands
@@ -74,27 +80,27 @@ async fn main() -> Result<()> {
     let token = auth::load_or_create_token()?;
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
-    // ---- open the durable event log; keep Olympus-native records, rebuild the
-    // state.db mirror each boot ----
-    let log_path = home.join("eventlog.redb");
+    // ---- open the SQLite event log (sole source of truth for native data) ----
+    let log_path = home.join("olympus.db");
     let log = Arc::new(Log::open(&log_path).context("opening event log")?);
-    // Drop the previous boot's state.db-imported events (keeping Olympus-native
-    // records: setup declarations, cards, olympus sessions), so the re-import
-    // below is idempotent and the durable declarations survive a restart.
+    // Drop the previous boot's state.db-imported sessions so the re-index is
+    // idempotent (native events survive a restart).
     log.retain_native().context("retaining native events")?;
 
     let state_db = hermes_state_db()?;
-    // ---- NATIVE-ONLY boot: rebuild views + search from the retained event log
-    // (Olympus sessions, cards, setup declarations) so the server can start
-    // serving IMMEDIATELY. The Hermes state.db import (1829 sessions, 127K
-    // messages) runs AFTER bind in a background thread — see below.
+    let state_db_reader = olympus_control_plane::state_db_reader::StateDbReader::open(&state_db)
+        .context("opening state.db reader")?;
+    if let Some(ref r) = state_db_reader {
+        tracing::info!(db = %r.path().display(), "state.db reader ready (lazy history)");
+    }
+    // ---- NATIVE-ONLY boot: rebuild views from the event log (Olympus sessions,
+    // cards, setup). The Hermes state.db session index runs AFTER bind. ----
     let mut views = ViewManager::new();
     views
         .replay(&log)
         .context("replaying native log into views")?;
 
-    let mut search =
-        SearchIndex::open(&home.join("search-index")).context("opening search index")?;
+    let mut search = SearchIndex::from_log(log.clone());
     search
         .build_from_log(&log)
         .context("building search index (native only)")?;
@@ -164,22 +170,12 @@ async fn main() -> Result<()> {
     let sync_connected = Arc::new(AtomicBool::new(false));
 
     // ---- fleet node registry ----
+    // ADR 0008 S6: the local node is NO LONGER an in-process pseudo-envoy.
+    // It is olympus-envoy@1 over UDS — the envoy binary connects and
+    // registers itself at boot. Hall does not pre-register any node.
     let node_registry = NodeRegistry::new();
-    // Auto-register the local node (in-process pseudo-envoy per ADR 0005 §3).
-    // The local node's envoy discovers its own agents (Hermes profiles + CLI
-    // harnesses installed on THIS host) — that is the per-node source of truth,
-    // not a global control-plane probe.
-    let local_hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "localhost".to_string());
-    let local_agents = olympus_control_plane::server::agents::discover_local_agents();
-    tracing::info!(count = local_agents.len(), "local envoy discovered agents");
-    node_registry
-        .register("local", &local_hostname, 4, "0.1", true, local_agents)
-        .await;
 
-    let state = AppState {
+    let mut state = AppState {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
@@ -193,8 +189,10 @@ async fn main() -> Result<()> {
         sync_connected: sync_connected.clone(),
         irc: olympus_control_plane::irc::IrcBus::new(),
         nodes: node_registry.clone(),
+        envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::new(),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
         vaults: Arc::new(VaultStore::new(org_workspace_root(&default_org())?)),
+        state_db: state_db_reader.map(Arc::new),
         projects: Arc::new(olympus_control_plane::projects::ProjectStore::new(
             org_workspace_root(&default_org())?,
         )),
@@ -202,6 +200,7 @@ async fn main() -> Result<()> {
             &org_workspace_root(&default_org())?,
             &default_org(),
         )),
+        hall_iroh_id: None, // set below after endpoint creation
     };
 
     let sync_log = Arc::clone(&log_arc);
@@ -241,14 +240,52 @@ async fn main() -> Result<()> {
         })
         .expect("spawn live sync thread");
 
+    // Spawn the iroh listener for REMOTE envoys (ADR 0008 §1, S7). Public n0
+    // relays; peers are gated by the node-id allowlist in ~/.olympus/hall.toml
+    // (`allowed_envoys = ["<node-id>", ...]`) — fail closed: no file or empty
+    // list means no remote envoys can connect (the endpoint still binds and
+    // prints its node id so the operator can set up the allowlist).
+    //
+    // Must run BEFORE build_router: the router clones AppState, so
+    // hall_iroh_id has to be set first or /api/nodes/hall-identity would
+    // forever report null.
+    {
+        match olympus_control_plane::node::create_iroh_endpoint(&home).await {
+            Ok((endpoint, node_id)) => {
+                println!("hall iroh node id: {node_id}");
+                tracing::info!(node_id = %node_id, "hall iroh endpoint bound");
+                state.hall_iroh_id = Some(Arc::new(node_id.to_string()));
+                let reg = node_registry.clone();
+                let conns = state.envoy_conns.clone();
+                let hall_home = home.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = olympus_control_plane::node::run_iroh_accept_loop(
+                        hall_home, endpoint, reg, conns,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = format!("{e:#}"), "iroh accept loop failed");
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = format!("{e:#}"),
+                    "failed to bind iroh endpoint — remote envoys disabled (UDS still active)"
+                );
+            }
+        }
+    }
+
     let app = server::build_router(state.clone());
 
     // Spawn the UDS listener for node (envoy) registration.
     let uds_path = home.join("control.sock");
     {
         let reg = node_registry.clone();
+        let conns = state.envoy_conns.clone();
         tokio::spawn(async move {
-            olympus_control_plane::node::run_uds_listener(uds_path, reg).await;
+            olympus_control_plane::node::run_uds_listener(uds_path, reg, conns).await;
         });
     }
 
@@ -264,15 +301,10 @@ async fn main() -> Result<()> {
     println!("olympus control plane listening on http://{bind}");
     println!("token: {token}");
 
-    // ---- Background Hermes state.db import (deferred so bind is instant) ----
-    // The server is now serving with native-only data (Olympus sessions,
-    // cards, setup). The Hermes import (1829 sessions, 127K messages) runs
-    // here in a tokio task, appending to the log and replaying into views +
-    // search. The live-sync worker (started above) will also pick up
-    // incremental changes. import_state flips to Done when this completes.
-    //
-    // Uses tokio::task::spawn_blocking for the SQLite-heavy import (blocking
-    // I/O), then async blocks for the view/search rebuild (tokio RwLocks).
+    // ---- Session metadata index (lazy history, ADR 0009) ----
+    // Hall imports ONLY session metadata (id, source, title, model, timestamps)
+    // from state.db — not message bodies. Message reads and full-text search
+    // query state.db on-demand via StateDbReader. This keeps RSS low.
     {
         let bg_log = Arc::clone(&log_arc);
         let bg_views = Arc::clone(&state.views);
@@ -282,28 +314,21 @@ async fn main() -> Result<()> {
         let bg_state_db = state_db.clone();
         tokio::spawn(async move {
             if !bg_state_db.exists() {
-                tracing::warn!(db = %bg_state_db.display(), "state.db not found — skipping import");
+                tracing::warn!(db = %bg_state_db.display(), "state.db not found — skipping session index");
                 bg_import.set_done();
                 return;
             }
-            tracing::info!(db = %bg_state_db.display(), "importing Hermes state.db (background)");
-            // Import is blocking SQLite I/O — run on the blocking pool.
+            tracing::info!(db = %bg_state_db.display(), "indexing Hermes sessions (metadata only)");
             let db = bg_state_db.clone();
             let log_clone = Arc::clone(&bg_log);
-            let import_result = tokio::task::spawn_blocking(move || {
-                let s = import::import_sessions(&db, &log_clone)?;
-                let m = import::import_messages(&db, &log_clone)?;
-                Ok::<_, anyhow::Error>((s, m))
-            })
-            .await;
+            let import_result =
+                tokio::task::spawn_blocking(move || import::import_sessions(&db, &log_clone)).await;
             match import_result {
-                Ok(Ok((s, m))) => {
+                Ok(Ok(s)) => {
                     tracing::info!(
                         sessions = s.session_count,
-                        messages = m.message_count,
-                        "background import complete — replaying into views + search"
+                        "session index complete — replaying into views"
                     );
-                    // Rebuild views + search from the now-complete log.
                     {
                         let mut v = bg_views.write().await;
                         *v = ViewManager::new();
@@ -318,8 +343,8 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                Ok(Err(e)) => tracing::error!(error = %e, "background import failed"),
-                Err(e) => tracing::error!(error = %e, "background import task panicked"),
+                Ok(Err(e)) => tracing::error!(error = %e, "session index failed"),
+                Err(e) => tracing::error!(error = %e, "session index task panicked"),
             }
             bg_import.set_done();
             use olympus_control_plane::server::ws::ServerFrame;

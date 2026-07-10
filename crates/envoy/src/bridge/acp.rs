@@ -169,7 +169,20 @@ impl AcpNotification {
 // session/update notification → AgentEvent mapping
 // ---------------------------------------------------------------------------
 
-impl AgentEvent {
+/// ACP → [`AgentEvent`] mapping, as an extension trait because `AgentEvent`
+/// now lives in `olympus-proto` (ADR 0008) and inherent impls on foreign types
+/// are not allowed. Import this trait to call `AgentEvent::from_notification`
+/// etc. exactly as before.
+pub trait AgentEventAcpExt: Sized {
+    /// Map a `session/update` notification into an [`AgentEvent`].
+    fn from_notification(notif: &AcpNotification) -> Option<Self>;
+    /// Map an incoming agent→client **request** into an [`AgentEvent`].
+    fn from_request(req: &AcpRequest) -> Option<Self>;
+    /// Map a final prompt response into an [`AgentEvent`].
+    fn from_response(resp: &AcpResponse) -> Option<Self>;
+}
+
+impl AgentEventAcpExt for AgentEvent {
     /// Map a `session/update` notification into an [`AgentEvent`].
     ///
     /// Recognised `sessionUpdate` kinds (from the spike):
@@ -182,7 +195,7 @@ impl AgentEvent {
     ///
     /// Returns `None` for notifications Olympus does not surface (the caller
     /// drops them silently).
-    pub fn from_notification(notif: &AcpNotification) -> Option<Self> {
+    fn from_notification(notif: &AcpNotification) -> Option<Self> {
         if notif.method != "session/update" {
             return None;
         }
@@ -234,10 +247,7 @@ impl AgentEvent {
                 })
             }
             "tool_call_update" => {
-                let title = update
-                    .get("title")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
+                let title = update.get("title").and_then(|t| t.as_str()).unwrap_or("");
                 let id = update
                     .get("toolCallId")
                     .and_then(|i| i.as_str())
@@ -275,7 +285,7 @@ impl AgentEvent {
     /// The only request Olympus surfaces is `session/request_permission` (the
     /// agent blocks waiting for a permission decision on a gated tool call).
     /// Other requests (fs/*, terminal/*) are handled elsewhere or ignored.
-    pub fn from_request(req: &AcpRequest) -> Option<Self> {
+    fn from_request(req: &AcpRequest) -> Option<Self> {
         if req.method != "session/request_permission" {
             return None;
         }
@@ -321,7 +331,7 @@ impl AgentEvent {
 
     /// Map a final prompt response (the reply to a `session/prompt` request)
     /// into a [`AgentEvent::Done`], carrying `stopReason` as `finish_reason`.
-    pub fn from_response(resp: &AcpResponse) -> Option<Self> {
+    fn from_response(resp: &AcpResponse) -> Option<Self> {
         if resp.error.is_some() {
             return Some(AgentEvent::Error(
                 resp.error

@@ -1,9 +1,21 @@
 //! WebSocket delta stream (`/ws`) — the reactive half of the contract.
 //!
-//! Clients connect to `ws://127.0.0.1:8787/ws?token=…`. On connect the server
-//! sends a `hello` frame with the current snapshot, then forwards every
+//! Clients connect to `ws://127.0.0.1:8787/ws?token=…&name=…`. On connect the
+//! server sends a `hello` frame with the current snapshot, then forwards every
 //! [`ServerFrame`] broadcast by the view layer. The envelope mirrors
 //! `docs/api-contract.md` §ServerFrame exactly (tagged `kind`, camelCase).
+//!
+//! S8 — session-scoped subscriptions + typing presence:
+//! - Default on connect is **firehose** (all frames) — backward compatible.
+//! - `subscribe {sessionIds}` narrows a connection to session-scoped frames
+//!   (message deltas, typing, etc.) for only those sessions; session-list-level
+//!   frames (session.added/updated/removed, sync.status, …) always flow.
+//! - `typing {sessionId}` is ephemeral: broadcast as `user.typing` to
+//!   subscribers, **never** event-logged.
+
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{
@@ -17,6 +29,34 @@ use serde::{Deserialize, Serialize};
 
 use super::AppState;
 use crate::server::dto::{MessageDto, SessionDto, ToolCallDto};
+
+/// How long (seconds) a `user.typing` indicator is valid before the client
+/// should hide it. The client debounces outbound typing frames at ~3 s; the
+/// server TTL is deliberately a bit longer to cover debounce gaps.
+const TYPING_TTL_SECS: f64 = 5.0;
+
+/// Monotonic counter for anonymous display names (`anon-<N>`).
+static ANON_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn next_anon_id() -> u64 {
+    ANON_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Resolve the display name from the optional `?name=` query value. An empty,
+/// whitespace-only, or over-long name falls back to `anon-<N>`.
+fn resolve_name(raw: Option<String>) -> String {
+    match raw {
+        Some(n) => {
+            let trimmed = n.trim();
+            if trimmed.is_empty() || trimmed.len() > 64 {
+                format!("anon-{}", next_anon_id())
+            } else {
+                trimmed.to_string()
+            }
+        }
+        None => format!("anon-{}", next_anon_id()),
+    }
+}
 
 /// Server→client frames (api-contract.md §ServerFrame). Internally tagged on
 /// `kind`, camelCase fields.
@@ -93,6 +133,15 @@ pub enum ServerFrame {
         message: String,
         timestamp: f64,
     },
+    /// Ephemeral typing indicator (S8). Broadcast to a session's subscribers
+    /// when a connected client sends `typing {sessionId}`. Never event-logged;
+    /// the client hides it once `expiresAt` passes.
+    #[serde(rename = "user.typing", rename_all = "camelCase")]
+    UserTyping {
+        session_id: String,
+        who: String,
+        expires_at: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -101,14 +150,41 @@ pub struct Snapshot {
     pub messages: u64,
 }
 
+/// Client→server frames (S8). Tagged on `kind`, camelCase fields.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ClientFrame {
+    /// Add `sessionIds` to this connection's subscription set. The first
+    /// `subscribe` transitions the connection from firehose to filtered mode.
+    #[serde(rename_all = "camelCase")]
+    Subscribe {
+        #[serde(default)]
+        session_ids: Vec<String>,
+    },
+    /// Remove `sessionIds` from the subscription set. With no `sessionIds`
+    /// (or when the set becomes empty) the connection reverts to firehose.
+    #[serde(rename_all = "camelCase")]
+    Unsubscribe {
+        #[serde(default)]
+        session_ids: Vec<String>,
+    },
+    /// Typing presence — broadcast as `user.typing` to this session's
+    /// subscribers. Ephemeral: never persisted to the event log.
+    #[serde(rename_all = "camelCase")]
+    Typing { session_id: String },
+}
+
 #[derive(Debug, Deserialize)]
 pub struct WsQuery {
     token: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// WS upgrade handler. The Origin check already ran in the auth middleware;
 /// here we validate the `?token=` query param (browsers can't set the
-/// Authorization header on a WS upgrade).
+/// Authorization header on a WS upgrade). The optional `?name=` is the
+/// display name for typing attribution (falls back to `anon-<N>`).
 pub async fn ws_handler(
     State(state): State<AppState>,
     Query(q): Query<WsQuery>,
@@ -122,10 +198,41 @@ pub async fn ws_handler(
     if !ok {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    let who = resolve_name(q.name);
+    ws.on_upgrade(move |socket| handle_socket(socket, state, who))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+/// Decide whether a frame should be delivered to a connection given its
+/// subscription state.
+///
+/// `None` = firehose (default): deliver everything.
+/// `Some(set)` = filtered: session-list-level frames always flow; session-
+/// scoped frames (deltas, typing, logs, …) only for sessions in the set.
+fn should_deliver(frame: &ServerFrame, subscriptions: &Option<HashSet<String>>) -> bool {
+    match subscriptions {
+        None => true,
+        Some(set) => match frame {
+            // Session-list-level — always delivered.
+            ServerFrame::Hello { .. }
+            | ServerFrame::SessionAdded { .. }
+            | ServerFrame::SessionUpdated { .. }
+            | ServerFrame::SessionRemoved { .. }
+            | ServerFrame::SyncStatus { .. }
+            | ServerFrame::CardsChanged => true,
+            // Session-scoped — deliver only if subscribed.
+            ServerFrame::MessageAppended { session_id, .. }
+            | ServerFrame::MessageDelta { session_id, .. }
+            | ServerFrame::MessageToolCall { session_id, .. }
+            | ServerFrame::MessageReasoning { session_id, .. }
+            | ServerFrame::MessageDone { session_id, .. }
+            | ServerFrame::SessionLog { session_id, .. }
+            | ServerFrame::PermissionRequired { session_id, .. }
+            | ServerFrame::UserTyping { session_id, .. } => set.contains(session_id.as_str()),
+        },
+    }
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState, who: String) {
     // Greet with the current snapshot.
     let hello = ServerFrame::Hello {
         snapshot: Snapshot {
@@ -138,13 +245,18 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 
     let mut rx = state.deltas.subscribe();
+    // None = firehose (default); Some(set) = subscription-filtered.
+    let mut subscriptions: Option<HashSet<String>> = None;
+
     loop {
         tokio::select! {
-            // Forward broadcast deltas to the client.
+            // Forward broadcast deltas to the client (filtered by subscription).
             delta = rx.recv() => {
                 match delta {
                     Ok(frame) => {
-                        if send_frame(&mut socket, &frame).await.is_err() {
+                        if should_deliver(&frame, &subscriptions)
+                            && send_frame(&mut socket, &frame).await.is_err()
+                        {
                             break;
                         }
                     }
@@ -153,14 +265,66 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            // Drain client messages; we only care about close/ping liveness.
+            // Drain client messages: handle subscribe/unsubscribe/typing,
+            // ignore everything else (ping/pong liveness is automatic).
             msg = socket.recv() => {
                 match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        handle_client_frame(text.as_str(), &who, &state, &mut subscriptions);
+                    }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}
                     Some(Err(_)) => break,
                 }
             }
+        }
+    }
+}
+
+/// Parse and apply a single inbound client frame.
+fn handle_client_frame(
+    raw: &str,
+    who: &str,
+    state: &AppState,
+    subscriptions: &mut Option<HashSet<String>>,
+) {
+    let Ok(frame) = serde_json::from_str::<ClientFrame>(raw) else {
+        return; // ignore malformed / unknown frames
+    };
+    match frame {
+        ClientFrame::Subscribe { session_ids } => {
+            let set = subscriptions.get_or_insert_with(HashSet::new);
+            for id in session_ids {
+                set.insert(id);
+            }
+        }
+        ClientFrame::Unsubscribe { session_ids } => {
+            if session_ids.is_empty() {
+                // No ids = revert to firehose.
+                *subscriptions = None;
+            } else if let Some(set) = subscriptions {
+                for id in session_ids {
+                    set.remove(&id);
+                }
+                if set.is_empty() {
+                    *subscriptions = None;
+                }
+            }
+        }
+        ClientFrame::Typing { session_id } => {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            let frame = ServerFrame::UserTyping {
+                session_id,
+                who: who.to_string(),
+                expires_at: now + TYPING_TTL_SECS,
+            };
+            // Broadcast via the shared delta channel. Each connection's
+            // `should_deliver` filters it to only this session's subscribers.
+            // Never written to the event log — typing is ephemeral by design.
+            let _ = state.deltas.send(frame);
         }
     }
 }
@@ -252,5 +416,293 @@ mod tests {
         assert_eq!(v["sessionId"], "s1");
         assert_eq!(v["messageId"], 5);
         assert_eq!(v["finishReason"], "end_turn");
+    }
+
+    // ── S8: user.typing serialization ──────────────────────────────────
+
+    #[test]
+    fn user_typing_frame_shape() {
+        let f = ServerFrame::UserTyping {
+            session_id: "s1".into(),
+            who: "alice".into(),
+            expires_at: 1234.5,
+        };
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["kind"], "user.typing");
+        assert_eq!(v["sessionId"], "s1");
+        assert_eq!(v["who"], "alice");
+        assert_eq!(v["expiresAt"], 1234.5);
+    }
+
+    // ── S8: ClientFrame deserialization ────────────────────────────────
+
+    #[test]
+    fn client_frame_subscribe_parses() {
+        let json = r#"{"kind":"subscribe","sessionIds":["s1","s2"]}"#;
+        let f: ClientFrame = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            f,
+            ClientFrame::Subscribe {
+                session_ids: vec!["s1".into(), "s2".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn client_frame_unsubscribe_empty_reverts_to_firehose() {
+        let json = r#"{"kind":"unsubscribe"}"#;
+        let f: ClientFrame = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            f,
+            ClientFrame::Unsubscribe {
+                session_ids: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn client_frame_typing_parses() {
+        let json = r#"{"kind":"typing","sessionId":"s3"}"#;
+        let f: ClientFrame = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            f,
+            ClientFrame::Typing {
+                session_id: "s3".into()
+            }
+        );
+    }
+
+    #[test]
+    fn client_frame_unknown_kind_ignored() {
+        let json = r#"{"kind":"bogus"}"#;
+        assert!(serde_json::from_str::<ClientFrame>(json).is_err());
+    }
+
+    // ── S8: subscription filtering logic ───────────────────────────────
+
+    #[test]
+    fn firehose_delivers_everything() {
+        let subs: Option<HashSet<String>> = None;
+        assert!(should_deliver(
+            &ServerFrame::MessageDelta {
+                session_id: "s1".into(),
+                message_id: 1,
+                text_delta: "x".into(),
+            },
+            &subs,
+        ));
+        assert!(should_deliver(
+            &ServerFrame::UserTyping {
+                session_id: "s1".into(),
+                who: "a".into(),
+                expires_at: 0.0,
+            },
+            &subs,
+        ));
+    }
+
+    #[test]
+    fn session_list_frames_always_delivered_when_filtered() {
+        let subs = Some(HashSet::from(["s1".to_string()]));
+        // These have no sessionId — always delivered.
+        assert!(should_deliver(
+            &ServerFrame::SessionAdded {
+                session: SessionDto {
+                    id: "s2".into(),
+                    hermes_id: "h".into(),
+                    org_id: "o".into(),
+                    owner_id: "u".into(),
+                    context_id: None,
+                    source: "cli".into(),
+                    model: None,
+                    title: None,
+                    started_at: 0.0,
+                    last_activity: 0.0,
+                    message_count: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    archived: false,
+                    pinned: false,
+                    forked_from: None,
+                    fork_point: None,
+                    fork_type: None,
+                    managed: false,
+                    agent: None,
+                    node: None,
+                    liveness: "idle".into(),
+                    parent_session_id: None,
+                    card_id: None,
+                }
+            },
+            &subs,
+        ));
+        assert!(should_deliver(&ServerFrame::CardsChanged, &subs));
+        assert!(should_deliver(
+            &ServerFrame::SyncStatus { connected: true },
+            &subs,
+        ));
+    }
+
+    #[test]
+    fn two_clients_subscription_filtering() {
+        // Simulate the plan's scenario: two clients, one subscribed to s1,
+        // one in firehose mode. A delta for s1 goes to both; a delta for s2
+        // goes to only the firehose client.
+        let firehose: Option<HashSet<String>> = None;
+        let subscribed = Some(HashSet::from(["s1".to_string()]));
+
+        let s1_delta = ServerFrame::MessageDelta {
+            session_id: "s1".into(),
+            message_id: 1,
+            text_delta: "x".into(),
+        };
+        let s2_delta = ServerFrame::MessageDelta {
+            session_id: "s2".into(),
+            message_id: 2,
+            text_delta: "y".into(),
+        };
+        let s1_typing = ServerFrame::UserTyping {
+            session_id: "s1".into(),
+            who: "a".into(),
+            expires_at: 0.0,
+        };
+        let s2_typing = ServerFrame::UserTyping {
+            session_id: "s2".into(),
+            who: "b".into(),
+            expires_at: 0.0,
+        };
+
+        // Firehose client gets everything.
+        assert!(should_deliver(&s1_delta, &firehose));
+        assert!(should_deliver(&s2_delta, &firehose));
+        assert!(should_deliver(&s1_typing, &firehose));
+        assert!(should_deliver(&s2_typing, &firehose));
+
+        // Subscribed client gets only s1-scoped frames.
+        assert!(should_deliver(&s1_delta, &subscribed));
+        assert!(!should_deliver(&s2_delta, &subscribed));
+        assert!(should_deliver(&s1_typing, &subscribed));
+        assert!(!should_deliver(&s2_typing, &subscribed));
+    }
+
+    #[test]
+    fn unsubscribe_all_reverts_to_firehose() {
+        let mut subs: Option<HashSet<String>> =
+            Some(HashSet::from(["s1".to_string(), "s2".to_string()]));
+        let state = make_test_state();
+        // Unsubscribe specific session.
+        handle_client_frame(
+            r#"{"kind":"unsubscribe","sessionIds":["s1"]}"#,
+            "x",
+            &state,
+            &mut subs,
+        );
+        let set = subs.as_ref().unwrap();
+        assert!(set.contains("s2") && !set.contains("s1"));
+
+        // Unsubscribe the last session → reverts to firehose (None).
+        handle_client_frame(
+            r#"{"kind":"unsubscribe","sessionIds":["s2"]}"#,
+            "x",
+            &state,
+            &mut subs,
+        );
+        assert!(subs.is_none());
+
+        // Bare unsubscribe also reverts to firehose.
+        subs = Some(HashSet::from(["s3".to_string()]));
+        handle_client_frame(r#"{"kind":"unsubscribe"}"#, "x", &state, &mut subs);
+        assert!(subs.is_none());
+    }
+
+    #[test]
+    fn typing_broadcast_produces_frame_with_ttl() {
+        let mut subs: Option<HashSet<String>> = None;
+        let state = make_test_state();
+
+        // Subscribe BEFORE the broadcast so the receiver catches the frame.
+        let mut rx = state.deltas.subscribe();
+        let before = now_secs();
+        handle_client_frame(
+            r#"{"kind":"typing","sessionId":"s9"}"#,
+            "alice",
+            &state,
+            &mut subs,
+        );
+
+        // The frame was broadcast on the delta channel — receive it and
+        // verify the shape + that expiresAt is ~5s in the future.
+        let frame = rx.try_recv().expect("typing frame was not broadcast");
+        match frame {
+            ServerFrame::UserTyping {
+                session_id,
+                who,
+                expires_at,
+            } => {
+                assert_eq!(session_id, "s9");
+                assert_eq!(who, "alice");
+                assert!(
+                    expires_at >= before + TYPING_TTL_SECS - 0.5,
+                    "expiresAt should be ~{TYPING_TTL_SECS}s in the future, got {expires_at}"
+                );
+                assert!(expires_at <= now_secs() + TYPING_TTL_SECS + 0.5);
+            }
+            other => panic!("expected UserTyping, got {other:?}"),
+        }
+
+        // Crucially: typing must NOT mutate the subscription set.
+        assert!(subs.is_none());
+    }
+
+    // ── helpers ─────────────────────────────────────────────────────────
+
+    fn now_secs() -> f64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+    }
+
+    /// A minimal AppState whose only useful field is `deltas` (a broadcast
+    /// channel) — enough to exercise the typing-broadcast path.
+    fn make_test_state() -> AppState {
+        use crate::server::{ImportState, IMPORT_DONE};
+        use crate::{irc::IrcBus, node::NodeRegistry, proxy::ProxyTable};
+        use std::sync::{atomic::AtomicBool, Arc};
+        use tokio::sync::RwLock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = std::sync::Arc::new(crate::log::Log::open(&dir.path().join("l.redb")).unwrap());
+
+        AppState {
+            views: Arc::new(RwLock::new(crate::views::ViewManager::new())),
+            search: Arc::new(RwLock::new(
+                crate::search::SearchIndex::open(&dir.path().join("idx")).unwrap(),
+            )),
+            token: Arc::new("t".into()),
+            import_state: ImportState(Arc::new(std::sync::atomic::AtomicU8::new(IMPORT_DONE))),
+            hermes_profile: Arc::new("p".into()),
+            deltas: tokio::sync::broadcast::channel(64).0,
+            snapshot_sessions: 0,
+            snapshot_messages: 0,
+            log: log.clone(),
+            bridge: Arc::new(crate::server::bridge_mgr::BridgeManager::with_factory(
+                log,
+                crate::server::test_support::mock_factory(),
+            )),
+            sync_connected: Arc::new(AtomicBool::new(true)),
+            irc: IrcBus::new(),
+            nodes: NodeRegistry::new(),
+            envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
+            proxy: ProxyTable::new(),
+            vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
+                dir.path().join("v"),
+                crate::vault::JjMode::Disabled,
+            )),
+            state_db: None,
+            projects: Arc::new(crate::projects::ProjectStore::new(dir.path().join("p"))),
+            repos: Arc::new(crate::repos::RepoStore::new(dir.path().join("r"), "r")),
+        }
     }
 }

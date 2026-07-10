@@ -3,11 +3,15 @@
 //! The `/ws` delta stream lives in [`crate::server::ws`]. This module owns the
 //! router, shared state, the auth middleware, and the read-only REST handlers
 //! that back the UI's session list, transcript view, and search.
-
-pub mod agents;
 pub mod bridge_mgr;
 pub mod dto;
+pub mod envoy_conn;
 pub mod ws;
+
+// Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
+// for Hermes profiles + CLI harnesses is the envoy's job. Re-exported so
+// existing `server::agents::…` call sites keep working unchanged.
+pub use olympus_envoy::discovery as agents;
 
 #[cfg(test)]
 pub mod test_support;
@@ -33,6 +37,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::bridge::{AgentCommand, AgentEvent};
 use crate::log::Log;
 use crate::search::SearchIndex;
+use crate::state_db_reader::StateDbReader;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
 use dto::{
@@ -94,10 +99,21 @@ pub struct AppState {
     pub irc: crate::irc::IrcBus,
     /// Fleet node registry — tracks connected envoys (UDS) + the local node.
     pub nodes: crate::node::NodeRegistry,
+    /// Remote envoy connections (UDS or iroh write halves for RemoteRuntime).
+    pub envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+    /// Hall's iroh node id (public key, z-base-32). `None` when iroh is not
+    /// enabled (no listener bound). Exposed via GET /api/nodes/hall-identity
+    /// so the installer can fetch it without scraping logs (ADR 0008 §1 S7).
+    pub hall_iroh_id: Option<Arc<String>>,
     /// Reverse proxy routing table — slug → backend target.
     pub proxy: crate::proxy::ProxyTable,
     /// Markdown-first knowledge vault storage (ADR 0004).
     pub vaults: Arc<crate::vault::VaultStore>,
+    /// Read-only connection to the Hermes `state.db` for on-demand message
+    /// reads and full-text search (ADR 0009 lazy-history). `None` when no
+    /// state.db exists (fresh install). Replaces the 1.4 GB in-memory message
+    /// mirror + tantivy index.
+    pub state_db: Option<Arc<StateDbReader>>,
     /// Project (context container) storage — dir/manifest/symlink.
     pub projects: Arc<crate::projects::ProjectStore>,
     /// Managed repo store — clone/sync/attach jj workspaces.
@@ -143,6 +159,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/setup", get(get_setup).put(put_setup))
         .route("/api/registry", get(list_registry).put(put_registry_entry))
         .route("/api/nodes", get(list_nodes))
+        .route("/api/nodes/hall-identity", get(hall_identity))
         .route("/api/nodes/{id}/agents", get(node_agents))
         .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
         .route("/api/vaults", get(list_vaults).post(create_vault))
@@ -425,7 +442,7 @@ async fn tail_events(State(state): State<AppState>, Query(q): Query<EventsQuery>
             tracing::error!(error = %e, "tail_events read failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "log_read_failed", "message": format!("{e}") })),
+                Json(json!({ "error": "log_read_failed", "message": format!("{e:#}") })),
             )
                 .into_response()
         }
@@ -534,7 +551,7 @@ async fn put_setup(State(state): State<AppState>, Json(body): Json<PutSetupBody>
     if let Err(e) = state.log.append(&event) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+            Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
         )
             .into_response();
     }
@@ -614,7 +631,7 @@ async fn put_registry_entry(
     if let Err(e) = state.log.append(&event) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+            Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
         )
             .into_response();
     }
@@ -792,8 +809,35 @@ async fn get_messages(
     Path(id): Path<String>,
     Query(q): Query<MessagesQuery>,
 ) -> impl IntoResponse {
-    let views = state.views.read().await;
     let limit = q.limit.unwrap_or(50);
+
+    // Lazy history (ADR 0009): for non-managed (observed) sessions, read
+    // messages on-demand from the Hermes state.db instead of the in-memory
+    // MessageView. Managed (olympus/acp) sessions still use the in-memory
+    // view because their messages are live (streamed from the bridge).
+    if let Some(ref reader) = state.state_db {
+        let views = state.views.read().await;
+        let is_managed = views.sessions.is_managed(&id);
+        drop(views);
+        if !is_managed {
+            match reader.recent_messages(&id, limit) {
+                Ok(rows) => {
+                    let messages: Vec<MessageDto> = rows
+                        .iter()
+                        .map(|row| MessageDto::from_row(&id, row))
+                        .collect();
+                    return Json(
+                        json!({ "messages": messages, "nextCursor": serde_json::Value::Null }),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, session = %id, "state.db message read failed, falling back to views");
+                }
+            }
+        }
+    }
+
+    let views = state.views.read().await;
     let messages: Vec<MessageDto> = views
         .messages
         .recent(&id, limit)
@@ -908,6 +952,14 @@ async fn refresh_node_agents(State(state): State<AppState>, Path(id): Path<Strin
 async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {
     let nodes = state.nodes.list().await;
     Json(json!({ "nodes": nodes }))
+}
+
+/// GET /api/nodes/hall-identity — returns the hall's iroh node id (public key,
+/// z-base-32) so the installer can fetch it without scraping boot logs (ADR
+/// 0008 §1 S7). Returns `{"irohNodeId": null}` when iroh is not enabled.
+async fn hall_identity(State(state): State<AppState>) -> impl IntoResponse {
+    let id = state.hall_iroh_id.as_ref().map(|s| s.as_str().to_string());
+    Json(json!({ "irohNodeId": id }))
 }
 
 async fn list_vaults(State(state): State<AppState>) -> Response {
@@ -1504,7 +1556,7 @@ async fn create_subsession(
         Err(e) => {
             tracing::error!(error = %e, parent = %id, "create_subsession create_draft failed");
             return (StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "bridge_error", "message": format!("Failed to create subsession: {e}") })))
+                Json(json!({ "error": "bridge_error", "message": format!("Failed to create subsession: {e:#}") })))
                 .into_response();
         }
     };
@@ -1998,7 +2050,7 @@ async fn create_session(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "bridge_error",
-                    "message": format!("Failed to create session: {e}"),
+                    "message": format!("Failed to create session: {e:#}"),
                 })),
             )
                 .into_response()
@@ -2054,7 +2106,7 @@ async fn patch_session(
     if let Err(e) = state.log.append(&event) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "log_error", "message": format!("{e}") })),
+            Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
         )
             .into_response();
     }
@@ -2133,7 +2185,7 @@ async fn fork_session(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "bridge_error",
-                    "message": format!("Failed to fork agent session: {e}"),
+                    "message": format!("Failed to fork agent session: {e:#}"),
                 })),
             )
                 .into_response();
@@ -2374,6 +2426,7 @@ async fn post_message(
     let deltas = state.deltas.clone();
     let bridge = state.bridge.clone();
     let views = state.views.clone();
+    let envoy_conns = state.envoy_conns.clone();
     // Bind the agent to its session space (working directory). The space was
     // materialized eagerly at create time; derive its path here so the lazily
     // spawned runtime runs scoped to it, not the host cwd.
@@ -2413,7 +2466,7 @@ async fn post_message(
                 Ok(overlay) => (overlay.mcp_servers, overlay.env, overlay.warnings),
                 Err(e) => {
                     tracing::warn!(error = %e, session = %id, "adapter materialize failed; spawning with empty setup");
-                    (vec![], vec![], vec![format!("adapter failed: {e}")])
+                    (vec![], vec![], vec![format!("adapter failed: {e:#}")])
                 }
             }
         } else {
@@ -2490,55 +2543,134 @@ async fn post_message(
 
         // Lazily ensure a runtime (spawn for a fresh draft, resume by hermes_id
         // after a restart). This is the slow part — now off the request path.
-        let (runtime, captured_hermes_id) = match bridge
-            .ensure_runtime(&session_id, &spec, resume_hermes.as_deref())
-            .await
-        {
-            Ok(pair) => {
-                emit_log("info", "bridge", "Agent runtime ready");
-                pair
-            }
-            Err(e) => {
-                tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
-                // PERSIST the error as a system message so the user sees it in
-                // the transcript — the old code only broadcast a transient WS
-                // frame, so if the user wasn't watching it vanished silently.
-                let err_msg = format!("⚠ Failed to start agent: {e}");
-                let hid = resume_hermes.clone().unwrap_or_default();
-                if let Ok(event) = bridge.append_system_message(
-                    &session_id,
-                    &hid,
-                    assistant_seed_id,
-                    &err_msg,
-                    Some("error"),
-                ) {
-                    {
-                        let mut v = views.write().await;
-                        v.apply(&event);
-                    }
-                    let _ = deltas.send(ServerFrame::MessageAppended {
-                        session_id: session_id.clone(),
-                        message: crate::server::dto::MessageDto {
-                            message_id: assistant_seed_id,
-                            session_id: session_id.clone(),
-                            role: "system".into(),
-                            content: Some(err_msg.clone()),
-                            tool_name: None,
-                            tool_calls: None,
-                            reasoning: None,
-                            timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
-                            token_count: None,
-                            finish_reason: Some("error".into()),
-                        },
-                    });
+        //
+        // ADR 0008 S6 cutover: route to a connected envoy (RemoteRuntime) when
+        // the session's node has an active UDS connection. This replaces the
+        // in-process bridge for production — the local node is now
+        // olympus-envoy@1 over UDS, not an in-process pseudo-envoy. Tests that
+        // build AppState with no connected envoys fall back to the in-process
+        // bridge (mock factory), so existing tests keep working unchanged.
+        let node_id = spec.node.clone().unwrap_or_default();
+        // If the session has no explicit node, route to the first connected
+        // envoy (default for the single-operator case). Sessions with an
+        // explicit node route to that specific envoy.
+        let route_node = if node_id.is_empty() {
+            envoy_conns.first_node().await.unwrap_or_default()
+        } else {
+            node_id
+        };
+        let conn = envoy_conns.get(&route_node).await;
+        let (runtime, captured_hermes_id) = if let Some(conn) = conn {
+            // Route to the connected envoy via RemoteRuntime.
+            let rt = crate::server::envoy_conn::RemoteRuntime::arc_with_spec(
+                conn,
+                session_id.clone(),
+                spec.clone(),
+            );
+            emit_log(
+                "info",
+                "bridge",
+                &format!("Routing to envoy {}…", route_node),
+            );
+            match rt.start(resume_hermes.as_deref()).await {
+                Ok(()) => {
+                    let hid = rt.hermes_session_id().await.unwrap_or_default();
+                    emit_log("info", "bridge", "Agent runtime ready (envoy)");
+                    (rt, hid)
                 }
-                let _ = deltas.send(ServerFrame::MessageDone {
-                    session_id: session_id.clone(),
-                    message_id: assistant_seed_id,
-                    finish_reason: Some(format!("error: failed to start agent: {e}")),
-                });
-                bridge.clear_in_flight(&session_id).await;
-                return;
+                Err(e) => {
+                    tracing::error!(error = %e, session = %session_id, "envoy ensure_runtime failed");
+                    let err_msg = format!("⚠ Failed to start agent: {e:#}");
+                    let hid = resume_hermes.clone().unwrap_or_default();
+                    if let Ok(event) = bridge.append_system_message(
+                        &session_id,
+                        &hid,
+                        assistant_seed_id,
+                        &err_msg,
+                        Some("error"),
+                    ) {
+                        {
+                            let mut v = views.write().await;
+                            v.apply(&event);
+                        }
+                        let _ = deltas.send(ServerFrame::MessageAppended {
+                            session_id: session_id.clone(),
+                            message: crate::server::dto::MessageDto {
+                                message_id: assistant_seed_id,
+                                session_id: session_id.clone(),
+                                role: "system".into(),
+                                content: Some(err_msg.clone()),
+                                tool_name: None,
+                                tool_calls: None,
+                                reasoning: None,
+                                timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+                                token_count: None,
+                                finish_reason: Some("error".into()),
+                            },
+                        });
+                    }
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_seed_id,
+                        finish_reason: Some(format!("error: failed to start agent: {e:#}")),
+                    });
+                    bridge.clear_in_flight(&session_id).await;
+                    return;
+                }
+            }
+        } else {
+            // No connected envoy for this node — fall back to the in-process
+            // bridge (tests, or a legacy deployment without an envoy service).
+            match bridge
+                .ensure_runtime(&session_id, &spec, resume_hermes.as_deref())
+                .await
+            {
+                Ok(pair) => {
+                    emit_log("info", "bridge", "Agent runtime ready");
+                    pair
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, session = %session_id, "ensure_runtime failed");
+                    // PERSIST the error as a system message so the user sees it in
+                    // the transcript — the old code only broadcast a transient WS
+                    // frame, so if the user wasn't watching it vanished silently.
+                    let err_msg = format!("⚠ Failed to start agent: {e:#}");
+                    let hid = resume_hermes.clone().unwrap_or_default();
+                    if let Ok(event) = bridge.append_system_message(
+                        &session_id,
+                        &hid,
+                        assistant_seed_id,
+                        &err_msg,
+                        Some("error"),
+                    ) {
+                        {
+                            let mut v = views.write().await;
+                            v.apply(&event);
+                        }
+                        let _ = deltas.send(ServerFrame::MessageAppended {
+                            session_id: session_id.clone(),
+                            message: crate::server::dto::MessageDto {
+                                message_id: assistant_seed_id,
+                                session_id: session_id.clone(),
+                                role: "system".into(),
+                                content: Some(err_msg.clone()),
+                                tool_name: None,
+                                tool_calls: None,
+                                reasoning: None,
+                                timestamp: crate::server::bridge_mgr::chrono_epoch_pub(),
+                                token_count: None,
+                                finish_reason: Some("error".into()),
+                            },
+                        });
+                    }
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_seed_id,
+                        finish_reason: Some(format!("error: failed to start agent: {e:#}")),
+                    });
+                    bridge.clear_in_flight(&session_id).await;
+                    return;
+                }
             }
         };
 
@@ -2593,11 +2725,11 @@ async fn post_message(
             .await
         {
             tracing::error!(error = %e, session = %session_id, "prompt send failed");
-            emit_log("error", "bridge", &format!("Prompt send failed: {e}"));
+            emit_log("error", "bridge", &format!("Prompt send failed: {e:#}"));
             let _ = deltas.send(ServerFrame::MessageDone {
                 session_id: session_id.clone(),
                 message_id: assistant_seed_id,
-                finish_reason: Some(format!("error: {e}")),
+                finish_reason: Some(format!("error: {e:#}")),
             });
             bridge.clear_in_flight(&session_id).await;
             return;
@@ -2610,6 +2742,7 @@ async fn post_message(
         let mut suppressing_steer_ack = false;
 
         while let Some(event) = stream.next().await {
+            #[allow(unreachable_patterns)]
             match event {
                 AgentEvent::Text(chunk) => {
                     if suppressing_steer_ack {
@@ -2648,7 +2781,7 @@ async fn post_message(
                     // id is missing (some adapters omit it on updates).
                     let is_update = args.is_empty() && !tool_calls_acc.is_empty() && {
                         // An update either carries a known id or has no args.
-                        id.as_deref().map_or(true, |i| {
+                        id.as_deref().is_none_or(|i| {
                             tool_calls_acc
                                 .iter()
                                 .any(|tc| tc.get("id").and_then(|v| v.as_str()) == Some(i))
@@ -2828,8 +2961,8 @@ async fn post_message(
                     terminal_event_seen = true;
                     tracing::warn!(error = %e, session = %session_id, "agent error event");
                     emit_log("error", "agent", &e);
-                    let content = format!("⚠ agent error: {e}");
-                    let finish_reason = format!("error: {e}");
+                    let content = format!("⚠ agent error: {e:#}");
+                    let finish_reason = format!("error: {e:#}");
                     if let Ok(event) = bridge.append_system_message(
                         &session_id,
                         &hermes_id_clone,
@@ -3434,11 +3567,10 @@ mod tests {
         let mut views = ViewManager::new();
         views.replay(&log).unwrap();
 
-        let mut search = SearchIndex::open(&dir.path().join("idx")).unwrap();
-        search.build_from_log(&log).unwrap();
-
         let (tx, _rx) = broadcast::channel(64);
         let log_arc = Arc::new(log);
+        let mut search = SearchIndex::from_log(log_arc.clone());
+        search.build_from_log(&log_arc).unwrap();
         let state = AppState {
             views: Arc::new(RwLock::new(views)),
             search: Arc::new(RwLock::new(search)),
@@ -3456,11 +3588,14 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
+            envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
             proxy: crate::proxy::ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),
                 crate::vault::JjMode::Disabled,
             )),
+            state_db: None,
             projects: Arc::new(crate::projects::ProjectStore::new(
                 dir.path().join("default"),
             )),
@@ -3557,11 +3692,14 @@ mod tests {
             sync_connected: Arc::new(AtomicBool::new(true)),
             irc: crate::irc::IrcBus::new(),
             nodes: crate::node::NodeRegistry::new(),
+            envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_iroh_id: None,
             proxy: crate::proxy::ProxyTable::new(),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("default"),
                 crate::vault::JjMode::Disabled,
             )),
+            state_db: None,
             projects: Arc::new(crate::projects::ProjectStore::new(
                 dir.path().join("default"),
             )),

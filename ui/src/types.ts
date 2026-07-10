@@ -129,16 +129,13 @@ export type ServerFrame =
   | { kind: "session.log"; sessionId: string; level: "info" | "warn" | "error"; source: string; message: string; timestamp: number }
   | { kind: "sync.status"; connected: boolean }
   | { kind: "cards.changed" }
-  | {
-      kind: "permission.required";
-      sessionId: string;
-      toolCall: string;
-      options: Array<{ optionId: string; name: string; kind: string }>;
-    };
+  | { kind: "permission.required"; sessionId: string; toolCall: string; options: Array<{ optionId: string; name: string; kind: string }> }
+  | { kind: "user.typing"; sessionId: string; who: string; expiresAt: number };
 
 export type ClientFrame =
-  | { kind: "subscribe"; sessionId: string }
-  | { kind: "unsubscribe"; sessionId: string };
+  | { kind: "subscribe"; sessionIds: string[] }
+  | { kind: "unsubscribe"; sessionIds: string[] }
+  | { kind: "typing"; sessionId: string };
 
 // API response shapes
 export interface SessionListResponse {
