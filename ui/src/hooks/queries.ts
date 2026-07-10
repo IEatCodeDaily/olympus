@@ -12,6 +12,7 @@ import {
   fetchVaults,
   fetchVaultNotes,
   fetchVaultNote,
+  fetchVaultDocuments,
   updateSession,
   onFrame,
   connectWs,
@@ -31,6 +32,7 @@ export const qk = {
   vaultNotes: (vaultId: string) => ["vaultNotes", vaultId] as const,
   vaultNote: (vaultId: string, path: string) =>
     ["vaultNote", vaultId, path] as const,
+  vaultDocuments: (vaultId: string) => ["vaultDocuments", vaultId] as const,
 };
 
 /** Sessions list with auto-refetch. */
@@ -161,6 +163,15 @@ export function useVaultNotes(vaultId: string | null) {
   return useQuery({
     queryKey: vaultId ? qk.vaultNotes(vaultId) : ["vaultNotes", "none"],
     queryFn: () => fetchVaultNotes(vaultId!),
+    enabled: !!vaultId,
+    staleTime: 10_000,
+  });
+}
+
+export function useVaultDocuments(vaultId: string | null) {
+  return useQuery({
+    queryKey: vaultId ? qk.vaultDocuments(vaultId) : ["vaultDocuments", "none"],
+    queryFn: () => fetchVaultDocuments(vaultId!),
     enabled: !!vaultId,
     staleTime: 10_000,
   });

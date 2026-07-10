@@ -7,11 +7,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
@@ -35,6 +37,53 @@ pub struct VaultSummary {
     pub name: String,
     pub note_count: usize,
     pub updated_at: f64,
+    pub backend: Option<VaultBackend>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum VaultBackend {
+    #[serde(rename_all = "camelCase")]
+    Github {
+        repository: String,
+        branch: String,
+        sync_engine: VaultSyncEngine,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VaultSyncEngine {
+    #[serde(rename = "jj-git")]
+    JjGit,
+}
+
+impl VaultBackend {
+    pub fn github(repository: &str, branch: &str) -> Result<Self> {
+        let backend = Self::Github {
+            repository: repository.to_string(),
+            branch: branch.to_string(),
+            sync_engine: VaultSyncEngine::JjGit,
+        };
+        backend.validate()?;
+        Ok(backend)
+    }
+
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::Github {
+                repository, branch, ..
+            } => {
+                validate_github_repository(repository)?;
+                validate_branch(branch)
+            }
+        }
+    }
+
+    fn remote_url(&self) -> String {
+        match self {
+            Self::Github { repository, .. } => format!("https://github.com/{repository}.git"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,10 +113,19 @@ pub struct NoteDocument {
     pub cid: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteIndexEntry {
+    pub path: String,
+    pub title: String,
+    pub updated_at: f64,
+    pub frontmatter: Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteNote {
     pub markdown: Option<String>,
     pub new_path: Option<String>,
+    pub create_only: bool,
 }
 
 impl VaultStore {
@@ -99,13 +157,24 @@ impl VaultStore {
             }
             let id = entry.file_name().to_string_lossy().to_string();
             let path = entry.path();
-            let name = read_vault_name(&path).unwrap_or_else(|| id.clone());
+            let metadata = read_vault_metadata(&path);
+            let name = metadata
+                .as_ref()
+                .and_then(|value| value.get("name"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| id.clone());
+            let backend = metadata
+                .as_ref()
+                .and_then(|value| value.get("backend"))
+                .and_then(|value| serde_json::from_value(value.clone()).ok());
             let (note_count, updated_at) = vault_stats(&path)?;
             vaults.push(VaultSummary {
                 id,
                 name,
                 note_count,
                 updated_at,
+                backend,
             });
         }
         vaults.sort_by(|a, b| {
@@ -117,32 +186,38 @@ impl VaultStore {
         Ok(vaults)
     }
 
-    pub fn create_vault(&self, name: &str) -> Result<VaultSummary> {
+    pub fn create_vault(&self, name: &str, backend: VaultBackend) -> Result<VaultSummary> {
         let name = name.trim();
         if name.is_empty() {
             bail!("vault name is required");
         }
+        backend.validate()?;
         fs::create_dir_all(&self.root)
             .with_context(|| format!("creating vault root {}", self.root.display()))?;
 
         let slug = slugify(name);
-        let id = unique_vault_id(&self.root, &slug);
-        let path = self.vault_path(&id);
-        fs::create_dir_all(&path).with_context(|| format!("creating vault {}", path.display()))?;
-        fs::create_dir_all(path.join(".vault"))?;
-        fs::write(
-            path.join(".vault").join("metadata.json"),
-            json!({ "name": name }).to_string(),
-        )?;
-
-        self.jj_init(&path)?;
-        self.jj_snapshot(&path, "vault: create")?;
+        let (id, path) = create_unique_vault_dir(&self.root, &slug)?;
+        let setup = (|| -> Result<()> {
+            fs::create_dir_all(path.join(".vault"))?;
+            fs::write(
+                path.join(".vault").join("metadata.json"),
+                serde_json::to_vec_pretty(&json!({ "name": name, "backend": backend }))?,
+            )?;
+            self.jj_init(&path)?;
+            self.configure_backend(&path, &backend)?;
+            self.jj_snapshot(&path, "vault: create")
+        })();
+        if let Err(err) = setup {
+            let _ = fs::remove_dir_all(&path);
+            return Err(err);
+        }
 
         Ok(VaultSummary {
             id,
             name: name.to_string(),
             note_count: 0,
             updated_at: now_secs(),
+            backend: Some(backend),
         })
     }
 
@@ -154,9 +229,29 @@ impl VaultStore {
         Ok(build_tree(notes))
     }
 
+    pub fn list_documents(&self, vault_id: &str) -> Result<Vec<NoteIndexEntry>> {
+        let vault = self.existing_vault_path(vault_id)?;
+        let mut documents = Vec::new();
+        for file in markdown_files(&vault)? {
+            let path = safe_to_string(file.strip_prefix(&vault)?);
+            let markdown = fs::read_to_string(&file)
+                .with_context(|| format!("reading note {}", file.display()))?;
+            let document = note_document(path.clone(), markdown);
+            documents.push(NoteIndexEntry {
+                path,
+                title: document.title,
+                updated_at: modified_secs(&file).unwrap_or(0.0),
+                frontmatter: document.frontmatter,
+            });
+        }
+        documents.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(documents)
+    }
+
     pub fn read_note(&self, vault_id: &str, path: &str) -> Result<NoteDocument> {
         let vault = self.existing_vault_path(vault_id)?;
         let safe = sanitize_note_path(path)?;
+        reject_symlink_components(&vault, &safe)?;
         let full = vault.join(&safe);
         if !full.exists() {
             bail!("note not found");
@@ -173,8 +268,18 @@ impl VaultStore {
             Some(p) if !p.trim().is_empty() => sanitize_note_path(p)?,
             _ => old_rel.clone(),
         };
+        reject_symlink_components(&vault, &old_rel)?;
+        reject_symlink_components(&vault, &new_rel)?;
         let old_full = vault.join(&old_rel);
         let new_full = vault.join(&new_rel);
+
+        if write.create_only && (old_full.exists() || new_full.exists()) {
+            bail!("note already exists");
+        }
+
+        if new_rel != old_rel && new_full.exists() {
+            bail!("note already exists at rename target");
+        }
 
         if new_rel != old_rel && old_full.exists() {
             if let Some(parent) = new_full.parent() {
@@ -195,22 +300,52 @@ impl VaultStore {
             if let Some(parent) = new_full.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(&new_full, markdown)
-                .with_context(|| format!("writing note {}", new_full.display()))?;
+            if write.create_only {
+                let mut file = match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&new_full)
+                {
+                    Ok(file) => file,
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                        bail!("note already exists");
+                    }
+                    Err(err) => {
+                        return Err(err)
+                            .with_context(|| format!("creating note {}", new_full.display()))
+                    }
+                };
+                if let Err(err) = file.write_all(markdown.as_bytes()) {
+                    drop(file);
+                    let _ = fs::remove_file(&new_full);
+                    return Err(err)
+                        .with_context(|| format!("writing note {}", new_full.display()));
+                }
+            } else {
+                fs::write(&new_full, markdown)
+                    .with_context(|| format!("writing note {}", new_full.display()))?;
+            }
         } else if !new_full.exists() {
             bail!("markdown is required for a new note");
         }
 
-        self.jj_snapshot(
+        if let Err(err) = self.jj_snapshot(
             &vault,
             &format!("vault: write {}", safe_to_string(&new_rel)),
-        )?;
+        ) {
+            if write.create_only {
+                let _ = fs::remove_file(&new_full);
+                prune_empty_dirs(&vault, new_full.parent());
+            }
+            return Err(err);
+        }
         self.read_note(vault_id, &safe_to_string(&new_rel))
     }
 
     pub fn delete_note(&self, vault_id: &str, path: &str) -> Result<()> {
         let vault = self.existing_vault_path(vault_id)?;
         let rel = sanitize_note_path(path)?;
+        reject_symlink_components(&vault, &rel)?;
         let full = vault.join(&rel);
         if !full.exists() {
             bail!("note not found");
@@ -236,8 +371,11 @@ impl VaultStore {
             bail!("invalid vault id");
         }
         let path = self.vault_path(id);
-        if !path.is_dir() {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
             bail!("vault not found");
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!("invalid vault path");
         }
         Ok(path)
     }
@@ -254,6 +392,18 @@ impl VaultStore {
             return Ok(());
         }
         run_jj(path, &["describe", "-m", message], "jj describe")
+    }
+
+    fn configure_backend(&self, path: &Path, backend: &VaultBackend) -> Result<()> {
+        if self.jj_mode == JjMode::Disabled {
+            return Ok(());
+        }
+        let url = backend.remote_url();
+        run_jj(
+            path,
+            &["git", "remote", "add", "origin", &url],
+            "jj git remote add",
+        )
     }
 }
 
@@ -274,10 +424,40 @@ fn run_jj(path: &Path, args: &[&str], label: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_vault_name(path: &Path) -> Option<String> {
+fn read_vault_metadata(path: &Path) -> Option<Value> {
     let bytes = fs::read(path.join(".vault").join("metadata.json")).ok()?;
-    let v: Value = serde_json::from_slice(&bytes).ok()?;
-    v.get("name")?.as_str().map(ToOwned::to_owned)
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn validate_github_repository(repository: &str) -> Result<()> {
+    let mut parts = repository.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let name = parts.next().unwrap_or_default();
+    if owner.is_empty()
+        || name.is_empty()
+        || parts.next().is_some()
+        || !owner
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        bail!("GitHub repository must use owner/repository format");
+    }
+    Ok(())
+}
+
+fn validate_branch(branch: &str) -> Result<()> {
+    if branch.is_empty()
+        || branch.starts_with('.')
+        || branch.ends_with('.')
+        || branch.contains("..")
+        || branch.contains([' ', '~', '^', ':', '?', '*', '[', '\\'])
+    {
+        bail!("invalid Git branch");
+    }
+    Ok(())
 }
 
 fn vault_stats(path: &Path) -> Result<(usize, f64)> {
@@ -512,6 +692,27 @@ fn sanitize_note_path(path: &str) -> Result<PathBuf> {
     Ok(out)
 }
 
+fn reject_symlink_components(root: &Path, relative: &Path) -> Result<()> {
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            bail!("invalid note path");
+        };
+        current.push(part);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!("invalid note path: symbolic links are not allowed");
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => {
+                return Err(err).with_context(|| format!("inspecting {}", current.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
 fn safe_to_string(path: &Path) -> String {
     path.components()
         .filter_map(|c| match c {
@@ -542,14 +743,18 @@ fn slugify(name: &str) -> String {
     }
 }
 
-fn unique_vault_id(root: &Path, slug: &str) -> String {
-    if !root.join(slug).exists() {
-        return slug.to_string();
-    }
+fn create_unique_vault_dir(root: &Path, slug: &str) -> Result<(String, PathBuf)> {
+    let mut id = slug.to_string();
     loop {
-        let id = format!("{}-{}", slug, &Uuid::new_v4().to_string()[..8]);
-        if !root.join(&id).exists() {
-            return id;
+        let path = root.join(&id);
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok((id, path)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                id = format!("{}-{}", slug, &Uuid::new_v4().to_string()[..8]);
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("creating vault {}", path.display()))
+            }
         }
     }
 }
@@ -594,6 +799,10 @@ pub fn bad_request(err: &anyhow::Error) -> bool {
         || msg.contains("required")
         || msg.contains("must end")
         || msg.contains("name is required")
+}
+
+pub fn conflict(err: &anyhow::Error) -> bool {
+    err.to_string().contains("already exists")
 }
 
 // ── Graph data ──────────────────────────────────────
@@ -830,8 +1039,12 @@ mod tests {
     fn create_write_read_and_tree_roundtrip_without_jj() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
-        let vault = store.create_vault("Engineering Notes").unwrap();
+        let backend = VaultBackend::github("IEatCodeDaily/engineering-notes", "main").unwrap();
+        let vault = store
+            .create_vault("Engineering Notes", backend.clone())
+            .unwrap();
         assert_eq!(vault.id, "engineering-notes");
+        assert_eq!(vault.backend, Some(backend));
 
         let doc = store
             .write_note(
@@ -843,6 +1056,7 @@ mod tests {
                             .into(),
                     ),
                     new_path: None,
+                    create_only: false,
                 },
             )
             .unwrap();
@@ -858,13 +1072,144 @@ mod tests {
         assert_eq!(tree[0].kind, NoteTreeEntryKind::Folder);
         assert_eq!(tree[0].path, "runbooks");
         assert_eq!(tree[0].children[0].path, "runbooks/boot.md");
+
+        let listed = store.list_vaults().unwrap();
+        assert_eq!(listed[0].backend, vault.backend);
+
+        let documents = store.list_documents(&vault.id).unwrap();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].path, "runbooks/boot.md");
+        assert_eq!(documents[0].frontmatter["title"], "Boot Runbook");
+
+        let duplicate = store.write_note(
+            &vault.id,
+            "runbooks/boot.md",
+            WriteNote {
+                markdown: Some("# Replacement".into()),
+                new_path: None,
+                create_only: true,
+            },
+        );
+        assert!(duplicate.is_err());
+    }
+
+    #[test]
+    fn concurrent_create_only_writes_allow_exactly_one_creator() {
+        use std::sync::{Arc, Barrier};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(store(&tmp));
+        let vault = store
+            .create_vault(
+                "Notes",
+                VaultBackend::github("IEatCodeDaily/notes", "main").unwrap(),
+            )
+            .unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = (0..2)
+            .map(|index| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                let vault_id = vault.id.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.write_note(
+                        &vault_id,
+                        "same.md",
+                        WriteNote {
+                            markdown: Some(format!("# Writer {index}\n")),
+                            new_path: None,
+                            create_only: true,
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    }
+
+    #[test]
+    fn concurrent_vault_creation_reserves_distinct_directories() {
+        use std::sync::{Arc, Barrier};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(store(&tmp));
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = (0..2)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.create_vault(
+                        "Shared Name",
+                        VaultBackend::github("IEatCodeDaily/shared", "main").unwrap(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let vaults = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_ne!(vaults[0].id, vaults[1].id);
+        assert!(store.vault_path(&vaults[0].id).is_dir());
+        assert!(store.vault_path(&vaults[1].id).is_dir());
+    }
+
+    #[test]
+    fn github_backend_requires_canonical_repository_and_branch() {
+        assert!(VaultBackend::github("IEatCodeDaily/olympus", "main").is_ok());
+        assert!(VaultBackend::github("https://github.com/IEatCodeDaily/olympus", "main").is_err());
+        assert!(VaultBackend::github("missing-owner", "main").is_err());
+        assert!(VaultBackend::github("owner/repo", "").is_err());
+        assert!(VaultBackend::github("owner/repo", "../main").is_err());
+    }
+
+    #[test]
+    fn create_vault_revalidates_deserialized_backend_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let invalid = VaultBackend::Github {
+            repository: "https://github.com/IEatCodeDaily/olympus".into(),
+            branch: "main".into(),
+            sync_engine: VaultSyncEngine::JjGit,
+        };
+
+        assert!(store.create_vault("Invalid", invalid).is_err());
+        assert!(!store.root().join("invalid").exists());
+    }
+
+    #[test]
+    fn legacy_vault_without_backend_remains_listable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let path = store.root().join("legacy");
+        fs::create_dir_all(path.join(".vault")).unwrap();
+        fs::write(path.join(".vault/metadata.json"), r#"{"name":"Legacy"}"#).unwrap();
+
+        let listed = store.list_vaults().unwrap();
+        assert_eq!(listed[0].name, "Legacy");
+        assert_eq!(listed[0].backend, None);
     }
 
     #[test]
     fn rename_via_write_moves_existing_note() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
-        let vault = store.create_vault("Notes").unwrap();
+        let vault = store
+            .create_vault(
+                "Notes",
+                VaultBackend::github("IEatCodeDaily/notes", "main").unwrap(),
+            )
+            .unwrap();
         store
             .write_note(
                 &vault.id,
@@ -872,6 +1217,7 @@ mod tests {
                 WriteNote {
                     markdown: Some("# Old\n".into()),
                     new_path: None,
+                    create_only: false,
                 },
             )
             .unwrap();
@@ -882,6 +1228,7 @@ mod tests {
                 WriteNote {
                     markdown: Some("# New\n".into()),
                     new_path: Some("folder/new.md".into()),
+                    create_only: false,
                 },
             )
             .unwrap();
@@ -891,6 +1238,81 @@ mod tests {
             store.read_note(&vault.id, "folder/new.md").unwrap().title,
             "New"
         );
+    }
+
+    #[test]
+    fn rename_refuses_to_overwrite_an_existing_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let vault = store
+            .create_vault(
+                "Notes",
+                VaultBackend::github("IEatCodeDaily/notes", "main").unwrap(),
+            )
+            .unwrap();
+        for (path, markdown) in [("source.md", "# Source\n"), ("target.md", "# Target\n")] {
+            store
+                .write_note(
+                    &vault.id,
+                    path,
+                    WriteNote {
+                        markdown: Some(markdown.into()),
+                        new_path: None,
+                        create_only: false,
+                    },
+                )
+                .unwrap();
+        }
+
+        let renamed = store.write_note(
+            &vault.id,
+            "source.md",
+            WriteNote {
+                markdown: None,
+                new_path: Some("target.md".into()),
+                create_only: false,
+            },
+        );
+
+        assert!(renamed.is_err());
+        assert_eq!(
+            store.read_note(&vault.id, "source.md").unwrap().title,
+            "Source"
+        );
+        assert_eq!(
+            store.read_note(&vault.id, "target.md").unwrap().title,
+            "Target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn note_operations_reject_symlink_escape_paths() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let vault = store
+            .create_vault(
+                "Notes",
+                VaultBackend::github("IEatCodeDaily/notes", "main").unwrap(),
+            )
+            .unwrap();
+        symlink(outside.path(), store.vault_path(&vault.id).join("escape")).unwrap();
+
+        let result = store.write_note(
+            &vault.id,
+            "escape/secret.md",
+            WriteNote {
+                markdown: Some("# Secret\n".into()),
+                new_path: None,
+                create_only: true,
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(!outside.path().join("secret.md").exists());
     }
 
     #[test]
@@ -905,7 +1327,12 @@ mod tests {
     fn jj_snapshot_lands_for_write() {
         let tmp = tempfile::tempdir().unwrap();
         let store = VaultStore::with_jj_mode(tmp.path().join("default"), JjMode::Required);
-        let vault = store.create_vault("Jj Notes").unwrap();
+        let vault = store
+            .create_vault(
+                "Jj Notes",
+                VaultBackend::github("IEatCodeDaily/jj-notes", "main").unwrap(),
+            )
+            .unwrap();
         store
             .write_note(
                 &vault.id,
@@ -913,6 +1340,7 @@ mod tests {
                 WriteNote {
                     markdown: Some("# Hello\n".into()),
                     new_path: None,
+                    create_only: false,
                 },
             )
             .unwrap();
