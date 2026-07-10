@@ -8,7 +8,9 @@
 use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
-use crate::vault::{NoteDocument, NoteTreeEntry, NoteTreeEntryKind, VaultSummary};
+use crate::vault::{
+    NoteDocument, NoteIndexEntry, NoteTreeEntry, NoteTreeEntryKind, VaultBackend, VaultSummary,
+};
 use crate::views::{CardRow, MessageRow, ProjectRow, RegistryEntry, RepoRow, SessionRow, SetupRow};
 
 /// `Session` as the UI consumes it (api-contract.md §Session).
@@ -366,6 +368,7 @@ pub struct VaultSummaryDto {
     pub name: String,
     pub note_count: usize,
     pub updated_at: f64,
+    pub backend: Option<VaultBackend>,
 }
 
 impl From<VaultSummary> for VaultSummaryDto {
@@ -375,6 +378,27 @@ impl From<VaultSummary> for VaultSummaryDto {
             name: vault.name,
             note_count: vault.note_count,
             updated_at: vault.updated_at,
+            backend: vault.backend,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteIndexEntryDto {
+    pub path: String,
+    pub title: String,
+    pub updated_at: f64,
+    pub frontmatter: serde_json::Value,
+}
+
+impl From<NoteIndexEntry> for NoteIndexEntryDto {
+    fn from(note: NoteIndexEntry) -> Self {
+        Self {
+            path: note.path,
+            title: note.title,
+            updated_at: note.updated_at,
+            frontmatter: note.frontmatter,
         }
     }
 }

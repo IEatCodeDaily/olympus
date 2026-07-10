@@ -22,7 +22,7 @@ import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
 import { SessionsView } from "./views/SessionsView";
 import FleetView from "./views/FleetView";
-import { VaultsView } from "./views/VaultsView";
+import { VaultWorkspaceView } from "./views/VaultWorkspaceView";
 import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/PlaceholderViews";
 
@@ -72,7 +72,7 @@ export function AppShell() {
 
         {/* Vaults View owns its own sidebar + viewport layout */}
         {surface === "vaults" && (
-          <VaultsView />
+          <VaultWorkspaceView />
         )}
 
         {/* Other surfaces keep the shell-level sidebar + viewport split */}

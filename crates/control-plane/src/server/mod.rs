@@ -41,8 +41,8 @@ use crate::state_db_reader::StateDbReader;
 use crate::views::{CardFilters, Filters, ViewManager};
 use bridge_mgr::BridgeManager;
 use dto::{
-    CardDto, MessageDto, NoteDocumentDto, NoteTreeEntryDto, ProjectDto, RegistryEntryDto,
-    SearchHitDto, SessionDto, SetupDto, VaultSummaryDto,
+    CardDto, MessageDto, NoteDocumentDto, NoteIndexEntryDto, NoteTreeEntryDto, ProjectDto,
+    RegistryEntryDto, SearchHitDto, SessionDto, SetupDto, VaultSummaryDto,
 };
 use ws::ServerFrame;
 
@@ -164,6 +164,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
         .route("/api/vaults", get(list_vaults).post(create_vault))
         .route("/api/vaults/{id}/notes", get(list_vault_notes))
+        .route("/api/vaults/{id}/documents", get(list_vault_documents))
         .route(
             "/api/vaults/{id}/note",
             get(get_vault_note)
@@ -334,6 +335,7 @@ struct VaultNoteQuery {
 #[derive(Debug, Deserialize)]
 struct CreateVaultBody {
     name: String,
+    backend: crate::vault::VaultBackend,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -347,6 +349,8 @@ struct PutVaultNoteBody {
     new_path: Option<String>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    create_only: bool,
 }
 
 // ---- handlers ----
@@ -972,7 +976,7 @@ async fn create_vault(
     State(state): State<AppState>,
     Json(body): Json<CreateVaultBody>,
 ) -> Response {
-    match state.vaults.create_vault(&body.name) {
+    match state.vaults.create_vault(&body.name, body.backend) {
         Ok(vault) => (
             StatusCode::CREATED,
             Json(serde_json::to_value(VaultSummaryDto::from(vault)).unwrap()),
@@ -987,6 +991,16 @@ async fn list_vault_notes(State(state): State<AppState>, Path(id): Path<String>)
         Ok(notes) => {
             let notes: Vec<NoteTreeEntryDto> = notes.into_iter().map(Into::into).collect();
             Json(json!({ "notes": notes })).into_response()
+        }
+        Err(err) => vault_error(err),
+    }
+}
+
+async fn list_vault_documents(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.vaults.list_documents(&id) {
+        Ok(documents) => {
+            let documents: Vec<NoteIndexEntryDto> = documents.into_iter().map(Into::into).collect();
+            Json(json!({ "documents": documents })).into_response()
         }
         Err(err) => vault_error(err),
     }
@@ -1018,6 +1032,7 @@ async fn put_vault_note(
         crate::vault::WriteNote {
             markdown: body.markdown,
             new_path,
+            create_only: body.create_only,
         },
     ) {
         Ok(note) => {
@@ -1041,6 +1056,8 @@ async fn delete_vault_note(
 fn vault_error(err: anyhow::Error) -> Response {
     let status = if crate::vault::not_found(&err) {
         StatusCode::NOT_FOUND
+    } else if crate::vault::conflict(&err) {
+        StatusCode::CONFLICT
     } else if crate::vault::bad_request(&err) {
         StatusCode::BAD_REQUEST
     } else {
@@ -4344,7 +4361,16 @@ mod tests {
                     .header("authorization", "Bearer testtoken")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        serde_json::json!({"name": "Ops Vault"}).to_string(),
+                        serde_json::json!({
+                            "name": "Ops Vault",
+                            "backend": {
+                                "kind": "github",
+                                "repository": "IEatCodeDaily/ops-vault",
+                                "branch": "main",
+                                "syncEngine": "jj-git"
+                            }
+                        })
+                        .to_string(),
                     ))
                     .unwrap(),
             )
@@ -4356,6 +4382,8 @@ mod tests {
             .unwrap();
         let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(created["id"], "ops-vault");
+        assert_eq!(created["backend"]["kind"], "github");
+        assert_eq!(created["backend"]["repository"], "IEatCodeDaily/ops-vault");
 
         let res = app
             .clone()
@@ -4388,6 +4416,27 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
+                    .method("PUT")
+                    .uri("/api/vaults/ops-vault/note?path=runbooks/boot.md")
+                    .header("authorization", "Bearer testtoken")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "markdown": "# Replacement",
+                            "createOnly": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
                     .uri("/api/vaults/ops-vault/note?path=runbooks/boot.md")
                     .header("authorization", "Bearer testtoken")
                     .body(Body::empty())
@@ -4415,6 +4464,25 @@ mod tests {
         let tree: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(tree["notes"][0]["kind"], "folder");
         assert_eq!(tree["notes"][0]["children"][0]["path"], "runbooks/boot.md");
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/vaults/ops-vault/documents")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let documents: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(documents["documents"][0]["path"], "runbooks/boot.md");
+        assert_eq!(documents["documents"][0]["frontmatter"]["title"], "Boot");
 
         let res = app
             .oneshot(
@@ -4882,6 +4950,7 @@ mod tests {
             ("GET", "/api/vaults", &[200]),
             ("POST", "/api/vaults", &[400, 422]),
             ("GET", "/api/vaults/nonexistent/notes", &[404]),
+            ("GET", "/api/vaults/nonexistent/documents", &[404]),
             ("GET", "/api/vaults/nonexistent/note", &[400, 404]),
             ("PUT", "/api/vaults/nonexistent/note", &[400, 404]),
             ("DELETE", "/api/vaults/nonexistent/note", &[400, 404]),

@@ -6,7 +6,6 @@
 // Click a node → navigates to that note.
 
 import { useRef, useCallback, useMemo } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import ForceGraph2D from "react-force-graph-2d";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../../../components/Icon";
@@ -32,8 +31,13 @@ interface VaultGraphData {
   edges: GraphEdge[];
 }
 
-export function GraphPage({ vaultId }: { vaultId: string }) {
-  const navigate = useNavigate();
+export function GraphPage({
+  vaultId,
+  onOpenNote,
+}: {
+  vaultId: string;
+  onOpenNote?: (path: string, title?: string) => void;
+}) {
   const fgRef = useRef<any>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -62,14 +66,10 @@ export function GraphPage({ vaultId }: { vaultId: string }) {
   const handleNodeClick = useCallback(
     (node: any) => {
       if (node.path) {
-        void navigate({
-          to: "/vaults/$vaultId",
-          params: { vaultId },
-          search: { note: node.path },
-        });
+        onOpenNote?.(node.path, node.title);
       }
     },
-    [navigate, vaultId],
+    [onOpenNote],
   );
 
   // Custom canvas node drawing (colored circles sized by link count)

@@ -33,6 +33,8 @@ import type {
   PutNoteBody,
   VaultSummary,
   NoteTreeEntry,
+  CreateVaultBody,
+  VaultDocumentsResponse,
 } from "./types";
 const BASE = import.meta.env.VITE_API_BASE as string;
 const T = import.meta.env.VITE_API_TOKEN as string;
@@ -46,7 +48,11 @@ function jsonHeaders(): Record<string, string> {
 }
 
 async function expectJson<T>(res: Response, label: string): Promise<T> {
-  if (!res.ok) throw new Error(`${label} ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { message?: unknown } | null;
+    const message = typeof body?.message === "string" ? body.message : `${label} ${res.status}`;
+    throw new Error(message);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -334,10 +340,10 @@ export async function fetchVaults(): Promise<VaultsResponse> {
   return expectJson(res, "vaults");
 }
 
-export async function createVault(name: string): Promise<VaultSummary> {
-  return postJson<VaultSummary, { name: string }>(
+export async function createVault(body: CreateVaultBody): Promise<VaultSummary> {
+  return postJson<VaultSummary, CreateVaultBody>(
     "/api/vaults",
-    { name },
+    body,
     "create vault failed",
   );
 }
@@ -349,6 +355,15 @@ export async function fetchVaultNotes(
     headers: authHeaders(),
   });
   return expectJson(res, "vault notes");
+}
+
+export async function fetchVaultDocuments(
+  vaultId: string,
+): Promise<VaultDocumentsResponse> {
+  const res = await fetch(`${BASE}/api/vaults/${vaultId}/documents`, {
+    headers: authHeaders(),
+  });
+  return expectJson(res, "vault documents");
 }
 
 export async function fetchVaultNote(

@@ -344,6 +344,21 @@ export interface VaultSummary {
   name: string;
   noteCount: number;
   updatedAt: number;
+  backend: VaultBackend | null;
+}
+
+export interface GithubVaultBackend {
+  kind: "github";
+  repository: string;
+  branch: string;
+  syncEngine: "jj-git";
+}
+
+export type VaultBackend = GithubVaultBackend;
+
+export interface CreateVaultBody {
+  name: string;
+  backend: VaultBackend;
 }
 
 export interface VaultsResponse {
@@ -364,6 +379,17 @@ export interface NotesTreeResponse {
   notes: NoteTreeEntry[];
 }
 
+export interface NoteIndexEntry {
+  path: string;
+  title: string;
+  updatedAt: number;
+  frontmatter: Record<string, unknown>;
+}
+
+export interface VaultDocumentsResponse {
+  documents: NoteIndexEntry[];
+}
+
 export interface NoteDocument {
   path: string;
   title: string;
@@ -375,4 +401,5 @@ export interface NoteDocument {
 export interface PutNoteBody {
   markdown?: string;
   newPath?: string;
+  createOnly?: boolean;
 }

@@ -98,6 +98,12 @@ export interface VaultSummary {
   name: string;
   noteCount: number;
   updatedAt: number; // epoch seconds
+  backend: {
+    kind: "github";
+    repository: string; // canonical owner/repository, never credentials
+    branch: string;
+    syncEngine: "jj-git";
+  } | null;          // null only for legacy/unconfigured vaults
 }
 
 export interface NoteTreeEntry {
@@ -174,6 +180,10 @@ GET /api/vaults                        # markdown-first knowledge vaults (ADR 00
 GET /api/vaults/:id/notes
   → 200 { "notes": NoteTreeEntry[] }  # recursive folder/note tree
 
+GET /api/vaults/:id/documents
+  → 200 { "documents": Array<{ path, title, updatedAt, frontmatter }> }
+  # vault-wide derived index; does not duplicate Markdown bodies
+
 GET /api/vaults/:id/note?path=<relative-markdown-path>
   → 200 NoteDocument | 404
 ```
@@ -213,13 +223,17 @@ PUT /api/setup                         # declare (set/replace) a scope's agent s
   → 400 if scope is not "org:<slug>" or "project:<org>/<project>"
 
 POST /api/vaults                       # create a jj-colocated markdown vault
-  body { name: string }
+  body { name: string,
+         backend: { kind: "github", repository: "owner/repository",
+                    branch: "main", syncEngine: "jj-git" } }
   → 201 VaultSummary
 
 PUT /api/vaults/:id/note?path=<relative-markdown-path>
-  body { markdown?: string, newPath?: string }     # write and/or rename a note
+  body { markdown?: string, newPath?: string, createOnly?: boolean }
+  # write and/or rename; createOnly fails rather than overwriting an existing note
   → 200 NoteDocument
   → 400 if path escapes the vault root or a new note omits markdown
+  → 409 if createOnly is true and the note already exists
 
 DELETE /api/vaults/:id/note?path=<relative-markdown-path>
   → 204

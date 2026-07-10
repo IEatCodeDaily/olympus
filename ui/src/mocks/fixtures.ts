@@ -541,9 +541,9 @@ export function generateSearchHits(query: string): SearchHit[] {
 // ── Vaults ─────────────────────────────────────────────
 
 export const VAULTS: VaultSummary[] = [
-  { id: "engineering", name: "Engineering", noteCount: 142, updatedAt: NOW - 7200 },
-  { id: "ops-runbooks", name: "Ops runbooks", noteCount: 38, updatedAt: NOW - 86400 },
-  { id: "personal", name: "Personal", noteCount: 7, updatedAt: NOW - 172800 },
+  { id: "engineering", name: "Engineering", noteCount: 6, updatedAt: NOW - 7200, backend: { kind: "github", repository: "IEatCodeDaily/engineering-vault", branch: "main", syncEngine: "jj-git" } },
+  { id: "ops-runbooks", name: "Ops runbooks", noteCount: 2, updatedAt: NOW - 86400, backend: { kind: "github", repository: "IEatCodeDaily/ops-runbooks", branch: "main", syncEngine: "jj-git" } },
+  { id: "personal", name: "Personal", noteCount: 1, updatedAt: NOW - 172800, backend: { kind: "github", repository: "IEatCodeDaily/personal-vault", branch: "main", syncEngine: "jj-git" } },
 ];
 
 export const VAULT_NOTES: Record<string, NoteTreeEntry[]> = {
@@ -554,6 +554,7 @@ export const VAULT_NOTES: Record<string, NoteTreeEntry[]> = {
       updatedAt: NOW - 3600,
       kind: "folder",
       children: [
+        { path: "redb/index.md", title: "redb", updatedAt: NOW - 1800, kind: "note", children: [] },
         { path: "redb/redb-compaction.md", title: "redb-compaction.md", updatedAt: NOW - 7200, kind: "note", children: [] },
         { path: "redb/event-log-design.md", title: "event-log-design.md", updatedAt: NOW - 604800, kind: "note", children: [] },
         { path: "redb/zstd-tuning.md", title: "zstd-tuning.md", updatedAt: NOW - 259200, kind: "note", children: [] },
@@ -589,6 +590,14 @@ export const VAULT_NOTES: Record<string, NoteTreeEntry[]> = {
 
 export const VAULT_NOTE_CONTENT: Record<string, Record<string, string>> = {
   engineering: {
+    "redb/index.md": `---
+title: redb
+area: storage
+status: active
+---
+# redb
+
+Design notes for the redb event store.`,
     "redb/redb-compaction.md": `# redb compaction
 
 The redb event log grows monotonically. Compaction merges old
@@ -684,6 +693,39 @@ Ideas and notes that don't have a home yet.
 /** In-memory mutable copy so PUT/DELETE round-trips work in MSW mode. */
 export const VAULT_NOTES_MUTABLE: Record<string, Record<string, string>> =
   JSON.parse(JSON.stringify(VAULT_NOTE_CONTENT));
+
+export function buildVaultNoteTree(vaultId: string): NoteTreeEntry[] {
+  const store = VAULT_NOTES_MUTABLE[vaultId];
+  if (!store) return [];
+  const now = Math.floor(Date.now() / 1000);
+  const roots: NoteTreeEntry[] = [];
+  const folders = new Map<string, NoteTreeEntry>();
+
+  for (const path of Object.keys(store).sort()) {
+    const parts = path.split("/");
+    let children = roots;
+    let prefix = "";
+    for (const segment of parts.slice(0, -1)) {
+      prefix = prefix ? `${prefix}/${segment}` : segment;
+      let folder = folders.get(prefix);
+      if (!folder) {
+        folder = { path: prefix, title: segment, updatedAt: now, kind: "folder", children: [] };
+        folders.set(prefix, folder);
+        children.push(folder);
+      }
+      children = folder.children;
+    }
+    const document = buildNoteDoc(vaultId, path);
+    children.push({
+      path,
+      title: document?.title ?? parts[parts.length - 1] ?? path,
+      updatedAt: now,
+      kind: "note",
+      children: [],
+    });
+  }
+  return roots;
+}
 
 /** Derive a NoteDocument from stored markdown (parses wikilinks + frontmatter). */
 export function buildNoteDoc(

@@ -11,9 +11,9 @@ import {
   generateSearchHits,
   NODES,
   VAULTS,
-  VAULT_NOTES,
   VAULT_NOTES_MUTABLE,
   buildNoteDoc,
+  buildVaultNoteTree,
 } from "./fixtures";
 import type {
   SessionListResponse,
@@ -329,9 +329,24 @@ export const handlers = [
 
   // POST /api/vaults
   http.post("http://127.0.0.1:8787/api/vaults", async ({ request }) => {
-    const body = (await request.json()) as { name: string };
+    const body = (await request.json()) as {
+      name: string;
+      backend: { kind: "github"; repository: string; branch: string; syncEngine: "jj-git" };
+    };
+    if (!body.name?.trim() || !body.backend?.repository?.includes("/")) {
+      return HttpResponse.json(
+        { message: "Name and GitHub owner/repository are required" },
+        { status: 400 },
+      );
+    }
     const id = body.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-    const vault = { id, name: body.name, noteCount: 0, updatedAt: Math.floor(Date.now() / 1000) };
+    const vault = {
+      id,
+      name: body.name,
+      noteCount: 0,
+      updatedAt: Math.floor(Date.now() / 1000),
+      backend: body.backend,
+    };
     VAULTS.push(vault);
     VAULT_NOTES_MUTABLE[id] = {};
     return HttpResponse.json(vault, { status: 201 });
@@ -341,8 +356,27 @@ export const handlers = [
   http.get<{ id: string }>(
     "http://127.0.0.1:8787/api/vaults/:id/notes",
     ({ params }: { params: { id: string } }) => {
-      const tree = VAULT_NOTES[params.id] ?? [];
+      const tree = buildVaultNoteTree(params.id);
       return HttpResponse.json({ notes: tree });
+    },
+  ),
+
+  // GET /api/vaults/:id/documents
+  http.get<{ id: string }>(
+    "http://127.0.0.1:8787/api/vaults/:id/documents",
+    ({ params }: { params: { id: string } }) => {
+      const store = VAULT_NOTES_MUTABLE[params.id];
+      if (!store) return new HttpResponse(null, { status: 404 });
+      const documents = Object.keys(store).sort().map((path) => {
+        const document = buildNoteDoc(params.id, path)!;
+        return {
+          path,
+          title: document.title,
+          updatedAt: Math.floor(Date.now() / 1000),
+          frontmatter: document.frontmatter,
+        };
+      });
+      return HttpResponse.json({ documents });
     },
   ),
 
@@ -362,11 +396,19 @@ export const handlers = [
     "http://127.0.0.1:8787/api/vaults/:id/note",
     async ({ params, request }: { params: { id: string }; request: Request }) => {
       const path = new URL(request.url).searchParams.get("path") ?? "";
-      const body = (await request.json()) as { markdown?: string; newPath?: string };
+      const body = (await request.json()) as { markdown?: string; newPath?: string; createOnly?: boolean };
       const store = VAULT_NOTES_MUTABLE[params.id];
       if (!store) return new HttpResponse(null, { status: 404 });
+      if (body.createOnly && store[path] !== undefined) {
+        return HttpResponse.json({ message: "note already exists" }, { status: 409 });
+      }
       if (body.markdown !== undefined) {
+        const isNew = store[path] === undefined;
         store[path] = body.markdown;
+        if (isNew) {
+          const vault = VAULTS.find((candidate) => candidate.id === params.id);
+          if (vault) vault.noteCount += 1;
+        }
       }
       // Rename support
       const targetPath = body.newPath ?? path;
@@ -387,7 +429,12 @@ export const handlers = [
       const path = new URL(request.url).searchParams.get("path") ?? "";
       const store = VAULT_NOTES_MUTABLE[params.id];
       if (!store) return new HttpResponse(null, { status: 404 });
+      const existed = store[path] !== undefined;
       delete store[path];
+      if (existed) {
+        const vault = VAULTS.find((candidate) => candidate.id === params.id);
+        if (vault) vault.noteCount = Math.max(0, vault.noteCount - 1);
+      }
       return new HttpResponse(null, { status: 204 });
     },
   ),
