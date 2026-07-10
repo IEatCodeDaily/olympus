@@ -76,14 +76,35 @@ async fn main() -> Result<()> {
     let stream = connect_with_retry(&socket).await?;
     tracing::info!("connected to Hall UDS");
 
-    run_connection(stream, table, &node_id, &hostname_val, agents).await
+    // Reconnect loop: Hall restarts must NOT kill this envoy (ADR 0008 §2).
+    // The runtime table (and its ACP children) survives across reconnects;
+    // each new connection re-sends hello with the current live runtimes.
+    let table = Arc::new(table);
+    let mut stream = Some(stream);
+    loop {
+        let s = match stream.take() {
+            Some(s) => s,
+            None => {
+                let s = connect_forever(&socket).await;
+                tracing::info!("reconnected to Hall UDS");
+                s
+            }
+        };
+        if let Err(e) =
+            run_connection(s, table.clone(), &node_id, &hostname_val, agents.clone()).await
+        {
+            tracing::warn!(error = format!("{e:#}"), "connection ended with error");
+        }
+        tracing::warn!("Hall connection lost; reconnecting…");
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 /// Shared connection state: the writer (mutex-guarded), the runtime table, and
 /// per-session counters.
 struct Conn {
     writer: Mutex<BufWriter<tokio::net::unix::OwnedWriteHalf>>,
-    table: RuntimeTable,
+    table: Arc<RuntimeTable>,
     seq: Mutex<HashMap<String, u64>>,
     turn: Mutex<HashMap<String, u64>>,
 }
@@ -145,7 +166,7 @@ impl Conn {
 /// Run the full connection lifecycle: hello → heartbeat loop + read loop.
 async fn run_connection(
     stream: UnixStream,
-    table: RuntimeTable,
+    table: Arc<RuntimeTable>,
     node_id: &str,
     hostname: &str,
     agents: Vec<discovery::AgentInfo>,
@@ -411,7 +432,20 @@ fn resolve_socket() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".olympus").join("control.sock"))
 }
 
-/// Connect to the UDS socket, retrying for up to ~10s (Hall may be booting).
+/// Connect to the UDS socket, retrying forever (used by the reconnect loop —
+/// a downed Hall must never terminate a running envoy, ADR 0008 §2).
+async fn connect_forever(path: &PathBuf) -> UnixStream {
+    loop {
+        match UnixStream::connect(path).await {
+            Ok(s) => return s,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "reconnect failed, retrying…");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
 async fn connect_with_retry(path: &PathBuf) -> Result<UnixStream> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {

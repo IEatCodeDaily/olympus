@@ -1,7 +1,8 @@
 [Unit]
 Description=Olympus Envoy %i — agent runtime holder (ACP children)
+# After= only (boot ordering hint). NO Requires=: envoys must survive hall
+# restarts (ADR 0008 §2) — envoy reconnects to the hall socket on its own.
 After=olympus-hall.service
-Requires=olympus-hall.service
 
 [Service]
 Type=simple
