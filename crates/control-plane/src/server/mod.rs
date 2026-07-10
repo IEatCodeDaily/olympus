@@ -454,10 +454,16 @@ struct SetupQuery {
 /// - `?org=acme&project=web` → the *effective* (merged org+project) setup the
 ///   envoy would materialize for a session in that project (ADR 0006 §3.1).
 async fn get_setup(State(state): State<AppState>, Query(q): Query<SetupQuery>) -> Response {
-    let views = state.views.read().await;
     if let (Some(org), Some(project)) = (q.org.as_deref(), q.project.as_deref()) {
-        let row = views.setup.effective_for_project(org, project);
-        return Json(serde_json::to_value(SetupDto::from_row(&row)).unwrap()).into_response();
+        return match state.log.effective_setup(org, project) {
+            Ok(row) => {
+                Json(serde_json::to_value(SetupDto::from_row(&row)).unwrap()).into_response()
+            }
+            Err(error) => {
+                tracing::warn!(%error, "setup query failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
     }
     let Some(scope) = q.scope.as_deref() else {
         return (
@@ -468,9 +474,15 @@ async fn get_setup(State(state): State<AppState>, Query(q): Query<SetupQuery>) -
         )
             .into_response();
     };
-    match views.setup.get(scope) {
-        Some(row) => Json(serde_json::to_value(SetupDto::from_row(row)).unwrap()).into_response(),
-        None => {
+    match state.log.get_setup(scope) {
+        Ok(Some(row)) => {
+            Json(serde_json::to_value(SetupDto::from_row(&row)).unwrap()).into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, "setup query failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Ok(None) => {
             // An undeclared scope is a valid empty setup, not a 404.
             let empty = crate::server::dto::SetupDto {
                 scope: scope.to_string(),
@@ -794,15 +806,21 @@ async fn get_messages(
     Path(id): Path<String>,
     Query(q): Query<MessagesQuery>,
 ) -> impl IntoResponse {
-    let views = state.views.read().await;
     let limit = q.limit.unwrap_or(50);
-    let messages: Vec<MessageDto> = views
-        .messages
-        .recent(&id, limit)
-        .into_iter()
-        .map(|row| MessageDto::from_row(&id, row))
-        .collect();
-    Json(json!({ "messages": messages, "nextCursor": serde_json::Value::Null }))
+    match state.log.recent_messages(&id, limit) {
+        Ok(rows) => {
+            let messages: Vec<MessageDto> = rows
+                .iter()
+                .map(|row| MessageDto::from_row(&id, row))
+                .collect();
+            Json(json!({ "messages": messages, "nextCursor": serde_json::Value::Null }))
+                .into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, session_id = %id, "message query failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Response {
@@ -811,35 +829,16 @@ async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> 
     };
     let limit = q.limit.unwrap_or(50);
 
-    let index = state.search.read().await;
-    let hits = match index.search(&query, limit) {
+    let hits = match state.log.search(&query, limit) {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(error = %e, "search failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, "search error").into_response();
         }
     };
-    drop(index);
-
-    // Enrich each hit with the session's source + the message timestamp.
-    let views = state.views.read().await;
     let dtos: Vec<SearchHitDto> = hits
         .iter()
-        .map(|h| {
-            let source = views
-                .sessions
-                .get(&h.session_id)
-                .map(|s| s.source.clone())
-                .unwrap_or_default();
-            let timestamp = views
-                .messages
-                .recent(&h.session_id, usize::MAX)
-                .into_iter()
-                .find(|m| m.message_id == h.message_id)
-                .map(|m| m.timestamp)
-                .unwrap_or(0.0);
-            SearchHitDto::from_index_hit(h, source, timestamp)
-        })
+        .map(|h| SearchHitDto::from_index_hit(h, h.source.clone(), h.timestamp))
         .collect();
 
     Json(json!({ "hits": dtos })).into_response()
@@ -1659,17 +1658,7 @@ async fn complete_session(
             .map(|r| r.hermes_id.clone())
             .unwrap_or_default()
     };
-    let next_id = {
-        let views = state.views.read().await;
-        views
-            .messages
-            .recent(&parent_id, usize::MAX)
-            .iter()
-            .map(|m| m.message_id)
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0)
-    };
+    let next_id = state.log.next_message_id(&parent_id).unwrap_or(0);
 
     match state
         .bridge
@@ -1744,12 +1733,10 @@ async fn handover_session(
         let Some(source) = views.sessions.get(&id).cloned() else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         };
-        let messages = views
-            .messages
-            .recent(&id, usize::MAX)
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let messages = state
+            .log
+            .recent_messages(&id, usize::MAX)
+            .unwrap_or_default();
         (source, messages)
     };
 
@@ -2095,12 +2082,10 @@ async fn fork_session(
         let Some(source) = views.sessions.get(&id).cloned() else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         };
-        let messages = views
-            .messages
-            .recent(&id, usize::MAX)
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let messages = state
+            .log
+            .recent_messages(&id, usize::MAX)
+            .unwrap_or_default();
         (source, messages)
     };
 
@@ -2276,17 +2261,7 @@ async fn post_message(
     // Use max(existing message_id)+1, NOT the count — message ids must be
     // monotonic and collision-free even if the hot window evicted older rows or
     // ids aren't contiguous (a count would reuse an id and clobber a message).
-    let next_id = {
-        let views = state.views.read().await;
-        views
-            .messages
-            .recent(&id, usize::MAX)
-            .iter()
-            .map(|m| m.message_id)
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0)
-    };
+    let next_id = state.log.next_message_id(&id).unwrap_or(0);
     match state
         .bridge
         .append_user_message(&id, &hermes_id, next_id, &body.text)
@@ -3129,23 +3104,14 @@ async fn steer_session(
     // transcript shows it as a distinct bubble (an interrupt, not a new turn).
     // Use max(message_id)+1 to avoid colliding with the in-flight assistant
     // message ID (count+1 can collide after window eviction).
-    let (hermes_id, steer_msg_id) = {
+    let hermes_id = {
         let v = state.views.read().await;
-        let sid = v
-            .sessions
+        v.sessions
             .get(&id)
             .map(|r| r.hermes_id.clone())
-            .unwrap_or_default();
-        let max_id = v
-            .messages
-            .recent(&id, usize::MAX)
-            .iter()
-            .map(|m| m.message_id)
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
-        (sid, max_id)
+            .unwrap_or_default()
     };
+    let steer_msg_id = state.log.next_message_id(&id).unwrap_or(0);
     if let Ok(event) = state
         .bridge
         .append_steer_message(&id, &hermes_id, steer_msg_id, &text)

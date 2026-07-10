@@ -67,20 +67,47 @@ impl ViewManager {
         }
     }
 
+    /// Runtime projection mode for ADR 0009. Session/card/setup metadata stays
+    /// small during the transition; decompressed messages stay in SQLite.
+    pub fn metadata_only() -> Self {
+        Self {
+            sessions: SessionView::new(),
+            messages: MessageView::metadata_only(),
+            cards: CardView::new(),
+            setup: SetupView::new(),
+            registry: RegistryView::new(),
+            projects: ProjectView::new(),
+            repos: RepoView::new(),
+        }
+    }
+
     /// Rebuild all views by replaying every event in `log` in sequence order.
     ///
     /// Clears any existing in-memory state first, so this is idempotent and
     /// safe to call on restart.
     pub fn replay(&mut self, log: &Log) -> Result<()> {
+        let metadata_only = !self.messages.retain_rows();
         self.sessions = SessionView::new();
-        self.messages = MessageView::new();
+        self.messages = if metadata_only {
+            MessageView::metadata_only()
+        } else {
+            MessageView::new()
+        };
         self.cards = CardView::new();
         self.setup = SetupView::new();
         self.registry = RegistryView::new();
         self.projects = ProjectView::new();
         self.repos = RepoView::new();
-        for (_seq, event) in log.read_all()? {
-            self.apply(&event);
+        let mut next = 0;
+        loop {
+            let page = log.read_from(next, 1_000)?;
+            if page.is_empty() {
+                break;
+            }
+            for (seq, event) in page {
+                next = seq + 1;
+                self.apply(&event);
+            }
         }
         Ok(())
     }

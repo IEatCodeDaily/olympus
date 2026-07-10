@@ -80,27 +80,31 @@ async fn main() -> Result<()> {
     let token = auth::load_or_create_token()?;
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
-    // ---- open the durable event log; keep Olympus-native records, rebuild the
-    // state.db mirror each boot ----
-    let log_path = home.join("eventlog.redb");
+    // ---- open the durable SQLite event log; migrate redb exactly once ----
+    let log_path = home.join("olympus.db");
     let log = Arc::new(Log::open(&log_path).context("opening event log")?);
-    // Drop the previous boot's state.db-imported events (keeping Olympus-native
-    // records: setup declarations, cards, olympus sessions), so the re-import
-    // below is idempotent and the durable declarations survive a restart.
-    log.retain_native().context("retaining native events")?;
+    let sqlite_was_empty = log.event_count().context("counting SQLite events")? == 0;
+    let migrated = log
+        .migrate_from_redb(&home.join("eventlog.redb"))
+        .context("migrating legacy redb event log")?;
+    if migrated > 0 {
+        tracing::info!(events = migrated, "migrated legacy redb log to SQLite");
+    }
+    // A clean install imports state.db once. A migrated or existing SQLite log
+    // is already authoritative; live sync reconciles subsequent Hermes changes.
+    let needs_initial_import = sqlite_was_empty && migrated == 0;
 
     let state_db = hermes_state_db()?;
     // ---- NATIVE-ONLY boot: rebuild views + search from the retained event log
     // (Olympus sessions, cards, setup declarations) so the server can start
     // serving IMMEDIATELY. The Hermes state.db import (1829 sessions, 127K
     // messages) runs AFTER bind in a background thread — see below.
-    let mut views = ViewManager::new();
+    let mut views = ViewManager::metadata_only();
     views
         .replay(&log)
         .context("replaying native log into views")?;
 
-    let mut search =
-        SearchIndex::open(&home.join("search-index")).context("opening search index")?;
+    let mut search = SearchIndex::from_log(log.clone());
     search
         .build_from_log(&log)
         .context("building search index (native only)")?;
@@ -179,7 +183,11 @@ async fn main() -> Result<()> {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
-        import_state: ImportState::running(), // Hermes import runs after bind (below)
+        import_state: if needs_initial_import {
+            ImportState::running()
+        } else {
+            ImportState::done()
+        },
         hermes_profile: Arc::new(profile),
         deltas,
         snapshot_sessions: snap_sessions,
@@ -262,7 +270,7 @@ async fn main() -> Result<()> {
     println!("olympus control plane listening on http://{bind}");
     println!("token: {token}");
 
-    // ---- Background Hermes state.db import (deferred so bind is instant) ----
+    // ---- One-time Hermes state.db import for a clean install ----
     // The server is now serving with native-only data (Olympus sessions,
     // cards, setup). The Hermes import (1829 sessions, 127K messages) runs
     // here in a tokio task, appending to the log and replaying into views +
@@ -271,7 +279,7 @@ async fn main() -> Result<()> {
     //
     // Uses tokio::task::spawn_blocking for the SQLite-heavy import (blocking
     // I/O), then async blocks for the view/search rebuild (tokio RwLocks).
-    {
+    if needs_initial_import {
         let bg_log = Arc::clone(&log_arc);
         let bg_views = Arc::clone(&state.views);
         let bg_search = Arc::clone(&state.search);
@@ -304,7 +312,7 @@ async fn main() -> Result<()> {
                     // Rebuild views + search from the now-complete log.
                     {
                         let mut v = bg_views.write().await;
-                        *v = ViewManager::new();
+                        *v = ViewManager::metadata_only();
                         if let Err(e) = v.replay(&bg_log) {
                             tracing::error!(error = %e, "view replay after import failed");
                         }
