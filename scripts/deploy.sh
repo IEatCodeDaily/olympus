@@ -29,13 +29,18 @@ if [ -z "$GIT_HASH" ]; then
     exit 1
 fi
 
+# Cargo may be configured with a shared target directory at the user or host
+# level. Ask Cargo for the effective path instead of assuming ./target.
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+
 mkdir -p "$BIN_DIR"
 
 build_hall() {
     echo "→ Building olympus-hall (release)…"
     cargo build --release -p olympus-control-plane
     echo "→ Installing olympus-hall-${GIT_HASH}…"
-    cp -f target/release/olympus-hall "${BIN_DIR}/olympus-hall-${GIT_HASH}"
+    cp -f "${TARGET_DIR}/release/olympus-hall" "${BIN_DIR}/olympus-hall-${GIT_HASH}"
     ln -sf "olympus-hall-${GIT_HASH}" "${BIN_DIR}/olympus-hall"
     echo "  ${BIN_DIR}/olympus-hall → olympus-hall-${GIT_HASH}"
 }
@@ -44,7 +49,7 @@ build_envoy() {
     echo "→ Building olympus-envoy (release)…"
     cargo build --release -p olympus-envoy
     echo "→ Installing olympus-envoy-${GIT_HASH}…"
-    cp -f target/release/olympus-envoy "${BIN_DIR}/olympus-envoy-${GIT_HASH}"
+    cp -f "${TARGET_DIR}/release/olympus-envoy" "${BIN_DIR}/olympus-envoy-${GIT_HASH}"
     ln -sf "olympus-envoy-${GIT_HASH}" "${BIN_DIR}/olympus-envoy"
     echo "  ${BIN_DIR}/olympus-envoy → olympus-envoy-${GIT_HASH}"
 }
