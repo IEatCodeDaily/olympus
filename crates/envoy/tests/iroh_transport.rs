@@ -2,15 +2,13 @@
 //! connect) exchange EnvoyFrame/HallFrame JSON-lines over a QUIC bi-stream,
 //! plus the allowlist rejection path.
 //!
-//! Uses real iroh endpoints with the public n0 relay preset — the connection
-//! is loopback (same host) but exercises the full connect/accept/ALPN path.
-//! Marked #[ignore] variants are NOT used: this must run in CI; iroh loopback
-//! does not require internet when both endpoints are on the same host (direct
-//! addresses are exchanged via the relay map but local candidates win).
+//! Uses real iroh endpoints with deterministic direct loopback addresses and
+//! public relays disabled. Public endpoint discovery is deliberately excluded
+//! from the canonical offline suite.
 
 use iroh::endpoint::presets;
-use iroh::{Endpoint, SecretKey};
-use olympus_envoy::transport::{connect_to_hall, load_or_create_secret, OLYMPUS_ALPN};
+use iroh::{Endpoint, RelayMode, SecretKey};
+use olympus_envoy::transport::{load_or_create_secret, OLYMPUS_ALPN};
 use olympus_proto::frames::EnvoyFrame;
 use olympus_proto::version::{BuildVersion, PROTOCOL_VERSION};
 
@@ -38,6 +36,14 @@ async fn hall_accept_once(ep: Endpoint, allowlist: Vec<iroh::PublicKey>) -> Opti
     Some(frame)
 }
 
+async fn connect_direct(
+    endpoint: &Endpoint,
+    hall: &Endpoint,
+) -> anyhow::Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+    let connection = endpoint.connect(hall.addr(), OLYMPUS_ALPN).await?;
+    Ok(connection.open_bi().await?)
+}
+
 #[tokio::test]
 async fn iroh_loopback_hello_round_trip() {
     // Hall endpoint.
@@ -45,17 +51,17 @@ async fn iroh_loopback_hello_round_trip() {
     let hall_ep = Endpoint::builder(presets::N0)
         .secret_key(hall_secret)
         .alpns(vec![OLYMPUS_ALPN.to_vec()])
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("hall endpoint binds");
-    let hall_id = hall_ep.id();
-
     // Envoy endpoint with a persisted key (exercises load_or_create_secret).
     let dir = tempfile::tempdir().unwrap();
     let envoy_secret = load_or_create_secret(dir.path()).unwrap();
     let envoy_pub = envoy_secret.public();
     let envoy_ep = Endpoint::builder(presets::N0)
         .secret_key(envoy_secret)
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("envoy endpoint binds");
@@ -63,8 +69,7 @@ async fn iroh_loopback_hello_round_trip() {
     // Hall accepts in the background, allowlisting the envoy.
     let hall_task = tokio::spawn(hall_accept_once(hall_ep.clone(), vec![envoy_pub]));
 
-    // Envoy connects by hall node id string (the operator-facing format).
-    let (mut send, mut recv) = connect_to_hall(&envoy_ep, &hall_id.to_string())
+    let (mut send, mut recv) = connect_direct(&envoy_ep, &hall_ep)
         .await
         .expect("envoy connects to hall via iroh");
 
@@ -112,23 +117,24 @@ async fn iroh_rejects_non_allowlisted_peer() {
     let hall_ep = Endpoint::builder(presets::N0)
         .secret_key(SecretKey::generate())
         .alpns(vec![OLYMPUS_ALPN.to_vec()])
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("hall endpoint binds");
-    let hall_id = hall_ep.id();
 
     // Empty allowlist — every peer must be rejected.
     let hall_task = tokio::spawn(hall_accept_once(hall_ep.clone(), vec![]));
 
     let envoy_ep = Endpoint::builder(presets::N0)
         .secret_key(SecretKey::generate())
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("envoy endpoint binds");
 
     // The QUIC connection itself may establish (allowlist is checked
     // post-handshake), but the hall must close it without processing frames.
-    if let Ok((mut send, mut recv)) = connect_to_hall(&envoy_ep, &hall_id.to_string()).await {
+    if let Ok((mut send, mut recv)) = connect_direct(&envoy_ep, &hall_ep).await {
         let _ = send
             .write_all(b"{\"kind\":\"heartbeat\",\"nodeId\":\"x\"}\n")
             .await;

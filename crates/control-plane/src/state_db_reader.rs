@@ -61,7 +61,7 @@ impl StateDbReader {
         let conn = self.conn.lock().expect("state.db mutex poisoned");
         let mut stmt = conn.prepare(
             r#"
-            SELECT role, content, tool_name, tool_calls, reasoning,
+            SELECT seq, role, content, tool_name, tool_calls, reasoning,
                    timestamp, token_count, finish_reason
             FROM (
                 SELECT
@@ -77,9 +77,9 @@ impl StateDbReader {
             "#,
         )?;
         let rows = stmt.query_map(params![session_id, limit as i64], |row| {
-            let token_count: Option<i64> = row.get(6)?;
+            let token_count: Option<i64> = row.get(7)?;
             Ok(MessageRow {
-                message_id: row.get::<_, i64>(0)? as u64, // not used — assigned below
+                message_id: row.get::<_, i64>(0)? as u64,
                 role: row.get(1)?,
                 content: row.get(2)?,
                 tool_name: row.get(3)?,
@@ -89,17 +89,8 @@ impl StateDbReader {
                 token_count: token_count.map(|v| v as u64),
             })
         })?;
-        // Re-assign sequential message IDs over the returned window so the UI
-        // gets stable, contiguous IDs regardless of the window size.
-        let mut out = Vec::new();
-        let mut seq = 0u64;
-        for row in rows {
-            let mut r: MessageRow = row?;
-            r.message_id = seq;
-            seq += 1;
-            out.push(r);
-        }
-        Ok(out)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Total active message count for a session.
@@ -178,5 +169,50 @@ impl StateDbReader {
             out.push(r?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_messages_preserves_ids_and_token_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE messages (
+                   id INTEGER PRIMARY KEY,
+                   session_id TEXT NOT NULL,
+                   role TEXT NOT NULL,
+                   content TEXT,
+                   tool_name TEXT,
+                   tool_calls TEXT,
+                   reasoning TEXT,
+                   timestamp REAL NOT NULL,
+                   token_count INTEGER,
+                   finish_reason TEXT,
+                   active INTEGER NOT NULL,
+                   compacted INTEGER NOT NULL
+                 );
+                 INSERT INTO messages VALUES
+                   (10, 's', 'user', 'first', NULL, NULL, NULL, 1.5, 11, NULL, 1, 0),
+                   (20, 's', 'assistant', 'second', NULL, NULL, NULL, 2.5, 22, NULL, 1, 0),
+                   (30, 's', 'assistant', 'third', NULL, NULL, NULL, 3.5, 33, NULL, 1, 0);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let reader = StateDbReader::open(&path).unwrap().unwrap();
+        let messages = reader.recent_messages("s", 2).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].message_id, 1);
+        assert_eq!(messages[0].content.as_deref(), Some("second"));
+        assert_eq!(messages[0].token_count, Some(22));
+        assert_eq!(messages[1].message_id, 2);
+        assert_eq!(messages[1].timestamp, 3.5);
+        assert_eq!(messages[1].token_count, Some(33));
     }
 }

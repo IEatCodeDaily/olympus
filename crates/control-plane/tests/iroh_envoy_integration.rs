@@ -7,10 +7,10 @@
 //! runs over UDS for local envoys — no protocol fork (ADR 0008 §1).
 
 use iroh::endpoint::presets;
-use iroh::{Endpoint, PublicKey, SecretKey};
+use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
 use olympus_control_plane::node::{self, NodeRegistry};
 use olympus_control_plane::server::envoy_conn::EnvoyConnections;
-use olympus_envoy::transport::{self, OLYMPUS_ALPN};
+use olympus_envoy::transport::OLYMPUS_ALPN;
 use olympus_proto::frames::{EnvoyFrame, HallFrame};
 use olympus_proto::version::{BuildVersion, PROTOCOL_VERSION};
 
@@ -26,6 +26,7 @@ async fn spawn_hall(
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(vec![OLYMPUS_ALPN.to_vec()])
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("hall endpoint binds");
@@ -68,6 +69,19 @@ async fn spawn_hall(
     (endpoint, hall_key, registry, conns)
 }
 
+async fn connect_direct(
+    endpoint: &Endpoint,
+    hall: &Endpoint,
+) -> (iroh::endpoint::SendStream, iroh::endpoint::RecvStream) {
+    endpoint
+        .connect(hall.addr(), OLYMPUS_ALPN)
+        .await
+        .expect("envoy connects directly")
+        .open_bi()
+        .await
+        .expect("envoy opens bidirectional stream")
+}
+
 /// Poll the registry until the node appears, or timeout.
 async fn wait_for_node(registry: &NodeRegistry, node_id: &str, timeout_secs: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
@@ -87,17 +101,16 @@ async fn wait_for_node(registry: &NodeRegistry, node_id: &str, timeout_secs: u64
 async fn iroh_envoy_hello_registers_in_registry() {
     let envoy_secret = SecretKey::generate();
     let envoy_pub = envoy_secret.public();
-    let (_hall_ep, hall_key, registry, _conns) = spawn_hall(vec![envoy_pub]).await;
+    let (hall_ep, _hall_key, registry, _conns) = spawn_hall(vec![envoy_pub]).await;
 
     // The envoy endpoint MUST stay alive for the connection lifetime.
     let envoy_ep = Endpoint::builder(presets::N0)
         .secret_key(envoy_secret)
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("envoy binds");
-    let (mut send, _recv) = transport::connect_to_hall(&envoy_ep, &hall_key.to_string())
-        .await
-        .expect("envoy connects");
+    let (mut send, _recv) = connect_direct(&envoy_ep, &hall_ep).await;
 
     let hello = EnvoyFrame::Hello {
         node_id: "envoy-iroh-1".into(),
@@ -123,27 +136,28 @@ async fn iroh_envoy_hello_registers_in_registry() {
 
 #[tokio::test]
 async fn iroh_non_allowlisted_envoy_rejected() {
-    let (_hall_ep, hall_key, registry, _conns) = spawn_hall(vec![]).await;
+    let (hall_ep, _hall_key, registry, _conns) = spawn_hall(vec![]).await;
 
     let envoy_secret = SecretKey::generate();
     let envoy_ep = Endpoint::builder(presets::N0)
         .secret_key(envoy_secret)
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .unwrap();
 
-    if let Ok((mut send, _recv)) =
-        transport::connect_to_hall(&envoy_ep, &hall_key.to_string()).await
-    {
-        let hello = serde_json::json!({
-            "kind": "hello",
-            "nodeId": "rejected-envoy",
-            "hostname": "evil",
-            "slotsTotal": 4,
-            "protocolVersion": PROTOCOL_VERSION,
-        });
-        let _ = send.write_all(format!("{hello}\n").as_bytes()).await;
-        let _ = send.flush().await;
+    if let Ok(connection) = envoy_ep.connect(hall_ep.addr(), OLYMPUS_ALPN).await {
+        if let Ok((mut send, _recv)) = connection.open_bi().await {
+            let hello = serde_json::json!({
+                "kind": "hello",
+                "nodeId": "rejected-envoy",
+                "hostname": "evil",
+                "slotsTotal": 4,
+                "protocolVersion": PROTOCOL_VERSION,
+            });
+            let _ = send.write_all(format!("{hello}\n").as_bytes()).await;
+            let _ = send.flush().await;
+        }
     }
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     let _ = envoy_ep.close().await;
@@ -161,17 +175,16 @@ async fn iroh_ensure_runtime_round_trip() {
     // envoy reads it and responds with Resp → RemoteRuntime resolves.
     let envoy_secret = SecretKey::generate();
     let envoy_pub = envoy_secret.public();
-    let (_hall_ep, hall_key, registry, conns) = spawn_hall(vec![envoy_pub]).await;
+    let (hall_ep, _hall_key, registry, conns) = spawn_hall(vec![envoy_pub]).await;
 
     // Envoy endpoint stays alive for the whole test.
     let envoy_ep = Endpoint::builder(presets::N0)
         .secret_key(envoy_secret)
+        .relay_mode(RelayMode::Disabled)
         .bind()
         .await
         .expect("envoy binds");
-    let (mut send, recv) = transport::connect_to_hall(&envoy_ep, &hall_key.to_string())
-        .await
-        .expect("envoy connects");
+    let (mut send, recv) = connect_direct(&envoy_ep, &hall_ep).await;
 
     // Send hello.
     let hello = EnvoyFrame::Hello {

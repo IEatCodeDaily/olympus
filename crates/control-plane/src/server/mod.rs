@@ -304,10 +304,7 @@ fn organization_resource_routes() -> Router<AppState> {
         )
         .route("/vaults/{id}/graph", get(get_vault_graph))
         .route("/vaults/{id}/collections", get(list_vault_collections))
-        .route(
-            "/vaults/{id}/collections/{path}",
-            get(get_collection_rows),
-        )
+        .route("/vaults/{id}/collections/{path}", get(get_collection_rows))
 }
 
 async fn organization_resource_proxy(
@@ -318,7 +315,10 @@ async fn organization_resource_proxy(
     let Some(suffix) = original
         .path()
         .strip_prefix("/api/organizations/")
-        .and_then(|path| path.split_once('/').map(|(_, resource)| resource.to_string()))
+        .and_then(|path| {
+            path.split_once('/')
+                .map(|(_, resource)| resource.to_string())
+        })
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -1298,14 +1298,9 @@ fn derive_base_url(headers: &HeaderMap) -> Option<String> {
 /// request's Host header (works for localhost AND the CF-tunnel domain).
 /// This route is NOT behind the auth_gate middleware (it shares a router
 /// with the public enroll routes); it does its own bearer check inline.
-async fn mint_enroll(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn mint_enroll(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // Inline bearer auth — the enroll router is public, but minting is not.
-    let auth = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok());
+    let auth = headers.get("authorization").and_then(|v| v.to_str().ok());
     if !crate::auth::bearer_ok(auth, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
