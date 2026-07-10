@@ -18,7 +18,7 @@ use crate::event::Event;
 
 /// A single attempt (session) on a card. ADR §6.2: reassignment forwards the
 /// prior session as a "previous attempt" block to the new session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CardAttempt {
     pub session_id: String,
     pub assigned_id: String,

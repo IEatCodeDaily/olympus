@@ -43,6 +43,7 @@ pub struct MessageView {
     /// session_id → total message count (independent of window eviction).
     counts: HashMap<String, u64>,
     window_size: usize,
+    retain_rows: bool,
 }
 
 impl MessageView {
@@ -57,6 +58,18 @@ impl MessageView {
             hot: HashMap::new(),
             counts: HashMap::new(),
             window_size: window_size.max(1),
+            retain_rows: true,
+        }
+    }
+
+    /// Runtime mode for ADR 0009: retain counts only. Message bodies live in
+    /// SQLite and are paged through `Log::recent_messages` on demand.
+    pub fn metadata_only() -> Self {
+        Self {
+            hot: HashMap::new(),
+            counts: HashMap::new(),
+            window_size: 1,
+            retain_rows: false,
         }
     }
 
@@ -83,6 +96,10 @@ impl MessageView {
             } => {
                 // Count every message, independent of window eviction.
                 *self.counts.entry(session_id.clone()).or_insert(0) += 1;
+
+                if !self.retain_rows {
+                    return;
+                }
 
                 let window = self.hot.entry(session_id.clone()).or_default();
                 window.push_back(MessageRow {
@@ -150,6 +167,10 @@ impl MessageView {
     /// Size of the hot window kept in memory.
     pub fn window_size(&self) -> usize {
         self.window_size
+    }
+
+    pub(crate) fn retain_rows(&self) -> bool {
+        self.retain_rows
     }
 }
 

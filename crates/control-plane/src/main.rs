@@ -82,8 +82,14 @@ async fn main() -> Result<()> {
 
     // ---- open the durable event log; keep Olympus-native records, rebuild the
     // state.db mirror each boot ----
-    let log_path = home.join("eventlog.redb");
+    let log_path = home.join("olympus.db");
     let log = Arc::new(Log::open(&log_path).context("opening event log")?);
+    let migrated = log
+        .migrate_from_redb(&home.join("eventlog.redb"))
+        .context("migrating legacy redb event log")?;
+    if migrated > 0 {
+        tracing::info!(events = migrated, "migrated legacy redb log to SQLite");
+    }
     // Drop the previous boot's state.db-imported events (keeping Olympus-native
     // records: setup declarations, cards, olympus sessions), so the re-import
     // below is idempotent and the durable declarations survive a restart.
@@ -94,13 +100,12 @@ async fn main() -> Result<()> {
     // (Olympus sessions, cards, setup declarations) so the server can start
     // serving IMMEDIATELY. The Hermes state.db import (1829 sessions, 127K
     // messages) runs AFTER bind in a background thread — see below.
-    let mut views = ViewManager::new();
+    let mut views = ViewManager::metadata_only();
     views
         .replay(&log)
         .context("replaying native log into views")?;
 
-    let mut search =
-        SearchIndex::open(&home.join("search-index")).context("opening search index")?;
+    let mut search = SearchIndex::from_log(log.clone());
     search
         .build_from_log(&log)
         .context("building search index (native only)")?;
@@ -342,7 +347,7 @@ async fn main() -> Result<()> {
                     // Rebuild views + search from the now-complete log.
                     {
                         let mut v = bg_views.write().await;
-                        *v = ViewManager::new();
+                        *v = ViewManager::metadata_only();
                         if let Err(e) = v.replay(&bg_log) {
                             tracing::error!(error = %e, "view replay after import failed");
                         }
