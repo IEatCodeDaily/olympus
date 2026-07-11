@@ -9,8 +9,8 @@ use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
+use super::principal::Principal;
 use super::AppState;
-use crate::auth_store::Principal;
 
 const SESSION_COOKIE: &str = "olympus_session";
 const SESSION_TTL_SECONDS: i64 = 60 * 60 * 24 * 30;
@@ -83,20 +83,25 @@ pub async fn login(
 }
 
 pub async fn current_session(Extension(principal): Extension<Principal>) -> Response {
-    if principal.kind != Principal::USER_KIND {
-        return (StatusCode::FORBIDDEN, "user login required").into_response();
+    match principal {
+        Principal::User {
+            user_id, username, ..
+        } => Json(json!({
+            "user": { "userId": user_id, "username": username, "kind": "user" }
+        }))
+        .into_response(),
+        Principal::Operator => (StatusCode::FORBIDDEN, "user login required").into_response(),
     }
-    Json(json!({ "user": principal })).into_response()
 }
 
 pub async fn list_organizations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
 ) -> Response {
-    if principal.kind != Principal::USER_KIND {
+    let Principal::User { user_id, .. } = principal else {
         return (StatusCode::FORBIDDEN, "user login required").into_response();
-    }
-    match state.auth_store.organizations_for_user(&principal.user_id) {
+    };
+    match state.auth_store.organizations_for_user(&user_id) {
         Ok(organizations) => Json(json!({ "organizations": organizations })).into_response(),
         Err(error) => {
             tracing::error!(%error, "listing user organizations");

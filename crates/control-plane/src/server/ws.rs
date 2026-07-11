@@ -991,6 +991,7 @@ mod tests {
             )),
             token: Arc::new("t".into()),
             auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
+            allow_installation_token: true,
             session_cookie_secure: true,
             import_state: ImportState(Arc::new(std::sync::atomic::AtomicU8::new(IMPORT_DONE))),
             hermes_profile: Arc::new("p".into()),
