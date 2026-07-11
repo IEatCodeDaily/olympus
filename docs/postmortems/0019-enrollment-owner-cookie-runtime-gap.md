@@ -27,6 +27,7 @@ Inspection of `/proc/<hall-pid>/exe` identified the stale deployed binary unambi
 
 ## Resolution and prevention
 
-- Deploy the Hall build whose unified principal seam classifies `/api/enroll` as an admin route and permits either an installation-token operator or a logged-in organization owner.
+- Deployed `olympus-hall-e4c56cea9041`, whose unified principal seam classifies `/api/enroll` as an admin route and permits either an installation-token operator or a logged-in organization owner.
+- Repeated the same local login and owner-cookie request against the restarted process: login returned `200`, enrollment mint returned `200`, and the response contained the expected token, command, expiry, and Hall iroh identity fields.
 - Verify the owner-cookie request against the restarted Hall, not only an in-process router test.
 - Keep the owner-cookie enrollment regression test and deployment SHA check as release gates for Fleet enrollment changes.
