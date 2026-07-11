@@ -20,6 +20,7 @@ Normal notes containing comments, reference links, footnotes, directives, MDX-li
 
 - Replace Milkdown/Crepe and the Rich/Source switch with one CodeMirror-backed, byte-preserving Markdown editor.
 - Add live-preview decorations: inactive Markdown markers collapse while headings, emphasis, links, lists, and blockquotes retain document-like presentation; the active line reveals canonical syntax for direct editing.
+- Remove the remaining View/Edit gate so a selected note is immediately editable across the full pane, with formatting and persistence actions in one native toolbar.
 - Keep conflict documents exact and fully visible, with an explicit unresolved-conflict warning instead of changing editor modes.
 - Preserve Vault mention, label, and wikilink suggestions through native CodeMirror completion.
 - Put layout actions on the active pane's tab row, seed new split groups with the active document, and add mouse/keyboard-resizable split separators.

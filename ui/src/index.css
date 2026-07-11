@@ -613,11 +613,26 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   font-family: var(--font-mono);
 }
 
-.vault-markdown-editor { position: relative; width: 100%; max-width: 680px; }
-.vault-editor-loading { width: 100%; max-width: 680px; min-height: 420px; display: grid; place-items: center; border: var(--border-w) solid var(--border); border-radius: var(--radius-md); color: var(--faint); }
-.vault-source-warning { margin-bottom: var(--space-3); padding: var(--space-3) var(--space-4); border: var(--border-w) solid var(--warn-line); border-radius: var(--radius); background: var(--warn-wash); color: var(--dim); font-size: var(--fs-12); }
-.vault-source-editor { overflow: hidden; min-height: 420px; border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-elev); }
-.vault-source-editor .cm-editor { min-height: 420px; }
+.vault-note-surface { overflow: hidden; padding: 0; }
+.vault-markdown-editor { position: relative; display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; flex-direction: column; }
+.vault-editor-loading { width: 100%; min-height: 100%; display: grid; place-items: center; color: var(--faint); }
+.vault-note-toolbar { display: flex; min-height: 38px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: var(--space-3); overflow: hidden; padding: 0 var(--space-3); border-bottom: var(--border-w) solid var(--border); background: var(--surface); }
+.vault-note-tools, .vault-note-actions { display: flex; align-items: center; gap: var(--space-1); }
+.vault-note-tools { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.vault-note-tools::-webkit-scrollbar { display: none; }
+.vault-note-actions { flex: 0 0 auto; padding-left: var(--space-2); background: var(--surface); }
+.vault-toolbar-button { min-width: 28px; height: 28px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius); background: transparent; color: var(--dim); font: var(--fw-medium) var(--fs-11)/1 var(--font-sans); cursor: pointer; white-space: nowrap; }
+.vault-toolbar-button:hover, .vault-toolbar-button:focus-visible { background: var(--hover); color: var(--text); }
+.vault-toolbar-button.strong { font-weight: var(--fw-bold); }
+.vault-toolbar-button.italic { font-style: italic; }
+.vault-toolbar-button.strike { text-decoration: line-through; }
+.vault-toolbar-button.danger:hover, .vault-toolbar-button.danger:focus-visible { background: var(--err-wash); color: var(--err); }
+.vault-toolbar-divider { width: var(--border-w); height: 18px; flex: 0 0 auto; margin: 0 var(--space-1); background: var(--border); }
+.vault-save-state { color: var(--faint); font: var(--fw-medium) var(--fs-10)/1 var(--font-mono); text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+.vault-save-error, .vault-source-warning { flex: 0 0 auto; padding: var(--space-3) var(--space-4); border-bottom: var(--border-w) solid var(--err-line); background: var(--err-wash); color: var(--err); font-size: var(--fs-12); }
+.vault-source-warning { border-color: var(--warn-line); background: var(--warn-wash); color: var(--dim); }
+.vault-source-editor { min-width: 0; min-height: 0; flex: 1; overflow: hidden; background: var(--bg-elev); }
+.vault-source-editor > div, .vault-source-editor .cm-editor { height: 100%; min-height: 0; }
 .vault-source-editor .cm-editor, .vault-source-editor .cm-gutters { background: var(--bg-elev); color: var(--text); }
 .vault-source-editor .cm-scroller { font-family: var(--font-mono); line-height: var(--lh-relaxed); }
 .vault-source-editor .cm-content { padding: var(--space-8); caret-color: var(--text); }

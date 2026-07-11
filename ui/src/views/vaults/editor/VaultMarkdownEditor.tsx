@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { autocompletion } from "@codemirror/autocomplete";
+import { redo, undo } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from "@codemirror/view";
@@ -12,6 +13,11 @@ interface VaultMarkdownEditorProps {
   markdown: string;
   onChange: (markdown: string) => void;
   suggestions?: VaultSuggestion[];
+  dirty?: boolean;
+  saving?: boolean;
+  saveError?: string | null;
+  onSave?: () => void;
+  onDelete?: () => void;
 }
 
 const EMPTY_SUGGESTIONS: VaultSuggestion[] = [];
@@ -20,7 +26,13 @@ export function VaultMarkdownEditor({
   markdown,
   onChange,
   suggestions = EMPTY_SUGGESTIONS,
+  dirty = false,
+  saving = false,
+  saveError = null,
+  onSave,
+  onDelete,
 }: VaultMarkdownEditorProps) {
+  const editorRef = useRef<EditorView | null>(null);
   const conflicted = hasJjConflictMarkers(markdown);
   const extensions = useMemo(
     () => [
@@ -32,24 +44,99 @@ export function VaultMarkdownEditor({
     [conflicted, suggestions],
   );
 
+  const wrapSelection = (prefix: string, suffix = prefix, placeholder = "text") => {
+    const view = editorRef.current;
+    if (!view) return;
+    const selection = view.state.selection.main;
+    const selected = view.state.sliceDoc(selection.from, selection.to) || placeholder;
+    view.dispatch({
+      changes: { from: selection.from, to: selection.to, insert: `${prefix}${selected}${suffix}` },
+      selection: { anchor: selection.from + prefix.length, head: selection.from + prefix.length + selected.length },
+    });
+    view.focus();
+  };
+
+  const prefixLines = (prefix: string) => {
+    const view = editorRef.current;
+    if (!view) return;
+    const selection = view.state.selection.main;
+    const from = view.state.doc.lineAt(selection.from).from;
+    const to = view.state.doc.lineAt(selection.to).to;
+    const replacement = view.state.sliceDoc(from, to).split("\n").map((line) => `${prefix}${line}`).join("\n");
+    view.dispatch({ changes: { from, to, insert: replacement } });
+    view.focus();
+  };
+
+  const keepEditorFocus = (event: ReactMouseEvent<HTMLButtonElement>) => event.preventDefault();
+
   return (
     <div className="vault-markdown-editor">
+      <div className="vault-note-toolbar" role="toolbar" aria-label="Note formatting">
+        <div className="vault-note-tools">
+          <ToolbarButton label="Undo" text="↶" onMouseDown={keepEditorFocus} onClick={() => editorRef.current && undo(editorRef.current)} />
+          <ToolbarButton label="Redo" text="↷" onMouseDown={keepEditorFocus} onClick={() => editorRef.current && redo(editorRef.current)} />
+          <span className="vault-toolbar-divider" aria-hidden="true" />
+          <ToolbarButton label="Heading" text="H" onMouseDown={keepEditorFocus} onClick={() => prefixLines("# ")} />
+          <ToolbarButton label="Bold" text="B" strong onMouseDown={keepEditorFocus} onClick={() => wrapSelection("**")} />
+          <ToolbarButton label="Italic" text="I" italic onMouseDown={keepEditorFocus} onClick={() => wrapSelection("*")} />
+          <ToolbarButton label="Strikethrough" text="S" strike onMouseDown={keepEditorFocus} onClick={() => wrapSelection("~~")} />
+          <ToolbarButton label="Inline code" text="<>" onMouseDown={keepEditorFocus} onClick={() => wrapSelection("`")} />
+          <ToolbarButton label="Insert link" text="Link" onMouseDown={keepEditorFocus} onClick={() => wrapSelection("[", "](url)")} />
+          <span className="vault-toolbar-divider" aria-hidden="true" />
+          <ToolbarButton label="Bulleted list" text="• List" onMouseDown={keepEditorFocus} onClick={() => prefixLines("- ")} />
+          <ToolbarButton label="Numbered list" text="1. List" onMouseDown={keepEditorFocus} onClick={() => prefixLines("1. ")} />
+          <ToolbarButton label="Blockquote" text="Quote" onMouseDown={keepEditorFocus} onClick={() => prefixLines("> ")} />
+        </div>
+        <div className="vault-note-actions">
+          {dirty && <span className="vault-save-state">Unsaved</span>}
+          {onSave && <button type="button" className="btn pri" aria-label="Save note" disabled={saving || !dirty} onClick={onSave}>{saving ? "Saving…" : "Save"}</button>}
+          {onDelete && <button type="button" className="vault-toolbar-button danger" aria-label="Delete note" onClick={onDelete}>Delete</button>}
+        </div>
+      </div>
       {conflicted && (
         <div className="vault-source-warning" data-testid="vault-source-warning">
           This note contains an unresolved jj conflict. Resolve the conflict markers before saving.
         </div>
       )}
-      <div className="vault-source-editor" data-testid="vsrc">
+      {saveError && <div className="vault-save-error" role="alert">{saveError}</div>}
+      <div className="vault-source-editor vault-editor-canvas" data-testid="vsrc">
         <CodeMirror
           value={markdown}
           extensions={extensions}
-          minHeight="420px"
+          height="100%"
           onChange={onChange}
           placeholder="Write Markdown…"
           basicSetup={{ lineNumbers: false, foldGutter: false }}
+          onCreateEditor={(view) => { editorRef.current = view; }}
         />
       </div>
     </div>
+  );
+}
+
+interface ToolbarButtonProps {
+  label: string;
+  text: string;
+  onClick: () => void;
+  onMouseDown: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  strong?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+}
+
+function ToolbarButton({ label, text, onClick, onMouseDown, strong, italic, strike }: ToolbarButtonProps) {
+  const emphasis = [strong && "strong", italic && "italic", strike && "strike"].filter(Boolean).join(" ");
+  return (
+    <button
+      type="button"
+      className={`vault-toolbar-button ${emphasis}`}
+      aria-label={label}
+      title={label}
+      onMouseDown={onMouseDown}
+      onClick={onClick}
+    >
+      {text}
+    </button>
   );
 }
 

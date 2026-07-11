@@ -10,17 +10,17 @@ properties:
     timeout: 15000
 - tapOn: "acp-wire-spike.md"
 - extendedWaitUntil:
-    visible: "Edit"
+    visible: "Save"
     timeout: 10000
-- tapOn:
-    point: "66%,16%"
 - assertVisible: "Save"
-- assertVisible: "Cancel"
+- assertVisible: "Delete"
+- assertVisible: "B"
+- assertNotVisible: "Edit"
+- assertNotVisible: "Cancel"
 - assertNotVisible: "Rich"
 - assertNotVisible: "Source"
 - takeScreenshot:
     path: screenshots/vault-lossless-editor
-- tapOn: "Cancel"
 - tapOn:
     point: "94%,7%"
 - takeScreenshot:

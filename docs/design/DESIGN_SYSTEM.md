@@ -542,6 +542,13 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-11 — Make Vault notes an always-editable, full-pane writing surface
+
+- Removed the remaining View/Edit interaction. Opening a note now opens the live-preview editor directly; there is no second rendered-note state or Edit/Cancel ceremony.
+- The note canvas owns the complete editor-group area below its tab. Removed the centered 680px card, outer padding, and bordered editor frame.
+- Added a compact formatting toolbar for undo/redo, headings, emphasis, inline code, links, lists, and blockquotes. Save state and destructive actions stay reachable at the right edge while formatting controls scroll on narrow screens.
+- Desktop, split-pane, and 412px mobile Maestro evidence confirms the canvas fills the pane, toolbar actions remain reachable, and no horizontal content clipping returns.
+
 ### 2026-07-11 — Replace the Vault's dual editor with a lossless live-preview workbench
 
 - Removed the Rich/Source mode switch and the source-only syntax denylist. Vault editing now uses one CodeMirror document model that preserves canonical Markdown byte-for-byte.
