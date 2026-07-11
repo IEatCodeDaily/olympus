@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CompletionContext } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
@@ -110,5 +110,41 @@ describe("VaultMarkdownEditor", () => {
     expect(screen.getByTestId("vsrc").querySelector(".vault-md-wikilink")).toHaveTextContent("System design");
     const editor = EditorView.findFromDOM(screen.getByTestId("vsrc").querySelector(".cm-editor")!)!;
     expect(editor.state.doc.toString()).toBe(markdown);
+  });
+
+  it("fills the note surface and exposes native formatting controls", () => {
+    render(<VaultMarkdownEditor markdown="Draft" onChange={() => {}} />);
+
+    expect(screen.getByTestId("vsrc")).toHaveClass("vault-editor-canvas");
+    expect(screen.getByRole("toolbar", { name: "Note formatting" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Italic" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Insert link" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bulleted list" })).toBeInTheDocument();
+  });
+
+  it("formats the current selection without replacing the editor", () => {
+    const onChange = vi.fn();
+    render(<VaultMarkdownEditor markdown="Draft" onChange={onChange} />);
+    const editor = EditorView.findFromDOM(screen.getByTestId("vsrc").querySelector(".cm-editor")!)!;
+    editor.dispatch({ selection: { anchor: 0, head: 5 } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Bold" }));
+
+    expect(editor.state.doc.toString()).toBe("**Draft**");
+    expect(onChange.mock.lastCall?.[0]).toBe("**Draft**");
+  });
+
+  it("keeps save and delete actions in the editor toolbar", () => {
+    const onSave = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <VaultMarkdownEditor markdown="Draft" onChange={() => {}} dirty onSave={onSave} onDelete={onDelete} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onDelete).toHaveBeenCalledOnce();
   });
 });

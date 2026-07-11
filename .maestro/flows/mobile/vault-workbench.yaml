@@ -6,11 +6,12 @@ properties:
 ---
 - launchApp
 - extendedWaitUntil:
-    visible: "Edit"
+    visible: "Save"
     timeout: 15000
-- tapOn: "Edit"
 - assertVisible: "Save"
-- assertVisible: "Cancel"
+- assertVisible: "Delete"
+- assertNotVisible: "Edit"
+- assertNotVisible: "Cancel"
 - assertNotVisible: "Rich"
 - assertNotVisible: "Source"
 - takeScreenshot:
