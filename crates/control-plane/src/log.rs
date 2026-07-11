@@ -1432,7 +1432,11 @@ fn codec_size_ratio_fixture() {
     };
 
     let ratio = after_bytes as f64 / before_bytes.max(1) as f64;
-    let flag = if ratio > 1.5 { "  *** EXCEEDS 1.5x ***" } else { "" };
+    let flag = if ratio > 1.5 {
+        "  *** EXCEEDS 1.5x ***"
+    } else {
+        ""
+    };
     eprintln!(
         "\n=== codec_size_ratio_fixture ===\n\
          events       : {n}\n\
@@ -1456,6 +1460,7 @@ fn codec_size_ratio_fixture() {
 ///     committed in a single SQLite transaction with no interleaving gaps.
 ///   - The same 100 events appended one-by-one via append() produce an
 ///     identical result, confirming parity between the two code paths.
+///
 /// Timing is printed for informational evidence; no wall-clock assertions
 /// are made so the test is not brittle under load.
 #[test]
@@ -1514,7 +1519,11 @@ fn batch_append_throughput_fixture() {
     );
 
     let batch_stored = batch_log.read_all().unwrap();
-    assert_eq!(batch_stored.len(), n, "read_all must return all batched events");
+    assert_eq!(
+        batch_stored.len(),
+        n,
+        "read_all must return all batched events"
+    );
     for (i, ((seq, got), want)) in batch_stored.iter().zip(events.iter()).enumerate() {
         assert!(*seq > 0, "seq must be positive at index {i}");
         assert_eq!(
