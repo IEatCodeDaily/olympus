@@ -1,0 +1,27 @@
+url: ${MAESTRO_BASE_URL}/vaults
+name: Vault lossless editor and integrated pane chrome
+properties:
+  junitId: olympus-vault-workbench
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "New Note"
+    timeout: 15000
+- tapOn: "acp-wire-spike.md"
+- extendedWaitUntil:
+    visible: "Edit"
+    timeout: 10000
+- tapOn:
+    point: "66%,16%"
+- assertVisible: "Save"
+- assertVisible: "Cancel"
+- assertNotVisible: "Rich"
+- assertNotVisible: "Source"
+- takeScreenshot:
+    path: screenshots/vault-lossless-editor
+- tapOn: "Cancel"
+- tapOn:
+    point: "94%,7%"
+- takeScreenshot:
+    path: screenshots/vault-integrated-tabs-split

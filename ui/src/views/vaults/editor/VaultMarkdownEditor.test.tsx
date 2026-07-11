@@ -1,12 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { CompletionContext } from "@codemirror/autocomplete";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { VaultMarkdownEditor } from "./VaultMarkdownEditor";
-
-vi.mock("./MilkdownRichEditor", () => ({
-  MilkdownRichEditor: ({ markdown }: { markdown: string }) => (
-    <div data-testid="milkdown-rich">{markdown}</div>
-  ),
-}));
+import { vaultCompletionSource } from "./vaultCompletion";
 
 const conflicted = [
   "---",
@@ -25,26 +23,30 @@ describe("VaultMarkdownEditor", () => {
 
     render(<VaultMarkdownEditor markdown="# Stable" onChange={onChange} />);
 
-    expect(screen.getByTestId("milkdown-rich")).toHaveTextContent("# Stable");
+    expect(screen.getByTestId("vsrc")).toHaveTextContent("# Stable");
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("keeps frontmatter outside the rich editing surface", () => {
+  it("edits the complete Markdown document in one lossless surface", () => {
+    const markdown = "---\ntitle: Vault\n---\n# Editable body";
     render(
       <VaultMarkdownEditor
-        markdown={"---\ntitle: Vault\n---\n# Editable body"}
+        markdown={markdown}
         onChange={() => {}}
       />,
     );
 
-    expect(screen.getByTestId("vault-frontmatter")).toHaveTextContent("title: Vault");
-    expect(screen.getByTestId("milkdown-rich")).toHaveTextContent("# Editable body");
+    expect(screen.getByTestId("vsrc")).toHaveTextContent("title: Vault");
+    expect(screen.getByTestId("vsrc")).toHaveTextContent("Editable body");
+    const editor = EditorView.findFromDOM(screen.getByTestId("vsrc").querySelector(".cm-editor")!)!;
+    expect(editor.state.doc.toString()).toBe(markdown);
+    expect(screen.queryByRole("button", { name: "Rich" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Source" })).not.toBeInTheDocument();
   });
 
-  it("forces conflicted notes into exact source mode", () => {
+  it("keeps conflicted notes editable without switching editor modes", () => {
     render(<VaultMarkdownEditor markdown={conflicted} onChange={() => {}} />);
 
-    expect(screen.queryByTestId("milkdown-rich")).not.toBeInTheDocument();
     expect(screen.getByTestId("vault-source-warning")).toHaveTextContent(
       "unresolved jj conflict",
     );
@@ -53,30 +55,60 @@ describe("VaultMarkdownEditor", () => {
       (line) => line.textContent ?? "",
     );
     expect(lines.join("\n")).toBe(conflicted);
-    expect(screen.getByRole("button", { name: "Rich" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Rich" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Source" })).not.toBeInTheDocument();
   });
 
-  it("fails closed to source mode for unsupported Markdown", () => {
-    render(
-      <VaultMarkdownEditor markdown={"# Note\n\n<Component />"} onChange={() => {}} />,
-    );
+  it.each([
+    "# Note\n\n<Component />",
+    "# Note\n\n<!-- keep this -->",
+    "Footnote[^1]\n\n[^1]: detail",
+    "Read [the design][design].\n\n[design]: /design.md",
+  ])("keeps extended Markdown editable in the same surface: %s", (markdown) => {
+    render(<VaultMarkdownEditor markdown={markdown} onChange={() => {}} />);
 
-    expect(screen.queryByTestId("milkdown-rich")).not.toBeInTheDocument();
-    expect(screen.getByTestId("vault-source-warning")).toHaveTextContent(
-      "unsupported Markdown syntax",
-    );
-    expect(screen.getByRole("button", { name: "Rich" })).toBeDisabled();
+    expect(screen.getByTestId("vsrc")).toHaveTextContent(markdown.split("\n")[0]);
+    expect(screen.queryByTestId("vault-source-warning")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rich" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Source" })).not.toBeInTheDocument();
   });
 
-  it("allows manual switching between rich and source modes", () => {
-    render(<VaultMarkdownEditor markdown="# Draft" onChange={() => {}} />);
+  it("offers Vault links through native editor completion", async () => {
+    const state = EditorState.create({ doc: "See [[des" });
+    const source = vaultCompletionSource([
+      { kind: "note", id: "docs/design.md", label: "System design" },
+      { kind: "note", id: "runbook.md", label: "Runbook" },
+    ]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Source" }));
-    expect(screen.getByTestId("vsrc").querySelector(".cm-content")).toHaveTextContent(
-      "# Draft",
-    );
+    const result = await source(new CompletionContext(state, state.doc.length, true));
 
-    fireEvent.click(screen.getByRole("button", { name: "Rich" }));
-    expect(screen.getByTestId("milkdown-rich")).toBeInTheDocument();
+    expect(result?.from).toBe(4);
+    expect(result?.options).toEqual([
+      expect.objectContaining({ label: "System design", detail: "docs/design.md" }),
+    ]);
+  });
+
+  it("renders inactive Markdown lines as a live preview without changing the document", async () => {
+    render(<VaultMarkdownEditor markdown={"# Heading\n\n**bold**"} onChange={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("vsrc").querySelector(".vault-md-h1")).not.toBeNull();
+      expect(screen.getByTestId("vsrc").querySelector(".vault-md-hidden-mark")).not.toBeNull();
+    });
+  });
+
+  it("wraps long Markdown lines instead of creating a horizontal editor viewport", () => {
+    render(<VaultMarkdownEditor markdown={"A very long line"} onChange={() => {}} />);
+
+    expect(screen.getByTestId("vsrc").querySelector(".cm-lineWrapping")).not.toBeNull();
+  });
+
+  it("renders canonical wikilinks as links away from the active line", () => {
+    const markdown = "# Note\n\nSee [[docs/design.md|System design]].";
+    render(<VaultMarkdownEditor markdown={markdown} onChange={() => {}} />);
+
+    expect(screen.getByTestId("vsrc").querySelector(".vault-md-wikilink")).toHaveTextContent("System design");
+    const editor = EditorView.findFromDOM(screen.getByTestId("vsrc").querySelector(".cm-editor")!)!;
+    expect(editor.state.doc.toString()).toBe(markdown);
   });
 });

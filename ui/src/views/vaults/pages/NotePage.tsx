@@ -2,7 +2,7 @@
 //
 // Renders a single note with a view/edit toggle:
 //   - View: richly rendered markdown (react-markdown + remark-gfm).
-//   - Edit: Milkdown rich editor with an exact CodeMirror source fallback.
+//   - Edit: one lossless CodeMirror Markdown surface for every document shape.
 // On save, serializes to .md via PUT /api/vaults/:id/note (V-BE handles the
 // jj snapshot commit). Shows LINKED NOTES footer with clickable wikilinks.
 
