@@ -25,6 +25,7 @@ export function VaultWorkspace({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [columnSplit, setColumnSplit] = useState(50);
   const [rowSplit, setRowSplit] = useState(50);
+  const [dirtyTabs, setDirtyTabs] = useState<Set<string>>(() => new Set());
   const hasColumnSplit = state.layout === "columns" || state.layout === "grid";
   const hasRowSplit = state.layout === "rows" || state.layout === "grid";
 
@@ -73,15 +74,18 @@ export function VaultWorkspace({
             <section key={pane.id} className={`vault-pane ${activePane ? "active" : ""}`} onMouseDown={() => onActivatePane(pane.id)}>
               <div className="vault-pane-header">
                 <div className="vault-tabs" role="tablist" aria-label="Open vault tabs">
-                  {pane.tabs.map((tab) => (
+                  {pane.tabs.map((tab) => {
+                    const dirty = dirtyTabs.has(`${pane.id}:${tab.id}`);
+                    return (
                     <div key={tab.id} className={`vault-tab ${tab.id === pane.activeTabId ? "on" : ""}`}>
                       <button type="button" role="tab" aria-selected={tab.id === pane.activeTabId} onClick={() => onActivateTab(pane.id, tab)}>
                         <Icon name={tab.kind === "note" ? "file" : tab.kind === "graph" ? "workflow" : "layout-grid"} size={12} />
-                        <span>{tab.title}</span>
+                        <span>{tab.title}{dirty ? " *" : ""}</span>
                       </button>
                       <button type="button" className="vault-tab-close" aria-label={`Close ${tab.title}`} onClick={() => onCloseTab(pane.id, tab.id)}><Icon name="x" size={10} /></button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {activePane && (
                   <div className="vault-layout-actions" role="group" aria-label="Workspace layout">
@@ -94,7 +98,20 @@ export function VaultWorkspace({
               </div>
               <div className="vault-pane-content">
                 {activeTab ? (
-                  <TabContent vaultId={vaultId} tab={activeTab} onOpenNote={onOpenNote} />
+                  <TabContent
+                    vaultId={vaultId}
+                    tab={activeTab}
+                    onOpenNote={onOpenNote}
+                    onDirtyChange={(dirty) => {
+                      const key = `${pane.id}:${activeTab.id}`;
+                      setDirtyTabs((current) => {
+                        const next = new Set(current);
+                        if (dirty) next.add(key);
+                        else next.delete(key);
+                        return next;
+                      });
+                    }}
+                  />
                 ) : (
                   <div className="empty-state vault-pane-empty"><div className="empty-state-icon"><Icon name="plus" size={28} /></div><div className="empty-state-title">Empty pane</div><div className="empty-state-msg">Open a file or view from the sidebar.</div></div>
                 )}
@@ -133,10 +150,10 @@ export function VaultWorkspace({
   );
 }
 
-function TabContent({ vaultId, tab, onOpenNote }: { vaultId: string; tab: WorkspaceTab; onOpenNote: (path: string, title?: string) => void }) {
+function TabContent({ vaultId, tab, onOpenNote, onDirtyChange }: { vaultId: string; tab: WorkspaceTab; onOpenNote: (path: string, title?: string) => void; onDirtyChange: (dirty: boolean) => void }) {
   if (tab.kind === "graph") return <GraphPage vaultId={vaultId} onOpenNote={onOpenNote} />;
   if (tab.kind === "table") return <VaultTablePage vaultId={vaultId} onOpenNote={onOpenNote} />;
-  return <NotePage vaultId={vaultId} notePath={tab.path ?? null} onNavigateNote={onOpenNote} />;
+  return <NotePage vaultId={vaultId} notePath={tab.path ?? null} onNavigateNote={onOpenNote} onDirtyChange={onDirtyChange} />;
 }
 
 function LayoutButton({ label, layout, active, onLayout, icon }: { label: string; layout: VaultWorkspaceLayout; active: boolean; onLayout: (layout: VaultWorkspaceLayout) => void; icon: "panel-right" | "panel-left" | "panel-bottom" | "layout-grid" }) {

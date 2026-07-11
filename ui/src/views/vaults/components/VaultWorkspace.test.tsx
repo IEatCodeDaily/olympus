@@ -4,7 +4,11 @@ import { VaultWorkspace } from "./VaultWorkspace";
 import { createInitialWorkspace, noteTab, setWorkspaceLayout } from "../vaultWorkspace";
 
 vi.mock("../pages/GraphPage", () => ({ GraphPage: () => <div>Graph</div> }));
-vi.mock("../pages/NotePage", () => ({ NotePage: () => <div>Note</div> }));
+vi.mock("../pages/NotePage", () => ({
+  NotePage: ({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) => (
+    <button type="button" onClick={() => onDirtyChange(true)}>Dirty note</button>
+  ),
+}));
 vi.mock("../pages/VaultTablePage", () => ({ VaultTablePage: () => <div>Table</div> }));
 
 describe("VaultWorkspace", () => {
@@ -37,5 +41,17 @@ describe("VaultWorkspace", () => {
     fireEvent.mouseUp(document);
 
     expect(workspace.style.gridTemplateColumns).toContain("65%");
+  });
+
+  it("marks an unsaved note with an asterisk in its tab title", () => {
+    const state = createInitialWorkspace(noteTab("one.md", "One"));
+    render(
+      <VaultWorkspace vaultId="vault-1" state={state} onActivatePane={vi.fn()} onActivateTab={vi.fn()} onCloseTab={vi.fn()} onOpenNote={vi.fn()} onLayout={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dirty note" }));
+
+    expect(screen.getByRole("tab")).toHaveTextContent("One *");
+    expect(screen.queryByText("Unsaved")).not.toBeInTheDocument();
   });
 });

@@ -146,5 +146,6 @@ describe("VaultMarkdownEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
     expect(onSave).toHaveBeenCalledOnce();
     expect(onDelete).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Unsaved")).not.toBeInTheDocument();
   });
 });
