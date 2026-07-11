@@ -82,7 +82,7 @@ SQLite (WAL mode, ~/.olympus/olympus.db)
 CREATE TABLE events (
   seq        INTEGER PRIMARY KEY AUTOINCREMENT,
   event_type TEXT NOT NULL,
-  payload    BLOB NOT NULL,           -- postcard-serialized, zstd-compressed
+  payload    BLOB NOT NULL,           -- JSON-serialized, zstd-compressed
   created_at REAL NOT NULL
 );
 
@@ -290,6 +290,27 @@ functions of it. They can be rebuilt from `events` at any time.
 The legacy redb log implementation and dependency have been deleted. Existing
 `~/.olympus/eventlog.redb` files are inert: Hall warns once at boot, ignores the
 file without reading it, and operators may remove it manually.
+
+### Self-describing event payload addendum
+
+The sole SQLite `events.payload` codec in steady state is JSON compressed with
+zstd (`json+zstd-v1`). There is no long-lived dual-codec mode: the only
+exception is Hall's marker-guarded, transactional boot rewrite from historical
+postcard payloads to JSON+zstd. That rewrite verifies the event count and each
+event's semantic equality, changes only the payload encoding, and does not alter
+event content, sequence ordering, append-only history semantics, REST DTOs, or
+WebSocket/proto wire-frame formats. Once it records
+`meta.event_payload_codec = json+zstd-v1`, normal operation reads and writes only
+JSON+zstd event payloads.
+
+Future `Event` schema evolution is additive. New persisted fields must either be
+optional by construction or use `#[serde(default)]` when older JSON records may
+omit them. Positional enum or field reshaping is no longer an accepted
+persistence-evolution strategy for the SQLite event log.
+
+The rationale is settled rather than reopened here: JSON keeps event payloads
+inspectable with the `sqlite3` CLI for operations and debugging, while zstd keeps
+the on-disk size bounded enough for the control-plane workload.
 
 - **RSS drops from ~1.4 GB to < 50 MB.** 15× reduction.
 - **Startup is faster.** No log replay into in-memory views — SQLite
