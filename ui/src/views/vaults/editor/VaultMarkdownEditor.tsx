@@ -22,6 +22,10 @@ interface VaultMarkdownEditorProps {
 
 const EMPTY_SUGGESTIONS: VaultSuggestion[] = [];
 
+function preventToolbarBlur(event: ReactMouseEvent<HTMLButtonElement>) {
+  event.preventDefault();
+}
+
 export function VaultMarkdownEditor({
   markdown,
   onChange,
@@ -67,25 +71,23 @@ export function VaultMarkdownEditor({
     view.focus();
   };
 
-  const keepEditorFocus = (event: ReactMouseEvent<HTMLButtonElement>) => event.preventDefault();
-
   return (
     <div className="vault-markdown-editor">
       <div className="vault-note-toolbar" role="toolbar" aria-label="Note formatting">
         <div className="vault-note-tools">
-          <ToolbarButton label="Undo" text="↶" onMouseDown={keepEditorFocus} onClick={() => editorRef.current && undo(editorRef.current)} />
-          <ToolbarButton label="Redo" text="↷" onMouseDown={keepEditorFocus} onClick={() => editorRef.current && redo(editorRef.current)} />
+          <ToolbarButton label="Undo" text="↶" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && undo(editorRef.current)} />
+          <ToolbarButton label="Redo" text="↷" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && redo(editorRef.current)} />
           <span className="vault-toolbar-divider" aria-hidden="true" />
-          <ToolbarButton label="Heading" text="H" onMouseDown={keepEditorFocus} onClick={() => prefixLines("# ")} />
-          <ToolbarButton label="Bold" text="B" strong onMouseDown={keepEditorFocus} onClick={() => wrapSelection("**")} />
-          <ToolbarButton label="Italic" text="I" italic onMouseDown={keepEditorFocus} onClick={() => wrapSelection("*")} />
-          <ToolbarButton label="Strikethrough" text="S" strike onMouseDown={keepEditorFocus} onClick={() => wrapSelection("~~")} />
-          <ToolbarButton label="Inline code" text="<>" onMouseDown={keepEditorFocus} onClick={() => wrapSelection("`")} />
-          <ToolbarButton label="Insert link" text="Link" onMouseDown={keepEditorFocus} onClick={() => wrapSelection("[", "](url)")} />
+          <ToolbarButton label="Heading" text="H" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("# ")} />
+          <ToolbarButton label="Bold" text="B" strong onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("**")} />
+          <ToolbarButton label="Italic" text="I" italic onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("*")} />
+          <ToolbarButton label="Strikethrough" text="S" strike onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("~~")} />
+          <ToolbarButton label="Inline code" text="<>" onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("`")} />
+          <ToolbarButton label="Insert link" text="Link" onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("[", "](url)")} />
           <span className="vault-toolbar-divider" aria-hidden="true" />
-          <ToolbarButton label="Bulleted list" text="• List" onMouseDown={keepEditorFocus} onClick={() => prefixLines("- ")} />
-          <ToolbarButton label="Numbered list" text="1. List" onMouseDown={keepEditorFocus} onClick={() => prefixLines("1. ")} />
-          <ToolbarButton label="Blockquote" text="Quote" onMouseDown={keepEditorFocus} onClick={() => prefixLines("> ")} />
+          <ToolbarButton label="Bulleted list" text="• List" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("- ")} />
+          <ToolbarButton label="Numbered list" text="1. List" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("1. ")} />
+          <ToolbarButton label="Blockquote" text="Quote" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("> ")} />
         </div>
         <div className="vault-note-actions">
           {dirty && <span className="vault-save-state">Unsaved</span>}
