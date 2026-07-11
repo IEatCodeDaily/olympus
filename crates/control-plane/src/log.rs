@@ -20,10 +20,12 @@ pub struct Log {
 
 impl Log {
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let mut conn =
+            Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)
             .context("initializing Olympus SQLite schema")?;
+        migrate_event_payloads_to_json(&mut conn)?;
         // Migrate pre-session_id databases (ADR 0009 incremental migration).
         let has_sid: bool = conn
             .prepare("PRAGMA table_info(events)")?
@@ -387,7 +389,7 @@ pub struct SearchHit {
 }
 
 fn append_in_tx(tx: &Transaction<'_>, event: &Event) -> Result<u64> {
-    let encoded = postcard::to_allocvec(event).context("encoding event")?;
+    let encoded = serde_json::to_vec(event).context("encoding event as JSON")?;
     let payload = zstd::stream::encode_all(encoded.as_slice(), 3).context("compressing event")?;
     let sid = event_session_id(event);
     tx.execute(
@@ -409,7 +411,7 @@ fn decode_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(u64, Event)> {
             Box::new(e),
         )
     })?;
-    let event = postcard::from_bytes(&decoded).map_err(|e| {
+    let event = serde_json::from_slice(&decoded).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             decoded.len(),
             rusqlite::types::Type::Blob,
@@ -417,6 +419,74 @@ fn decode_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(u64, Event)> {
         )
     })?;
     Ok((seq, event))
+}
+
+/// One-shot storage migration from the original positional postcard payloads
+/// to the self-describing JSON codec. This is encoding maintenance only: every
+/// decoded event is compared with its JSON round-trip before its row is updated.
+fn migrate_event_payloads_to_json(conn: &mut Connection) -> Result<()> {
+    const CODEC_KEY: &str = "event_payload_codec";
+    const JSON_CODEC: &str = "json+zstd-v1";
+
+    let current: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key=?1", [CODEC_KEY], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    if current.as_deref() == Some(JSON_CODEC) {
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+    let count_before: i64 = tx.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+    let mut last_seq = 0_i64;
+    loop {
+        let rows = {
+            let mut stmt =
+                tx.prepare("SELECT seq,payload FROM events WHERE seq>?1 ORDER BY seq LIMIT 512")?;
+            let mapped = stmt.query_map([last_seq], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            mapped.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if rows.is_empty() {
+            break;
+        }
+        for (seq, payload) in rows {
+            let legacy = zstd::stream::decode_all(payload.as_slice())
+                .with_context(|| format!("decompressing legacy event {seq}"))?;
+            let event: Event = postcard::from_bytes(&legacy)
+                .with_context(|| format!("decoding legacy postcard event {seq}"))?;
+            let json = serde_json::to_vec(&event)
+                .with_context(|| format!("encoding migrated JSON event {seq}"))?;
+            let decoded: Event = serde_json::from_slice(&json)
+                .with_context(|| format!("verifying migrated JSON event {seq}"))?;
+            anyhow::ensure!(
+                event == decoded,
+                "event {seq} changed during codec migration"
+            );
+            let migrated = zstd::stream::encode_all(json.as_slice(), 3)
+                .with_context(|| format!("compressing migrated event {seq}"))?;
+            tx.execute(
+                "UPDATE events SET payload=?1 WHERE seq=?2",
+                params![migrated, seq],
+            )?;
+            last_seq = seq;
+        }
+    }
+
+    let count_after: i64 = tx.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+    anyhow::ensure!(
+        count_before == count_after,
+        "event count changed during codec migration: {count_before} -> {count_after}"
+    );
+    tx.execute(
+        "INSERT INTO meta(key,value) VALUES(?1,?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![CODEC_KEY, JSON_CODEC],
+    )?;
+    tx.commit().context("committing event payload migration")?;
+    Ok(())
 }
 
 fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
@@ -898,6 +968,7 @@ fn card_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
 const SCHEMA: &str = r#"
 PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-4096; PRAGMA temp_store=MEMORY;
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT NOT NULL,payload BLOB NOT NULL,created_at REAL NOT NULL,session_id TEXT);
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,hermes_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT '',model TEXT,title TEXT,started_at REAL NOT NULL,message_count INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,last_activity REAL NOT NULL DEFAULT 0,agent TEXT,node TEXT,parent_session_id TEXT,card_id TEXT,project_id TEXT,org_id TEXT NOT NULL DEFAULT 'personal');
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC); CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source); CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived); CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned);
@@ -918,6 +989,79 @@ CREATE TABLE IF NOT EXISTS session_repos(session_id TEXT NOT NULL,slug TEXT NOT 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_event() -> Event {
+        Event::SessionCreated {
+            session_id: "fixture-session".into(),
+            hermes_id: "fixture-hermes".into(),
+            source: "olympus".into(),
+            model: Some("fixture-model".into()),
+            title: Some("legacy postcard fixture".into()),
+            started_at: 1.0,
+            message_count: 0,
+            input_tokens: 1,
+            output_tokens: 2,
+            agent: None,
+            node: None,
+        }
+    }
+
+    #[test]
+    fn open_migrates_postcard_payloads_to_json_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("olympus.db");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        let event = fixture_event();
+        let legacy = postcard::to_allocvec(&event).unwrap();
+        let legacy = zstd::stream::encode_all(legacy.as_slice(), 3).unwrap();
+        connection
+            .execute(
+                "INSERT INTO events(event_type,payload,created_at,session_id) VALUES(?1,?2,?3,?4)",
+                params![
+                    event_type(&event),
+                    legacy,
+                    event_time(&event),
+                    event_session_id(&event)
+                ],
+            )
+            .unwrap();
+        let before: i64 = connection
+            .query_row("SELECT length(payload) FROM events", [], |row| row.get(0))
+            .unwrap();
+        drop(connection);
+
+        let log = Log::open(&path).unwrap();
+        assert_eq!(log.read_all().unwrap(), vec![(1, event.clone())]);
+        drop(log);
+
+        let connection = Connection::open(&path).unwrap();
+        let migrated: Vec<u8> = connection
+            .query_row("SELECT payload FROM events", [], |row| row.get(0))
+            .unwrap();
+        let json = zstd::stream::decode_all(migrated.as_slice()).unwrap();
+        assert_eq!(serde_json::from_slice::<Event>(&json).unwrap(), event);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT value FROM meta WHERE key='event_payload_codec'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "json+zstd-v1"
+        );
+        let after = migrated.len() as i64;
+        drop(connection);
+
+        drop(Log::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        let after_second_open: i64 = connection
+            .query_row("SELECT length(payload) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, after_second_open);
+        eprintln!("fixture event payload bytes: postcard+zstd={before}, json+zstd={after}");
+    }
 
     #[test]
     fn open_migrates_sessions_without_organization_column() {

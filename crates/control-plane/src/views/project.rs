@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn project_created_postcard_roundtrips() {
+    fn project_created_json_roundtrips() {
         use crate::log::Log;
         let f = tempfile::NamedTempFile::new().unwrap();
         let log = Log::open(f.path()).unwrap();
@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn project_updated_postcard_roundtrips() {
+    fn project_updated_json_roundtrips() {
         use crate::log::Log;
         let f = tempfile::NamedTempFile::new().unwrap();
         let log = Log::open(f.path()).unwrap();
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn session_project_attached_postcard_roundtrips() {
+    fn session_project_attached_json_roundtrips() {
         use crate::log::Log;
         let f = tempfile::NamedTempFile::new().unwrap();
         let log = Log::open(f.path()).unwrap();

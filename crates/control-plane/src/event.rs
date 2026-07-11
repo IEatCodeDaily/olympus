@@ -237,13 +237,13 @@ pub enum Event {
         attached_at: f64,
     },
     /// Assigns a session to its hard tenancy boundary. Kept as an appended
-    /// variant so existing postcard event discriminants remain stable.
+    /// variant retained for compatibility with historical event meaning.
     SessionOrganizationAssigned {
         session_id: String,
         organization_id: String,
     },
     /// Assigns a project to its organization without reshaping the historical
-    /// ProjectCreated payload (postcard discriminants and fields are immutable).
+    /// ProjectCreated payload while keeping schema evolution additive.
     ProjectOrganizationAssigned {
         project_id: String,
         organization_id: String,
@@ -261,7 +261,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_created_postcard_roundtrips() {
+    fn session_created_json_roundtrips() {
         let e = Event::SessionCreated {
             session_id: "sess-1".into(),
             hermes_id: "h-1".into(),
@@ -275,13 +275,13 @@ mod tests {
             agent: None,
             node: None,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
     #[test]
-    fn setup_declared_postcard_roundtrips() {
+    fn setup_declared_json_roundtrips() {
         let e = Event::SetupDeclared {
             scope: "project:acme/web".into(),
             skills: vec!["code-review".into(), "react-doctor".into()],
@@ -290,26 +290,26 @@ mod tests {
             hooks: vec!["pre-commit-verify".into()],
             declared_at: 1_782_900_000.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
     #[test]
-    fn entry_registered_postcard_roundtrips() {
+    fn entry_registered_json_roundtrips() {
         let e = Event::EntryRegistered {
             kind: "mcp".into(),
             slug: "gitnexus".into(),
             definition: r#"{"command":"gitnexus","args":["--stdio"],"env":{}}"#.into(),
             registered_at: 1_782_900_001.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
     #[test]
-    fn message_appended_postcard_roundtrips_with_none_fields() {
+    fn message_appended_json_roundtrips_with_none_fields() {
         let e = Event::MessageAppended {
             session_id: "sess-1".into(),
             hermes_session_id: "h-1".into(),
@@ -323,13 +323,13 @@ mod tests {
             token_count: Some(3),
             finish_reason: None,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
     #[test]
-    fn session_updated_postcard_roundtrips() {
+    fn session_updated_json_roundtrips() {
         let e = Event::SessionUpdated {
             session_id: "sess-1".into(),
             title: Some("renamed".into()),
@@ -341,20 +341,20 @@ mod tests {
             hermes_id: None,
             pinned: None,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
     #[test]
-    fn message_removed_postcard_roundtrips() {
+    fn message_removed_json_roundtrips() {
         let e = Event::MessageRemoved {
             session_id: "sess-1".into(),
             hermes_session_id: "h-1".into(),
             message_id: 5,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -368,8 +368,8 @@ mod tests {
             title: "Implement cards".into(),
             created_at: 1_700_000_000.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -383,8 +383,8 @@ mod tests {
             attempt_bookmark: "attempt-1".into(),
             assigned_at: 1_700_000_001.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -394,8 +394,8 @@ mod tests {
             card_id: "card-1".into(),
             claimed_at: 1_700_000_002.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -406,8 +406,8 @@ mod tests {
             blocked_by: vec!["card-0".into(), "card-2".into()],
             blocked_at: 1_700_000_003.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -417,8 +417,8 @@ mod tests {
             card_id: "card-1".into(),
             completed_at: 1_700_000_004.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -433,8 +433,8 @@ mod tests {
             previous_session_id: "sess-1".into(),
             reassigned_at: 1_700_000_005.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -449,8 +449,8 @@ mod tests {
             fork_point: Some(5),
             forked_at: 1_700_000_010.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -463,8 +463,8 @@ mod tests {
             fork_point: None,
             forked_at: 1_700_000_011.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -475,8 +475,8 @@ mod tests {
             session_id: "sess-1".into(),
             linked_at: 1_700_000_012.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -490,8 +490,8 @@ mod tests {
             translated_message_count: 15,
             handed_over_at: 1_700_000_020.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -505,8 +505,8 @@ mod tests {
             default_branch: "main".into(),
             registered_at: 1_700_000_100.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -516,8 +516,8 @@ mod tests {
             slug: "old-repo".into(),
             removed_at: 1_700_000_200.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
     }
 
@@ -528,8 +528,51 @@ mod tests {
             slug: "olympus".into(),
             attached_at: 1_700_000_300.0,
         };
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: Event = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let back: Event = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(e, back);
+    }
+
+    #[test]
+    fn project_and_organization_variants_json_roundtrip() {
+        let events = vec![
+            Event::ProjectCreated {
+                project_id: "p".into(),
+                name: "Project".into(),
+                created_at: 1.0,
+            },
+            Event::ProjectUpdated {
+                project_id: "p".into(),
+                name: Some("Renamed".into()),
+                vaults: Some(vec!["v".into()]),
+                repos: Some(vec!["r".into()]),
+                boards: Some(vec!["b".into()]),
+            },
+            Event::ProjectDeleted {
+                project_id: "p".into(),
+                deleted_at: 2.0,
+            },
+            Event::SessionProjectAttached {
+                session_id: "s".into(),
+                project_id: "p".into(),
+                attached_at: 3.0,
+            },
+            Event::SessionOrganizationAssigned {
+                session_id: "s".into(),
+                organization_id: "o".into(),
+            },
+            Event::ProjectOrganizationAssigned {
+                project_id: "p".into(),
+                organization_id: "o".into(),
+            },
+            Event::CardOrganizationAssigned {
+                card_id: "c".into(),
+                organization_id: "o".into(),
+            },
+        ];
+        for event in events {
+            let bytes = serde_json::to_vec(&event).unwrap();
+            assert_eq!(serde_json::from_slice::<Event>(&bytes).unwrap(), event);
+        }
     }
 }
