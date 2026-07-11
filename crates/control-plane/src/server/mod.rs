@@ -1753,9 +1753,9 @@ async fn patch_project(
         .projects
         .get(&id)
         .is_none_or(|project| {
-            !scope
+            scope
                 .as_ref()
-                .is_none_or(|scope| project.org_id == scope.0.organization_id)
+                .is_some_and(|scope| project.org_id != scope.0.organization_id)
         })
     {
         return (
@@ -1809,9 +1809,9 @@ async fn delete_project(
         .projects
         .get(&id)
         .is_none_or(|project| {
-            !scope
+            scope
                 .as_ref()
-                .is_none_or(|scope| project.org_id == scope.0.organization_id)
+                .is_some_and(|scope| project.org_id != scope.0.organization_id)
         })
     {
         return (
@@ -1848,9 +1848,9 @@ async fn attach_session_project(
             )
                 .into_response();
         };
-        if !scope
+        if scope
             .as_ref()
-            .is_none_or(|scope| session.org_id == scope.0.organization_id)
+            .is_some_and(|scope| session.org_id != scope.0.organization_id)
         {
             return (
                 StatusCode::NOT_FOUND,
@@ -1860,9 +1860,9 @@ async fn attach_session_project(
         }
         // Also validate project exists.
         if views.projects.get(&body.project_id).is_none_or(|project| {
-            !scope
+            scope
                 .as_ref()
-                .is_none_or(|scope| project.org_id == scope.0.organization_id)
+                .is_some_and(|scope| project.org_id != scope.0.organization_id)
         }) {
             return (
                 StatusCode::NOT_FOUND,
