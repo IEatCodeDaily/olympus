@@ -1,0 +1,12 @@
+url: ${MAESTRO_BASE_URL}/fleet
+name: Mobile fleet overview loads
+properties:
+  junitId: olympus-mobile-fleet-overview
+  junitClassname: ui.mobile
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Add node"
+    timeout: 15000
+- takeScreenshot:
+    path: screenshots/mobile-fleet-overview

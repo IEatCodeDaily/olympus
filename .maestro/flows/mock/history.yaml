@@ -1,0 +1,21 @@
+url: ${MAESTRO_BASE_URL}/sessions/history
+name: History filters and empty state
+properties:
+  junitId: olympus-history
+  junitClassname: ui.mock
+---
+- launchApp
+
+- extendedWaitUntil:
+    visible: "History"
+    timeout: 15000
+- assertVisible: "Session"
+- assertVisible: "Channel"
+- assertVisible: "Agent"
+- tapOn: "Filter by title, agent, model…"
+- inputText: "zzzznonexistent"
+- assertVisible: "No sessions match"
+- assertVisible: "Adjust the filters above."
+- takeScreenshot:
+    path: screenshots/history-empty-state
+

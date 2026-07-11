@@ -542,6 +542,53 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-10 — Redesign + reimplement the Hall login screen (`auth.tsx`) — kill inline styles, adopt tokens/`.ol-*`, add editorial identity, make it responsive
+
+- **The debt this closes:** the unauthenticated auth surface (`ui/src/auth.tsx`)
+  was the last screen built entirely from **inline styles + hardcoded hexes**
+  (`#2b3038`, `#15181d`, `#ff8b8b`, raw `px`) — a bare card that ignored the
+  token system, both themes' correctness (it hardcoded a single dark palette),
+  and the `.ol-*` primitive library. It violated the §10 hard rules and looked
+  like a wireframe next to the cockpit.
+- **What changed (scope: unauthenticated/loading surface only — `AuthGate` login
+  API flow, endpoints, redirects, and org-selection semantics untouched):**
+  - **`auth.tsx`** — replaced the inline-styled `AuthPanel`/`LoginPanel` with a
+    token-driven `AuthShell` (shared editorial frame), `LoadingPanel`, and a
+    rebuilt `LoginPanel`. Fields now use the canonical `.ol-field-label` +
+    `.ol-input`; the submit uses `.ol-btn.ol-btn-primary.ol-btn-block`; the
+    loading state uses `.ol-spinner.ol-spinner-lg`. **Zero inline styles, zero
+    hex** remain in the file.
+  - **`index.css`** — added a new **`.auth-*` app-shell section** (screen, card,
+    head/kicker/brand/wordmark/title/sub, form, error, status, footer). Every
+    value is a `var(--token)`; both `obsidian` + `light` resolve correctly by
+    construction (surfaces on `--bg`/`--bg-elev`, error on `--err`/`--err-wash`/
+    `--err-line`, footer dot on `--accent`).
+- **Identity (restrained, on-system):** a mono `CONTROL PLANE` kicker
+  (`--tracking-caps-wide`), an `Olympus` wordmark in `--font-display` beside a
+  monochrome twin-peak accent SVG mark (altitude/signal — no gradient, no glow),
+  and a mono status footer that names the **Hall origin host** (`window.location.
+  host`, read-only) so the operator sees which Hall they are authenticating to —
+  reinforcing the origin-binding security note in the code. Editorial-terminal,
+  not marketing-page.
+- **Accessibility:** preserved the exact `h1` "Sign in to this Hall" heading and
+  the "Username"/"Password" accessible names (wrapping `<label>` + label span);
+  `autoFocus`, `autoComplete`, and `required` retained; the error keeps
+  `role="alert"` and now also drives `aria-invalid` + `aria-describedby` on both
+  inputs; the loading state is a `role="status"` live region; the SVG mark is
+  `aria-hidden`. Focus rings come from the global `:focus-visible` token rule.
+- **Responsive:** the cockpit is desktop-first, but this is the one surface a
+  user can hit on a phone. The card is `max-width: 384px; width: 100%`, control
+  heights bumped to 36px for touch, `min-height: 100dvh`, and a `max-width: 480px`
+  media query tightens padding. Verified graceful down to **320px**.
+- **Verified:** `bun run typecheck` (exit 0), `bun run test src/auth.test.tsx`
+  (**4 passed** — added coverage for the loading `role="status"` region and the
+  bad-credential alert + `aria-invalid`), `bun run build` (exit 0). Screenshotted
+  in-browser via Playwright/Chromium in **both themes** at desktop (1280),
+  mobile (380), narrow (320), plus the loading and error states — all render
+  clean with no overflow or layout shift. (No local "React Doctor" CLI exists in
+  this repo; the `_ds_*` bundle + `DesignSync` tool target claude.ai design
+  projects, and `_adherence.oxlintrc.json` is the local token-adherence rule set.)
+
 ### 2026-07-04 — Kill last hardcoded hexes + deduplicate conflicting CSS rules (3 fixes in `index.css`)
 
 - **The debt this closes (top of the visible list — blocked since 2026-07-04):**

@@ -14,12 +14,12 @@ systemctl --user status olympus.service      # :8799, journalctl --user -u olymp
 systemctl --user restart olympus.service      # after a `cargo build --release`
 
 # UI dev server (vite):  http://localhost:5177  (proxies /api + /ws → :8799)
-cd ~/olympus/ui && npm run dev                # already running in most sessions
+cd ~/olympus/ui && bun run dev                # already running in most sessions
 
 # Rebuild after Rust changes:
 cd ~/olympus && cargo build --release && systemctl --user restart olympus.service
 # Rebuild UI:
-cd ~/olympus/ui && npm run typecheck && npm run build
+cd ~/olympus/ui && bun run typecheck && bun run build
 ```
 
 Browser access uses a Hall-local login cookie. `~/.olympus/token` remains only
@@ -70,7 +70,7 @@ for native/operator automation and must never be placed in a Vite environment.
   - `node.rs` — `NodeRegistry` (per-node agents, in-flight, awaiting_input),
     UDS envoy protocol.
   - `bridge/{mod,acp,hermes}.rs` — ACP client, `AgentRuntime`, permission
-    respond, spawn routing (hermes acp / npx @zed-industries adapters).
+    respond, spawn routing (hermes acp / bunx @zed-industries adapters).
   - `server/bridge_mgr.rs` — runtime lifecycle, liveness flags.
 - `ui/src/` — TanStack Router (URL-persistent), TanStack Query (server), Zustand
   (ephemeral UI). Views: `SessionsView`, `FleetView`, `VaultsView`,
@@ -97,14 +97,14 @@ for native/operator automation and must never be placed in a Vite environment.
    reference file) — menu renders, handlers do nothing yet.
 5. **react-doctor** score ~36/100 — most remaining items are accepted
    architectural opinions + a11y warnings on pre-existing views. Run
-   `cd ui && npx react-doctor@latest --diff` before big UI PRs.
+   `cd ui && bunx react-doctor@latest --diff` before big UI PRs.
 
 ## Testing
 
 ```bash
 cd ~/olympus && cargo test -p olympus-control-plane        # 254 passing
-cd ~/olympus/ui && npm run test                            # vitest
-cd ~/olympus/ui && npx playwright test                     # e2e, MSW-mocked, :5188
+cd ~/olympus/ui && bun run test                            # vitest
+cd ~/olympus/ui && bun run test:e2e                        # Maestro web e2e, isolated Vite + MSW
 ```
 
 ## Conventions

@@ -242,6 +242,18 @@ pub enum Event {
         session_id: String,
         organization_id: String,
     },
+    /// Assigns a project to its organization without reshaping the historical
+    /// ProjectCreated payload (postcard discriminants and fields are immutable).
+    ProjectOrganizationAssigned {
+        project_id: String,
+        organization_id: String,
+    },
+    /// Assigns a kanban card to its organization. Cards are independently
+    /// scoped because board ids are currently labels, not durable resources.
+    CardOrganizationAssigned {
+        card_id: String,
+        organization_id: String,
+    },
 }
 
 #[cfg(test)]

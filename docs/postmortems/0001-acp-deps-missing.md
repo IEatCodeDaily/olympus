@@ -139,8 +139,8 @@ service PATH. Current mandatory set:
 - **`jj`** — used by the edit model (`edit_model.rs`); the test
   `jj_conflict_detection_on_clean_dir` fails without it.
 - **`gh`** — GitHub CLI, for repo/maintenance flows.
-- **`npx`** (Node.js) — required for the Claude Code / Codex ACP adapters
-  (`npx -y @zed-industries/claude-code-acp@…`).
+- **`bunx`** (Bun) — required for the Claude Code / Codex ACP adapters
+  (`bunx @zed-industries/claude-code-acp@…`). Olympus no longer requires Node.js.
 
 See "Envoy must install required CLIs" in AGENTS.md.
 

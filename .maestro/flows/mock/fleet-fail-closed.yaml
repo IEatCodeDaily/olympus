@@ -1,0 +1,14 @@
+url: ${MAESTRO_BASE_URL}/fleet
+name: Fleet overview loads
+properties:
+  junitId: olympus-fleet-overview
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Add node"
+    timeout: 15000
+- assertVisible: "local"
+- assertVisible: "gpu-box"
+- takeScreenshot:
+    path: screenshots/fleet-overview

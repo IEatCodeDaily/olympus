@@ -1,0 +1,12 @@
+url: ${MAESTRO_BASE_URL}/projects
+name: Mobile projects board loads
+properties:
+  junitId: olympus-mobile-projects-board
+  junitClassname: ui.mobile
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Projects"
+    timeout: 15000
+- takeScreenshot:
+    path: screenshots/mobile-projects-board

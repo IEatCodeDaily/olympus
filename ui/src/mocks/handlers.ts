@@ -305,10 +305,25 @@ export const handlers = [
     return HttpResponse.json<UsageResponse>(USAGE_BY_RANGE[range] ?? USAGE_BY_RANGE["24h"]);
   }),
 
-  // GET /api/nodes
-  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/nodes", async () => {
+  // Fleet is Hall-owned operator state, not organization-owned resource data.
+  http.get("http://127.0.0.1:8787/api/nodes", async () => {
     await delay(250 + Math.random() * 250);
     return HttpResponse.json<NodesResponse>({ nodes: NODES });
+  }),
+  http.post("http://127.0.0.1:8787/api/enroll", () => HttpResponse.json({
+    token: "maestro-enroll-token",
+    command: "curl -fsSL http://hall.test/api/enroll/maestro-enroll-token/install.sh | bash",
+    expiresInSecs: 900,
+    hallIrohId: "maestro-hall-iroh-id",
+  })),
+
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/cards", () => {
+    const now = Date.now() / 1000;
+    const cards = [
+      { id: "card-todo", boardId: "olympus", title: "Design Fleet tenancy", status: "todo", assignedId: null, assignedKind: null, currentSessionId: null, currentBookmark: null, blockedBy: [], priority: 1, createdAt: now - 300, statusChangedAt: now - 300 },
+      { id: "card-active", boardId: "olympus", title: "Validate Maestro evidence", status: "claimed", assignedId: "terminus", assignedKind: "hermes", currentSessionId: "sess-1", currentBookmark: null, blockedBy: [], priority: 2, createdAt: now - 200, statusChangedAt: now - 100 },
+    ];
+    return HttpResponse.json({ cards, total: cards.length });
   }),
 
   // GET /api/health
@@ -539,7 +554,7 @@ function mockToolCallsForPrompt(prompt: string): ToolCall[] {
   if (p.includes("run") || p.includes("execute") || p.includes("command")) {
     calls.push({
       name: "terminal",
-      args: { command: "npm run build" },
+      args: { command: "bun run build" },
       result: "> olympus@0.1.0 build\n> tsc && vite build\n✓ built in 2.3s",
     });
   }

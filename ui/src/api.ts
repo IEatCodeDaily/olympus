@@ -59,7 +59,9 @@ function organizationPath(path: string): string {
     path === "/api/models" ||
     path === "/api/agents" ||
     path.startsWith("/api/agents/") ||
-    path === "/api/nodes/hall-identity"
+    path === "/api/enroll" ||
+    path === "/api/nodes" ||
+    path.startsWith("/api/nodes/")
   ) return path;
   return `/api/organizations/${encodeURIComponent(organizationId)}${path.slice(4)}`;
 }

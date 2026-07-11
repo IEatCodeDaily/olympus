@@ -32,5 +32,6 @@ ui/bun.lock
 
 # E2E artifacts
 ui/test-results/
-ui/playwright-report/
 ui/test-evidence/
+.maestro/recordings/
+.maestro/screenshots/

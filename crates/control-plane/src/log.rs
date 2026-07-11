@@ -51,6 +51,23 @@ impl Log {
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);")
             .context("indexing sessions by organization")?;
+        for table in ["cards", "projects"] {
+            let has_org_id = conn
+                .prepare(&format!("PRAGMA table_info({table})"))?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(Result::ok)
+                .any(|column| column == "org_id");
+            if !has_org_id {
+                conn.execute_batch(&format!(
+                    "ALTER TABLE {table} ADD COLUMN org_id TEXT NOT NULL DEFAULT 'personal';"
+                ))
+                .with_context(|| format!("migrating {table} table to add org_id column"))?;
+            }
+            conn.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS idx_{table}_org ON {table}(org_id);"
+            ))
+            .with_context(|| format!("indexing {table} by organization"))?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -361,7 +378,7 @@ impl Log {
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
-        let mut stmt = conn.prepare("SELECT project_id,name,vaults,repos,boards,created_at,deleted_at FROM projects WHERE deleted_at IS NULL ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare("SELECT project_id,org_id,name,vaults,repos,boards,created_at,deleted_at FROM projects WHERE deleted_at IS NULL ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], project_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
@@ -369,7 +386,7 @@ impl Log {
 
     pub fn get_project(&self, id: &str) -> Result<Option<ProjectRow>> {
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
-        conn.query_row("SELECT project_id,name,vaults,repos,boards,created_at,deleted_at FROM projects WHERE project_id=?1 AND deleted_at IS NULL", [id], project_row).optional().map_err(Into::into)
+        conn.query_row("SELECT project_id,org_id,name,vaults,repos,boards,created_at,deleted_at FROM projects WHERE project_id=?1 AND deleted_at IS NULL", [id], project_row).optional().map_err(Into::into)
     }
 
     pub fn list_repos(&self) -> Result<Vec<RepoRow>> {
@@ -394,7 +411,7 @@ impl Log {
 
     pub fn list_cards(&self) -> Result<Vec<CardRow>> {
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
-        let mut stmt = conn.prepare("SELECT card_id,board_id,title,status,assigned_id,assigned_kind,current_session_id,current_bookmark,blocked_by,priority,attempts,created_at,status_changed_at FROM cards ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare("SELECT card_id,org_id,board_id,title,status,assigned_id,assigned_kind,current_session_id,current_bookmark,blocked_by,priority,attempts,created_at,status_changed_at FROM cards ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], card_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
@@ -402,7 +419,7 @@ impl Log {
 
     pub fn get_card(&self, id: &str) -> Result<Option<CardRow>> {
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
-        conn.query_row("SELECT card_id,board_id,title,status,assigned_id,assigned_kind,current_session_id,current_bookmark,blocked_by,priority,attempts,created_at,status_changed_at FROM cards WHERE card_id=?1", [id], card_row).optional().map_err(Into::into)
+        conn.query_row("SELECT card_id,org_id,board_id,title,status,assigned_id,assigned_kind,current_session_id,current_bookmark,blocked_by,priority,attempts,created_at,status_changed_at FROM cards WHERE card_id=?1", [id], card_row).optional().map_err(Into::into)
     }
 }
 
@@ -578,8 +595,17 @@ fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             created_at,
         } => {
             tx.execute(
-                "INSERT OR REPLACE INTO projects VALUES(?1,?2,'[]','[]','[]',?3,NULL)",
+                "INSERT OR REPLACE INTO projects(project_id,name,vaults,repos,boards,created_at,deleted_at,org_id) VALUES(?1,?2,'[]','[]','[]',?3,NULL,'personal')",
                 params![project_id, name, created_at],
+            )?;
+        }
+        Event::ProjectOrganizationAssigned {
+            project_id,
+            organization_id,
+        } => {
+            tx.execute(
+                "UPDATE projects SET org_id=?2 WHERE project_id=?1",
+                params![project_id, organization_id],
             )?;
         }
         Event::ProjectUpdated {
@@ -640,7 +666,16 @@ fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             title,
             created_at,
         } => {
-            tx.execute("INSERT OR REPLACE INTO cards VALUES(?1,?2,?3,'todo',NULL,NULL,NULL,NULL,'[]',0,'[]',?4,?4)", params![card_id,board_id,title,created_at])?;
+            tx.execute("INSERT OR REPLACE INTO cards(card_id,board_id,title,status,assigned_id,assigned_kind,current_session_id,current_bookmark,blocked_by,priority,attempts,created_at,status_changed_at,org_id) VALUES(?1,?2,?3,'todo',NULL,NULL,NULL,NULL,'[]',0,'[]',?4,?4,'personal')", params![card_id,board_id,title,created_at])?;
+        }
+        Event::CardOrganizationAssigned {
+            card_id,
+            organization_id,
+        } => {
+            tx.execute(
+                "UPDATE cards SET org_id=?2 WHERE card_id=?1",
+                params![card_id, organization_id],
+            )?;
         }
         Event::CardAssigned {
             card_id,
@@ -777,6 +812,8 @@ fn event_type(event: &Event) -> &'static str {
         Event::ProjectDeleted { .. } => "project.deleted",
         Event::SessionProjectAttached { .. } => "session.project_attached",
         Event::SessionOrganizationAssigned { .. } => "session.organization_assigned",
+        Event::ProjectOrganizationAssigned { .. } => "project.organization_assigned",
+        Event::CardOrganizationAssigned { .. } => "card.organization_assigned",
     }
 }
 fn event_time(event: &Event) -> f64 {
@@ -850,7 +887,9 @@ fn is_native(event: &Event, native: &HashSet<String>) -> bool {
         | Event::ProjectCreated { .. }
         | Event::ProjectUpdated { .. }
         | Event::ProjectDeleted { .. }
-        | Event::SessionProjectAttached { .. } => true,
+        | Event::SessionProjectAttached { .. }
+        | Event::ProjectOrganizationAssigned { .. }
+        | Event::CardOrganizationAssigned { .. } => true,
         Event::SessionCreated { source, .. } => source == "olympus",
         Event::SessionUpdated { session_id, .. }
         | Event::MessageAppended { session_id, .. }
@@ -896,12 +935,13 @@ fn message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
 fn project_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
     Ok(ProjectRow {
         project_id: r.get(0)?,
-        name: r.get(1)?,
-        vaults: json_vec(r.get(2)?),
-        repos: json_vec(r.get(3)?),
-        boards: json_vec(r.get(4)?),
-        created_at: r.get(5)?,
-        deleted_at: r.get(6)?,
+        org_id: r.get(1)?,
+        name: r.get(2)?,
+        vaults: json_vec(r.get(3)?),
+        repos: json_vec(r.get(4)?),
+        boards: json_vec(r.get(5)?),
+        created_at: r.get(6)?,
+        deleted_at: r.get(7)?,
     })
 }
 fn repo_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRow> {
@@ -915,18 +955,19 @@ fn repo_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRow> {
 fn card_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
     Ok(CardRow {
         card_id: r.get(0)?,
-        board_id: r.get(1)?,
-        title: r.get(2)?,
-        status: r.get(3)?,
-        assigned_id: r.get(4)?,
-        assigned_kind: r.get(5)?,
-        current_session_id: r.get(6)?,
-        current_bookmark: r.get(7)?,
-        blocked_by: json_vec(r.get(8)?),
-        priority: r.get(9)?,
-        attempts: serde_json::from_str(&r.get::<_, String>(10)?).unwrap_or_default(),
-        created_at: r.get(11)?,
-        status_changed_at: r.get(12)?,
+        org_id: r.get(1)?,
+        board_id: r.get(2)?,
+        title: r.get(3)?,
+        status: r.get(4)?,
+        assigned_id: r.get(5)?,
+        assigned_kind: r.get(6)?,
+        current_session_id: r.get(7)?,
+        current_bookmark: r.get(8)?,
+        blocked_by: json_vec(r.get(9)?),
+        priority: r.get(10)?,
+        attempts: serde_json::from_str(&r.get::<_, String>(11)?).unwrap_or_default(),
+        created_at: r.get(12)?,
+        status_changed_at: r.get(13)?,
     })
 }
 
@@ -942,10 +983,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(session_id UNINDEXED,
 CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(session_id,message_id,content,role,tool_name,timestamp) VALUES(new.session_id,new.message_id,new.content,new.role,new.tool_name,new.timestamp); END;
 CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN DELETE FROM messages_fts WHERE session_id=old.session_id AND message_id=old.message_id; END;
 CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN DELETE FROM messages_fts WHERE session_id=old.session_id AND message_id=old.message_id; INSERT INTO messages_fts(session_id,message_id,content,role,tool_name,timestamp) VALUES(new.session_id,new.message_id,new.content,new.role,new.tool_name,new.timestamp); END;
-CREATE TABLE IF NOT EXISTS cards(card_id TEXT PRIMARY KEY,board_id TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,assigned_id TEXT,assigned_kind TEXT,current_session_id TEXT,current_bookmark TEXT,blocked_by TEXT NOT NULL DEFAULT '[]',priority INTEGER NOT NULL DEFAULT 0,attempts TEXT NOT NULL DEFAULT '[]',created_at REAL NOT NULL,status_changed_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cards(card_id TEXT PRIMARY KEY,board_id TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,assigned_id TEXT,assigned_kind TEXT,current_session_id TEXT,current_bookmark TEXT,blocked_by TEXT NOT NULL DEFAULT '[]',priority INTEGER NOT NULL DEFAULT 0,attempts TEXT NOT NULL DEFAULT '[]',created_at REAL NOT NULL,status_changed_at REAL NOT NULL,org_id TEXT NOT NULL DEFAULT 'personal');
 CREATE TABLE IF NOT EXISTS setup(scope TEXT PRIMARY KEY,skills TEXT NOT NULL,mcp TEXT NOT NULL,plugins TEXT NOT NULL,hooks TEXT NOT NULL,declared_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS registry(kind TEXT NOT NULL,slug TEXT NOT NULL,definition TEXT NOT NULL,registered_at REAL NOT NULL,PRIMARY KEY(kind,slug));
-CREATE TABLE IF NOT EXISTS projects(project_id TEXT PRIMARY KEY,name TEXT NOT NULL,vaults TEXT NOT NULL DEFAULT '[]',repos TEXT NOT NULL DEFAULT '[]',boards TEXT NOT NULL DEFAULT '[]',created_at REAL NOT NULL,deleted_at REAL);
+CREATE TABLE IF NOT EXISTS projects(project_id TEXT PRIMARY KEY,name TEXT NOT NULL,vaults TEXT NOT NULL DEFAULT '[]',repos TEXT NOT NULL DEFAULT '[]',boards TEXT NOT NULL DEFAULT '[]',created_at REAL NOT NULL,deleted_at REAL,org_id TEXT NOT NULL DEFAULT 'personal');
 CREATE TABLE IF NOT EXISTS repos(slug TEXT PRIMARY KEY,url TEXT NOT NULL,default_branch TEXT NOT NULL,registered_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS session_repos(session_id TEXT NOT NULL,slug TEXT NOT NULL,attached_at REAL NOT NULL,PRIMARY KEY(session_id,slug));
 "#;

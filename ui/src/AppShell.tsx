@@ -22,6 +22,8 @@ import { useTheme } from "./theme";
 import { useHallAuth } from "./auth";
 import { SessionsView } from "./views/SessionsView";
 import { VaultWorkspaceView } from "./views/VaultWorkspaceView";
+import { ProjectsView } from "./views/ProjectsView";
+import FleetView from "./views/FleetView";
 import { SettingsView } from "./views/PlaceholderViews";
 
 // ── Helpers ────────────────────────────────────────
@@ -38,6 +40,8 @@ const SURFACES: {
 }[] = [
   { surface: "sessions", label: "Sessions", icon: "message-square", path: "/" },
   { surface: "vaults", label: "Vaults", icon: "book", path: "/vaults" },
+  { surface: "projects", label: "Projects", icon: "folder", path: "/projects" },
+  { surface: "fleet", label: "Fleet", icon: "server", path: "/fleet" },
   { surface: "settings", label: "Settings", icon: "gear", path: "/settings" },
 ];
 
@@ -49,25 +53,8 @@ const SURFACES: {
 
 export function AppShell() {
   const { location } = useRouterState();
-  const { surface, sessionId, page } = parseRoute(location.pathname);
+  const { surface, sessionId, page, nodeId } = parseRoute(location.pathname);
   const { sidebarCollapsed, sidebarWidth } = useUIStore();
-
-  if (surface === "projects" || surface === "fleet") {
-    return (
-      <div className="app">
-        <TopBar activeSurface={surface} />
-        <div className="body">
-          <div className="viewport">
-            <div className="empty-state">
-              <div className="empty-state-msg">
-                This surface is unavailable until its data is organization-owned.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="app">
@@ -82,6 +69,10 @@ export function AppShell() {
         {surface === "vaults" && (
           <VaultWorkspaceView />
         )}
+
+        {surface === "projects" && <ProjectsView />}
+
+        {surface === "fleet" && <FleetView nodeId={nodeId} />}
 
         {/* Other surfaces keep the shell-level sidebar + viewport split */}
         {!sidebarCollapsed && surface === "settings" && (

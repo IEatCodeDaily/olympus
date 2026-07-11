@@ -1,0 +1,16 @@
+url: ${MAESTRO_BASE_URL}/sessions
+name: Agent picker exposes executable choices
+properties:
+  junitId: olympus-agent-picker
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "New session"
+    timeout: 15000
+- tapOn: "New session"
+- assertVisible: "default"
+- assertVisible: "coding-agent"
+- assertVisible: ".*olympus.*"
+- takeScreenshot:
+    path: screenshots/agent-picker

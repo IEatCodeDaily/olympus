@@ -71,6 +71,47 @@ describe("AuthGate", () => {
     expect(String(loginCall?.[0])).toMatch(/\/api\/auth\/login$/);
   });
 
+  it("shows a live status region while the session resolves", async () => {
+    let resolveSession: (r: Response) => void = () => {};
+    vi.spyOn(window, "fetch").mockImplementation(async (input) => {
+      const path = String(input);
+      if (path.endsWith("/api/auth/session")) {
+        return new Promise<Response>((resolve) => { resolveSession = resolve; });
+      }
+      if (path.endsWith("/api/organizations")) {
+        return json({ organizations: [{ id: "org-a", slug: "a", displayName: "Org A", role: "owner" }] });
+      }
+      throw new Error(`unexpected request ${path}`);
+    });
+
+    renderGate();
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connecting to Hall" })).toBeInTheDocument();
+    resolveSession(json({ user: { userId: "u1", username: "alice", kind: "user" } }));
+    expect(await screen.findByText("alice:Org A")).toBeInTheDocument();
+  });
+
+  it("surfaces a bad-credential failure as an alert without leaving the login form", async () => {
+    vi.spyOn(window, "fetch").mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith("/api/auth/session")) return new Response(null, { status: 401 });
+      if (path.endsWith("/api/auth/login") && init?.method === "POST") {
+        return new Response(null, { status: 401 });
+      }
+      throw new Error(`unexpected request ${path}`);
+    });
+
+    renderGate();
+    await userEvent.type(await screen.findByLabelText("Username"), "alice");
+    await userEvent.type(screen.getByLabelText("Password"), "wrong");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Invalid username or password.");
+    expect(screen.getByRole("heading", { name: "Sign in to this Hall" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Username")).toHaveAttribute("aria-invalid", "true");
+  });
+
   it("switches only among memberships and clears organization-specific cache", async () => {
     vi.spyOn(window, "fetch").mockImplementation(async (input) => {
       const path = String(input);

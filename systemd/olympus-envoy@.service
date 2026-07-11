@@ -8,8 +8,8 @@ After=olympus-hall.service
 Type=simple
 # Per-instance env: OLYMPUS_NODE_ID = envoy-%i (the node id registered with Hall).
 Environment="OLYMPUS_NODE_ID=envoy-%i"
-# PATH must include ~/.local/bin for hermes, jj, gh, npx (postmortem 0001).
-Environment="PATH=/home/rpw/.local/bin:/home/rpw/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# PATH must include ~/.local/bin for Hermes and ~/.bun/bin for ACP adapters.
+Environment="PATH=/home/rpw/.local/bin:/home/rpw/.bun/bin:/home/rpw/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/home/rpw/.olympus/bin/olympus-envoy
 # on-failure (not always): a drained envoy that exits 0 stays down (ADR §5).
 Restart=on-failure

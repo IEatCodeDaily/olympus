@@ -41,9 +41,9 @@ removed (ADR 0003); do not reintroduce it. See `docs/architecture/architecture.m
 ## Commands (canonical)
 
 ```bash
-make verify          # ALL gates: Rust (test/clippy/fmt) + UI (typecheck/build/e2e)
+make verify          # ALL gates: Rust (test/clippy/fmt) + UI (typecheck/build/Maestro)
 make verify-rust     # cargo test --workspace && clippy -D warnings && fmt --check
-make verify-ui       # cd ui && bun run typecheck && bun run build && playwright e2e
+make verify-ui       # cd ui && typecheck + build + Maestro Chromium web e2e
 make test            # cargo test --workspace (fast inner loop)
 make run             # cargo run --release (imports state.db, serves API on :8787)
 make deploy          # build + install both hall + envoy binaries (symlink flip)
@@ -57,8 +57,10 @@ cargo fmt --check
 cd ui && bun run typecheck && bun run build && bun run test:e2e
 ```
 
-There is NO `bun run test` / `bun run lint` / Convex command — those were the old
-TS scaffold (removed in fe7580b). The UI test target is `test:e2e` (Playwright).
+There is no `bun run lint` / Convex command — those were the old TS scaffold
+(removed in fe7580b). Bun is the sole UI package manager and JavaScript runtime.
+The UI browser target is `test:e2e` (Maestro web); Vitest unit tests run with
+`bun test` or `bun run test`.
 
 ## Production services (ADR 0008 S6)
 
@@ -89,7 +91,7 @@ symlinks (`olympus-hall` / `olympus-envoy`) as the deploy pointer. The
 
 This project is indexed by GitNexus as **olympus** (2886 symbols, 5482 relationships, 241 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+> If any GitNexus tool warns the index is stale, run `bunx gitnexus analyze` in terminal first.
 
 ## Always Do
 

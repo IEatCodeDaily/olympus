@@ -162,9 +162,9 @@ check_required_clis() {
     fi
     log "Required CLI OK: hermes"
 
-    # jj / gh / npx — warn only.
+    # jj / gh / bunx — warn only.
     local cli
-    for cli in jj gh npx; do
+    for cli in jj gh bunx; do
         if ! command -v "$cli" &>/dev/null; then
             warn "optional CLI '$cli' not found (some agent features may be limited)"
         fi

@@ -1,0 +1,17 @@
+url: ${MAESTRO_BASE_URL}/sessions/history
+name: Mobile history filters and empty state
+properties:
+  junitId: olympus-mobile-history
+  junitClassname: ui.mobile
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "History"
+    timeout: 15000
+- assertVisible: "Session"
+- assertVisible: "Channel"
+- tapOn: "Filter by title, agent, model…"
+- inputText: "zzzznonexistent"
+- assertVisible: "No sessions match"
+- takeScreenshot:
+    path: screenshots/mobile-history-empty-state

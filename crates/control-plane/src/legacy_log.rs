@@ -209,6 +209,14 @@ enum StoredVariant {
         session_id: String,
         organization_id: String,
     },
+    ProjectOrganizationAssigned {
+        project_id: String,
+        organization_id: String,
+    },
+    CardOrganizationAssigned {
+        card_id: String,
+        organization_id: String,
+    },
 }
 
 /// Convert a logical `Event` into its compressed on-disk shape.
@@ -499,6 +507,20 @@ fn to_stored(event: &Event) -> Result<StoredEvent> {
             organization_id,
         } => StoredVariant::SessionOrganizationAssigned {
             session_id: session_id.clone(),
+            organization_id: organization_id.clone(),
+        },
+        Event::ProjectOrganizationAssigned {
+            project_id,
+            organization_id,
+        } => StoredVariant::ProjectOrganizationAssigned {
+            project_id: project_id.clone(),
+            organization_id: organization_id.clone(),
+        },
+        Event::CardOrganizationAssigned {
+            card_id,
+            organization_id,
+        } => StoredVariant::CardOrganizationAssigned {
+            card_id: card_id.clone(),
             organization_id: organization_id.clone(),
         },
     };
@@ -821,6 +843,20 @@ fn from_stored(stored: StoredEvent) -> Result<Event> {
             session_id,
             organization_id,
         },
+        StoredVariant::ProjectOrganizationAssigned {
+            project_id,
+            organization_id,
+        } => Event::ProjectOrganizationAssigned {
+            project_id,
+            organization_id,
+        },
+        StoredVariant::CardOrganizationAssigned {
+            card_id,
+            organization_id,
+        } => Event::CardOrganizationAssigned {
+            card_id,
+            organization_id,
+        },
     })
 }
 
@@ -937,7 +973,9 @@ impl Log {
                 | Event::ProjectCreated { .. }
                 | Event::ProjectUpdated { .. }
                 | Event::ProjectDeleted { .. }
-                | Event::SessionProjectAttached { .. } => true,
+                | Event::SessionProjectAttached { .. }
+                | Event::ProjectOrganizationAssigned { .. }
+                | Event::CardOrganizationAssigned { .. } => true,
                 Event::SessionCreated { source, .. } => source == "olympus",
                 Event::SessionUpdated { session_id, .. }
                 | Event::MessageAppended { session_id, .. }

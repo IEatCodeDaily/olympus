@@ -11,6 +11,7 @@ use crate::event::Event;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectRow {
     pub project_id: String,
+    pub org_id: String,
     pub name: String,
     /// Vault ids bound to this project.
     pub vaults: Vec<String>,
@@ -49,6 +50,7 @@ impl ProjectView {
                     project_id.clone(),
                     ProjectRow {
                         project_id: project_id.clone(),
+                        org_id: "personal".into(),
                         name: name.clone(),
                         vaults: vec![],
                         repos: vec![],
@@ -57,6 +59,14 @@ impl ProjectView {
                         deleted_at: None,
                     },
                 );
+            }
+            Event::ProjectOrganizationAssigned {
+                project_id,
+                organization_id,
+            } => {
+                if let Some(row) = self.projects.get_mut(project_id) {
+                    row.org_id = organization_id.clone();
+                }
             }
             Event::ProjectUpdated {
                 project_id,
@@ -106,6 +116,13 @@ impl ProjectView {
                 .then_with(|| a.project_id.cmp(&b.project_id))
         });
         rows
+    }
+
+    pub fn list_for_organization(&self, organization_id: &str) -> Vec<&ProjectRow> {
+        self.list()
+            .into_iter()
+            .filter(|row| row.org_id == organization_id)
+            .collect()
     }
 
     /// Get a single project by id (returns None if unknown or deleted).
@@ -225,6 +242,26 @@ mod tests {
     fn get_unknown_project_is_none() {
         let v = ProjectView::new();
         assert!(v.get("nope").is_none());
+    }
+
+    #[test]
+    fn organization_assignment_is_projected_and_filterable() {
+        let mut view = ProjectView::new();
+        view.apply(&created("a", "A", 1.0));
+        view.apply(&created("b", "B", 2.0));
+        view.apply(&Event::ProjectOrganizationAssigned {
+            project_id: "a".into(),
+            organization_id: "org-a".into(),
+        });
+        view.apply(&Event::ProjectOrganizationAssigned {
+            project_id: "b".into(),
+            organization_id: "org-b".into(),
+        });
+
+        assert_eq!(view.get("a").unwrap().org_id, "org-a");
+        let rows = view.list_for_organization("org-b");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project_id, "b");
     }
 
     #[test]

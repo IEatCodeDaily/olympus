@@ -1,0 +1,41 @@
+url: ${MAESTRO_BASE_URL}/sessions
+name: Live agent reply smoke
+properties:
+  junitId: olympus-live-agent-reply
+  junitClassname: ui.live
+---
+- launchApp
+
+- extendedWaitUntil:
+    visible: "New session"
+    timeout: 15000
+- tapOn: "New session"
+- runFlow:
+    when:
+      visible: ".*glm52.*"
+    commands:
+      - tapOn: ".*glm52.*"
+- runFlow:
+    when:
+      notVisible: ".*glm52.*"
+    commands:
+      - tapOn: ".*default.*"
+- extendedWaitUntil:
+    visible: "Type a message…"
+    timeout: 15000
+- tapOn: "Type a message…"
+- inputText: "Reply with exactly the standard uppercase table-tennis response to PING, and nothing else."
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "PONG"
+    timeout: 120000
+- takeScreenshot:
+    path: screenshots/live-agent-replied
+- tapOn: "History"
+- extendedWaitUntil:
+    visible: "History"
+    timeout: 30000
+- assertVisible: "Session"
+- takeScreenshot:
+    path: screenshots/live-history-loaded
+

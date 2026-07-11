@@ -1,0 +1,27 @@
+url: ${MAESTRO_BASE_URL}/sessions/history
+name: Observed session forks into a managed session
+properties:
+  junitId: olympus-session-fork
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Debugging Hermes gateway timeout issue"
+    timeout: 15000
+- tapOn: "Debugging Hermes gateway timeout issue"
+- extendedWaitUntil:
+    visible: "Fork to continue"
+    timeout: 10000
+- tapOn: "Fork to continue"
+- assertVisible: "Fork this session?"
+- takeScreenshot:
+    path: screenshots/fork-confirmation
+# Maestro 2.6.1 exposes the obscured banner button before the modal button in
+# its web hierarchy. The runner fixes the viewport, so target the modal action.
+- tapOn:
+    point: "63%,60%"
+- extendedWaitUntil:
+    visible: "Type a message…"
+    timeout: 10000
+- takeScreenshot:
+    path: screenshots/forked-managed-session

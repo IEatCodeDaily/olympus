@@ -28,6 +28,11 @@ pub struct RuntimeEntry {
     /// (`agentCapabilities.loadSession` + `sessionCapabilities.resume`).
     /// Fail closed: false when the capability was absent or never captured.
     pub resumable: bool,
+    /// Last time this runtime received a command (prompt, steer, etc.).
+    /// Used by `reap_idle()` to terminate sessions that have been idle
+    /// longer than the configured threshold. Updated on every `ensure_runtime`
+    /// and `send` call.
+    pub last_activity: std::time::Instant,
 }
 
 /// The result of forking a source agent session into a fresh runtime: the
@@ -95,6 +100,7 @@ impl RuntimeTable {
             RuntimeEntry {
                 runtime: runtime.clone(),
                 resumable,
+                last_activity: std::time::Instant::now(),
             },
         );
 
@@ -124,7 +130,7 @@ impl RuntimeTable {
         self.runtimes
             .write()
             .await
-            .insert(session_id.to_string(), RuntimeEntry { runtime, resumable });
+            .insert(session_id.to_string(), RuntimeEntry { runtime, resumable, last_activity: std::time::Instant::now() });
     }
 
     /// The runtime registered for a session, if any.
@@ -152,7 +158,12 @@ impl RuntimeTable {
             .get(session_id)
             .await
             .ok_or_else(|| anyhow::anyhow!("no runtime for session"))?;
-        runtime.send(cmd).await
+        runtime.send(cmd).await?;
+        // Touch last_activity so the reaper doesn't kill an active session.
+        if let Some(entry) = self.runtimes.write().await.get_mut(session_id) {
+            entry.last_activity = std::time::Instant::now();
+        }
+        Ok(())
     }
 
     /// Stop and deregister a session's runtime (no-op if none registered).
@@ -162,6 +173,41 @@ impl RuntimeTable {
             entry.runtime.stop().await?;
         }
         Ok(())
+    }
+
+    /// Reap runtimes that have been idle longer than `threshold`.
+    ///
+    /// Called by a background task in `main.rs` on a fixed interval. Stops the
+    /// child process and removes the entry from the table. The session can be
+    /// resumed later via `ensure_runtime` with a `resume_hermes_id` — the
+    /// conversation history persists on disk in the agent's session store.
+    ///
+    /// Returns the number of sessions reaped (for logging).
+    pub async fn reap_idle(&self, threshold: std::time::Duration) -> usize {
+        let now = std::time::Instant::now();
+        let mut to_reap = Vec::new();
+
+        {
+            let runtimes = self.runtimes.read().await;
+            for (sid, entry) in runtimes.iter() {
+                if now.duration_since(entry.last_activity) > threshold {
+                    to_reap.push(sid.clone());
+                }
+            }
+        }
+
+        let count = to_reap.len();
+        for sid in &to_reap {
+            if let Some(entry) = self.runtimes.write().await.remove(sid) {
+                tracing::info!(
+                    session_id = %sid,
+                    idle_secs = now.duration_since(entry.last_activity).as_secs(),
+                    "reaping idle runtime"
+                );
+                let _ = entry.runtime.stop().await;
+            }
+        }
+        count
     }
 }
 

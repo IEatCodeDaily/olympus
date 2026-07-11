@@ -1,0 +1,36 @@
+url: ${MAESTRO_BASE_URL}/sessions
+name: Sessions selection and composer
+properties:
+  junitId: olympus-sessions
+  junitClassname: ui.mock
+---
+- launchApp
+
+- extendedWaitUntil:
+    visible: "Untitled"
+    timeout: 15000
+- tapOn: "Untitled"
+- extendedWaitUntil:
+    visible: "Type a message…"
+    timeout: 10000
+- assertVisible: "glm-5v-turbo"
+- tapOn: "glm-5v-turbo"
+- assertVisible: "thinking"
+- tapOn: "High"
+- assertVisible: "High"
+- tapOn: "Type a message…"
+- inputText: "maestro mock message"
+- pressKey: Enter
+- assertVisible: "maestro mock message"
+- takeScreenshot:
+    path: screenshots/sessions-composer
+- tapOn: "MCP server integration testing"
+- assertVisible: "MCP server integration testing"
+- takeScreenshot:
+    path: screenshots/sessions-switched
+- launchApp
+- tapOn: "Untitled"
+- assertVisible: "High"
+- takeScreenshot:
+    path: screenshots/thinking-persisted
+

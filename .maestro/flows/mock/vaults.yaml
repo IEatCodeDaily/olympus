@@ -1,0 +1,65 @@
+url: ${MAESTRO_BASE_URL}/vaults
+name: Vault creation and note workflow
+properties:
+  junitId: olympus-vaults
+  junitClassname: ui.mock
+---
+- launchApp
+
+- extendedWaitUntil:
+    visible: "New Note"
+    timeout: 15000
+- assertVisible: "Graph View"
+- assertVisible: "Table View"
+- tapOn: "Engineering"
+- assertVisible: "Create vault…"
+- takeScreenshot:
+    path: screenshots/vault-menu-open
+- assertScreenshot:
+    path: ../../baselines/vault-menu-open.png
+    thresholdPercentage: 98
+    label: Vault menu opens below the selector and stays compact
+- tapOn: "Create vault…"
+- assertVisible: "Create vault"
+- tapOn: "Vault name"
+- inputText: "Maestro Vault"
+- tapOn: "Repository"
+- inputText: "IEatCodeDaily/maestro-vault"
+- tapOn:
+    text: "Create vault"
+    index: 1
+- extendedWaitUntil:
+    visible: "Maestro Vault"
+    timeout: 10000
+- takeScreenshot:
+    path: screenshots/vault-created
+- tapOn: "New Note"
+- tapOn: "Title"
+- inputText: "Maestro note"
+- tapOn: "File path"
+- inputText: "maestro-note.md"
+- tapOn: "Create note"
+- extendedWaitUntil:
+    visible: "Maestro note"
+    timeout: 10000
+- takeScreenshot:
+    path: screenshots/note-created
+- tapOn: "New Note"
+- tapOn: "Title"
+- inputText: "Replacement"
+- tapOn: "File path"
+- inputText: "maestro-note.md"
+- tapOn: "Create note"
+- assertVisible: ".*note already exists.*"
+- tapOn: "Cancel"
+- tapOn: "Graph View"
+- tapOn: "Table View"
+- assertVisible: "Graph View"
+- assertVisible: "Table View"
+# Icon-only layout controls expose title text that Maestro web omits from its
+# hierarchy. The fixed test viewport keeps this target deterministic.
+- tapOn:
+    point: "94%,8%"
+- takeScreenshot:
+    path: screenshots/vault-tabs-two-columns
+

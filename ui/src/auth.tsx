@@ -101,7 +101,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     logout,
   } : null, [user, organizations, organization]);
 
-  if (loading) return <AuthPanel title="Connecting to Hall…" />;
+  if (loading) return <LoadingPanel />;
   if (!value) return <LoginPanel error={error} onLogin={async (username, password) => {
     setError("");
     const response = await hallFetch("/api/auth/login", {
@@ -123,29 +123,77 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-function AuthPanel({ title, children }: { title: string; children?: React.ReactNode }) {
-  return <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "var(--bg, #0d0f12)", color: "var(--text, #f4f4f5)" }}>
-    <section style={{ width: 340, padding: 28, border: "1px solid #2b3038", borderRadius: 12, background: "#15181d" }}>
-      <h1 style={{ margin: "0 0 18px", fontSize: 20 }}>{title}</h1>
+// The Hall origin identity requests are bound to. Shown (read-only) so the
+// operator can see which Hall they are signing into — never an editable field.
+const HALL_HOST = typeof window !== "undefined" ? window.location.host : "";
+
+// Restrained monochrome Olympus mark: twin ascending peaks (altitude / signal),
+// stroked in the accent. Purely decorative — hidden from assistive tech.
+function AuthMark() {
+  return <svg className="auth-brandmark" width="24" height="24" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 13 L12 6 L20 13" />
+    <path d="M4 18 L12 11 L20 18" />
+  </svg>;
+}
+
+function AuthShell({ title, subtitle, busy, children }: {
+  title: string; subtitle: string; busy?: boolean; children: React.ReactNode;
+}) {
+  return <main className="auth-screen">
+    <section className="auth-card" aria-busy={busy || undefined}>
+      <header className="auth-head">
+        <span className="auth-kicker">Control plane</span>
+        <div className="auth-brand"><AuthMark /><span className="auth-wordmark">Olympus</span></div>
+        <h1 className="auth-title">{title}</h1>
+        <p className="auth-sub">{subtitle}</p>
+      </header>
       {children}
+      <footer className="auth-foot">
+        <span className="auth-foot-dot" aria-hidden="true" />
+        <span className="auth-foot-key">Hall</span>
+        {HALL_HOST && <span className="auth-foot-host">{HALL_HOST}</span>}
+      </footer>
     </section>
   </main>;
+}
+
+function LoadingPanel() {
+  return <AuthShell title="Connecting to Hall" subtitle="Establishing a secure session." busy>
+    <div className="auth-status" role="status">
+      <span className="ol-spinner ol-spinner-lg" aria-hidden="true" />
+      <span className="auth-status-text">Connecting…</span>
+    </div>
+  </AuthShell>;
 }
 
 function LoginPanel({ error, onLogin }: { error: string; onLogin(username: string, password: string): Promise<void> }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  return <AuthPanel title="Sign in to this Hall">
-    <form onSubmit={(event) => {
+  const errorId = "auth-error";
+  return <AuthShell title="Sign in to this Hall" subtitle="Enter your operator credentials to continue.">
+    <form className="auth-form" onSubmit={(event) => {
       event.preventDefault();
       setSubmitting(true);
       void onLogin(username, password).finally(() => setSubmitting(false));
-    }} style={{ display: "grid", gap: 12 }}>
-      <label>Username<input autoFocus autoComplete="username" required value={username} onChange={(event) => setUsername(event.target.value)} style={{ display: "block", boxSizing: "border-box", width: "100%", marginTop: 6, padding: 10 }} /></label>
-      <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} style={{ display: "block", boxSizing: "border-box", width: "100%", marginTop: 6, padding: 10 }} /></label>
-      {error && <p role="alert" style={{ margin: 0, color: "#ff8b8b" }}>{error}</p>}
-      <button type="submit" disabled={submitting} style={{ padding: 10 }}>{submitting ? "Signing in…" : "Sign in"}</button>
+    }}>
+      <label className="auth-field">
+        <span className="ol-field-label">Username</span>
+        <input className="ol-input" autoFocus autoComplete="username" required
+          aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
+          value={username} onChange={(event) => setUsername(event.target.value)} />
+      </label>
+      <label className="auth-field">
+        <span className="ol-field-label">Password</span>
+        <input className="ol-input" type="password" autoComplete="current-password" required
+          aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
+          value={password} onChange={(event) => setPassword(event.target.value)} />
+      </label>
+      {error && <p className="auth-error" role="alert" id={errorId}>{error}</p>}
+      <button type="submit" className="ol-btn ol-btn-primary ol-btn-block auth-submit" disabled={submitting}>
+        {submitting ? "Signing in…" : "Sign in"}
+      </button>
     </form>
-  </AuthPanel>;
+  </AuthShell>;
 }

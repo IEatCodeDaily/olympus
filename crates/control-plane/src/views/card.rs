@@ -34,6 +34,7 @@ pub struct CardAttempt {
 #[derive(Debug, Clone)]
 pub struct CardRow {
     pub card_id: String,
+    pub org_id: String,
     pub board_id: String,
     pub title: String,
     pub status: String,
@@ -51,6 +52,7 @@ pub struct CardRow {
 /// Filters applied to [`CardView::list`].
 #[derive(Debug, Clone, Default)]
 pub struct CardFilters {
+    pub organization_id: Option<String>,
     pub board_id: Option<String>,
     pub status: Option<String>,
 }
@@ -81,6 +83,7 @@ impl CardView {
                     card_id.clone(),
                     CardRow {
                         card_id: card_id.clone(),
+                        org_id: "personal".into(),
                         board_id: board_id.clone(),
                         title: title.clone(),
                         status: "todo".into(),
@@ -95,6 +98,14 @@ impl CardView {
                         status_changed_at: *created_at,
                     },
                 );
+            }
+            Event::CardOrganizationAssigned {
+                card_id,
+                organization_id,
+            } => {
+                if let Some(card) = self.cards.get_mut(card_id) {
+                    card.org_id = organization_id.clone();
+                }
             }
             Event::CardAssigned {
                 card_id,
@@ -199,6 +210,12 @@ impl CardView {
         let mut rows: Vec<&CardRow> = self
             .cards
             .values()
+            .filter(|row| {
+                filters
+                    .organization_id
+                    .as_ref()
+                    .is_none_or(|organization_id| row.org_id == *organization_id)
+            })
             .filter(|row| match (&filters.board_id, &filters.status) {
                 (Some(b), _) if row.board_id != *b => false,
                 (_, Some(s)) if row.status != *s => false,
@@ -272,6 +289,29 @@ mod tests {
     fn get_unknown_card_returns_none() {
         let v = CardView::new();
         assert!(v.get("nope").is_none());
+    }
+
+    #[test]
+    fn organization_assignment_is_projected_and_filterable() {
+        let mut view = CardView::new();
+        view.apply(&card_created("a", "board", "A", 1.0));
+        view.apply(&card_created("b", "board", "B", 2.0));
+        view.apply(&Event::CardOrganizationAssigned {
+            card_id: "a".into(),
+            organization_id: "org-a".into(),
+        });
+        view.apply(&Event::CardOrganizationAssigned {
+            card_id: "b".into(),
+            organization_id: "org-b".into(),
+        });
+
+        assert_eq!(view.get("a").unwrap().org_id, "org-a");
+        let rows = view.list(&CardFilters {
+            organization_id: Some("org-b".into()),
+            ..CardFilters::default()
+        });
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].card_id, "b");
     }
 
     // ---- REQUIRED BEHAVIOR 2: CardAssigned transitions to "assigned" + records attempt ----
@@ -406,6 +446,7 @@ mod tests {
         let b1 = v.list(&CardFilters {
             board_id: Some("b1".into()),
             status: None,
+            organization_id: None,
         });
         assert_eq!(b1.len(), 2);
         let ids: Vec<&str> = b1.iter().map(|r| r.card_id.as_str()).collect();
@@ -423,6 +464,7 @@ mod tests {
         let todo = v.list(&CardFilters {
             board_id: Some("b1".into()),
             status: Some("todo".into()),
+            organization_id: None,
         });
         assert_eq!(todo.len(), 1);
         assert_eq!(todo[0].card_id, "c1");
@@ -430,6 +472,7 @@ mod tests {
         let assigned = v.list(&CardFilters {
             board_id: Some("b1".into()),
             status: Some("assigned".into()),
+            organization_id: None,
         });
         assert_eq!(assigned.len(), 1);
         assert_eq!(assigned[0].card_id, "c2");

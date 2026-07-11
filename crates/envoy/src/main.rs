@@ -38,6 +38,14 @@ use tokio::sync::Mutex;
 /// Heartbeat interval.
 const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How often the idle reaper runs.
+const IDLE_REAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Sessions idle longer than this are terminated by the reaper.
+/// 30 minutes — generous enough for a developer reading output between prompts,
+/// aggressive enough to prevent 4-hour zombie sessions eating memory.
+const IDLE_REAP_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1800);
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
     let node_id = arg_value("--node-id").unwrap_or_else(|| {
@@ -252,7 +260,7 @@ where
 {
     let conn = Arc::new(Conn {
         writer: Mutex::new(BufWriter::new(Box::new(writer) as BoxedWriter)),
-        table,
+        table: table.clone(),
         seq: Mutex::new(HashMap::new()),
         turn: Mutex::new(HashMap::new()),
     });
@@ -284,6 +292,23 @@ where
                 };
                 if hb_conn.send_frame(&hb).await.is_err() {
                     break;
+                }
+            }
+        })
+    };
+
+    // Idle session reaper — terminates agent sessions that have been idle
+    // longer than IDLE_REAP_THRESHOLD. Sessions can be resumed later via
+    // ensure_runtime with a resume_hermes_id. Frees memory and child
+    // processes on resource-constrained envoys.
+    let reaper_handle = {
+        let reaper_table = table.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(IDLE_REAP_INTERVAL).await;
+                let reaped = reaper_table.reap_idle(IDLE_REAP_THRESHOLD).await;
+                if reaped > 0 {
+                    tracing::info!(reaped, "idle session reaper terminated sessions");
                 }
             }
         })
@@ -324,9 +349,10 @@ where
         });
     }
 
-    // Read loop exited (Hall disconnected or error). Abort the heartbeat task
-    // so it doesn't leak holding an Arc<Conn> clone across reconnect cycles.
+    // Read loop exited (Hall disconnected or error). Abort the heartbeat and
+    // reaper tasks so they don't leak holding Arc clones across reconnects.
     hb_handle.abort();
+    reaper_handle.abort();
 
     Ok(())
 }

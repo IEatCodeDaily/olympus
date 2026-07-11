@@ -16,11 +16,11 @@ verify-rust:
 	cargo clippy --all-targets -- -D warnings
 	cargo fmt --check
 
-## verify-ui — typecheck + build + Playwright e2e desktop (fast inner loop)
+## verify-ui — typecheck + build + Maestro web e2e (fast inner loop)
 verify-ui:
-	cd ui && npx tsc --noEmit
-	cd ui && npx vite build
-	cd ui && npx playwright test --project=chromium-desktop --reporter=line
+	cd ui && bun run typecheck
+	cd ui && bun run build
+	cd ui && bun run test:e2e
 
 ## test — Rust tests only (fast inner loop)
 test:
@@ -42,23 +42,23 @@ build:
 run:
 	cargo run --release
 
-## e2e — full e2e (desktop+mobile) with evidence bundle (videos + screenshots)
+## e2e — Maestro web e2e with evidence bundle (screenshots + optional videos)
 e2e:
-	cd ui && npx playwright test
+	cd ui && bun run test:e2e
 	cd ui && bash scripts/evidence-bundle.sh
 
-## e2e-desktop — fast inner loop, desktop only, no bundle
+## e2e-desktop — compatibility alias for the Maestro Chromium web tier
 e2e-desktop:
-	cd ui && npx playwright test --project=chromium-desktop
+	cd ui && bun run test:e2e
 
 ## e2e-live — smoke tests against the REAL control plane (spends tokens)
 e2e-live:
-	cd ui && npx playwright test --config=playwright.live.config.ts
+	cd ui && bun run test:e2e:live
 
 ## e2e-prod — prod-parity: static UI served by the control plane itself
 ## (same origin cloudflared sees). Requires olympus.service running.
 e2e-prod:
-	cd ui && npx playwright test --config=playwright.prod.config.ts
+	cd ui && bun run test:e2e:prod
 
 ## deploy — install both hall + envoy binaries (symlink flip, no restart).
 deploy:

@@ -293,6 +293,19 @@ fn organization_resource_routes() -> Router<AppState> {
             get(list_subsessions).post(create_subsession),
         )
         .route("/sessions/{id}/complete", post(complete_session))
+        .route("/cards", get(list_cards).post(create_card))
+        .route("/cards/{id}", get(get_card))
+        .route("/cards/{id}/assign", post(assign_card))
+        .route("/cards/{id}/claim", post(claim_card))
+        .route("/cards/{id}/block", post(block_card))
+        .route("/cards/{id}/complete", post(complete_card))
+        .route("/cards/{id}/reassign", post(reassign_card))
+        .route("/projects", get(list_projects).post(create_project))
+        .route(
+            "/projects/{id}",
+            get(get_project).patch(patch_project).delete(delete_project),
+        )
+        .route("/sessions/{id}/project", post(attach_session_project))
         .route("/vaults", get(list_vaults).post(create_vault))
         .route("/vaults/{id}/notes", get(list_vault_notes))
         .route("/vaults/{id}/documents", get(list_vault_documents))
@@ -340,6 +353,32 @@ async fn organization_resource_proxy(
             return (StatusCode::NOT_FOUND, "session not found").into_response();
         }
     }
+    if let Some(card_id) = suffix
+        .strip_prefix("cards/")
+        .and_then(|path| path.split('/').next())
+    {
+        let views = state.views.read().await;
+        if views
+            .cards
+            .get(card_id)
+            .is_none_or(|card| card.org_id != organization_id)
+        {
+            return (StatusCode::NOT_FOUND, "card not found").into_response();
+        }
+    }
+    if let Some(project_id) = suffix
+        .strip_prefix("projects/")
+        .and_then(|path| path.split('/').next())
+    {
+        let views = state.views.read().await;
+        if views
+            .projects
+            .get(project_id)
+            .is_none_or(|project| project.org_id != organization_id)
+        {
+            return (StatusCode::NOT_FOUND, "project not found").into_response();
+        }
+    }
     let rewritten = match original.query() {
         Some(query) => format!("/{suffix}?{query}"),
         None => format!("/{suffix}"),
@@ -366,6 +405,11 @@ async fn organization_resource_proxy(
             Err(_) => return StatusCode::BAD_REQUEST.into_response(),
         };
         AppState { vaults, ..state }
+    } else if suffix == "projects" || suffix.starts_with("projects/") {
+        let projects = Arc::new(crate::projects::ProjectStore::new(
+            state.home.join(&organization_id),
+        ));
+        AppState { projects, ..state }
     } else {
         state
     };
@@ -1299,9 +1343,25 @@ fn derive_base_url(headers: &HeaderMap) -> Option<String> {
 /// This route is NOT behind the auth_gate middleware (it shares a router
 /// with the public enroll routes); it does its own bearer check inline.
 async fn mint_enroll(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    // Inline bearer auth — the enroll router is public, but minting is not.
+    // Installation-token operators and logged-in organization owners may mint
+    // enrollment capabilities. Ordinary members remain fail-closed.
     let auth = headers.get("authorization").and_then(|v| v.to_str().ok());
-    if !crate::auth::bearer_ok(auth, &state.token) {
+    let cookie_owner = identity::session_token(&headers)
+        .and_then(|token| {
+            state
+                .auth_store
+                .resolve_session(&token, identity::unix_timestamp())
+                .ok()
+                .flatten()
+        })
+        .and_then(|principal| {
+            state
+                .auth_store
+                .user_is_organization_owner(&principal.user_id)
+                .ok()
+        })
+        .unwrap_or(false);
+    if !crate::auth::bearer_ok(auth, &state.token) && !cookie_owner {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     // Remote envoys connect over iroh; without a hall identity the installer
@@ -1662,22 +1722,32 @@ struct AttachProjectBody {
     project_id: String,
 }
 
-async fn list_projects(State(state): State<AppState>) -> Response {
+async fn list_projects(
+    State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
+) -> Response {
     let views = state.views.read().await;
     let rows: Vec<ProjectDto> = views
         .projects
         .list()
         .into_iter()
+        .filter(|row| scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0))
         .map(ProjectDto::from_row)
         .collect();
     Json(json!({ "projects": rows, "total": rows.len() })).into_response()
 }
 
-async fn get_project(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_project(
+    State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    Path(id): Path<String>,
+) -> Response {
     let views = state.views.read().await;
     match views.projects.get(&id) {
-        Some(row) => Json(ProjectDto::from_row(row)).into_response(),
-        None => (
+        Some(row) if scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0) => {
+            Json(ProjectDto::from_row(row)).into_response()
+        }
+        None | Some(_) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "not_found", "message": "project not found" })),
         )
@@ -1687,6 +1757,7 @@ async fn get_project(State(state): State<AppState>, Path(id): Path<String>) -> R
 
 async fn create_project(
     State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
     Json(body): Json<CreateProjectBody>,
 ) -> Response {
     let name = body.name.trim().to_string();
@@ -1709,7 +1780,16 @@ async fn create_project(
     };
     // Persist manifest to disk (best-effort; event is the source of truth).
     let _ = state.projects.create(&project_id, &name, now);
-    append_and_apply(&state, event).await;
+    let mut events = vec![event];
+    if let Some(scope) = scope {
+        events.push(crate::event::Event::ProjectOrganizationAssigned {
+            project_id: project_id.clone(),
+            organization_id: scope.0 .0,
+        });
+    }
+    if let Err(response) = append_and_apply_events(&state, &events).await {
+        return response;
+    }
     let views = state.views.read().await;
     match views.projects.get(&project_id) {
         Some(row) => (StatusCode::CREATED, Json(ProjectDto::from_row(row))).into_response(),
@@ -1719,6 +1799,7 @@ async fn create_project(
 
 async fn patch_project(
     State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
     Path(id): Path<String>,
     Json(body): Json<PatchProjectBody>,
 ) -> Response {
@@ -1731,6 +1812,24 @@ async fn patch_project(
             )
                 .into_response();
         }
+    }
+    if state
+        .views
+        .read()
+        .await
+        .projects
+        .get(&id)
+        .is_none_or(|project| {
+            !scope
+                .as_ref()
+                .is_none_or(|scope| project.org_id == scope.0 .0)
+        })
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not_found", "message": "project not found" })),
+        )
+            .into_response();
     }
     // Update on-disk manifest (best-effort).
     let _ = state.projects.update(
@@ -1755,7 +1854,11 @@ async fn patch_project(
     }
 }
 
-async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn delete_project(
+    State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    Path(id): Path<String>,
+) -> Response {
     {
         let views = state.views.read().await;
         if views.projects.get(&id).is_none() {
@@ -1765,6 +1868,24 @@ async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -
             )
                 .into_response();
         }
+    }
+    if state
+        .views
+        .read()
+        .await
+        .projects
+        .get(&id)
+        .is_none_or(|project| {
+            !scope
+                .as_ref()
+                .is_none_or(|scope| project.org_id == scope.0 .0)
+        })
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not_found", "message": "project not found" })),
+        )
+            .into_response();
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1780,6 +1901,7 @@ async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -
 
 async fn attach_session_project(
     State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
     Path(session_id): Path<String>,
     Json(body): Json<AttachProjectBody>,
 ) -> Response {
@@ -1793,8 +1915,22 @@ async fn attach_session_project(
             )
                 .into_response();
         };
+        if !scope
+            .as_ref()
+            .is_none_or(|scope| session.org_id == scope.0 .0)
+        {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "not_found", "message": "session not found" })),
+            )
+                .into_response();
+        }
         // Also validate project exists.
-        if views.projects.get(&body.project_id).is_none() {
+        if views.projects.get(&body.project_id).is_none_or(|project| {
+            !scope
+                .as_ref()
+                .is_none_or(|scope| project.org_id == scope.0 .0)
+        }) {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "not_found", "message": "project not found" })),
@@ -3911,14 +4047,33 @@ async fn append_and_apply(state: &AppState, event: crate::event::Event) -> Respo
     }
 }
 
+async fn append_and_apply_events(
+    state: &AppState,
+    events: &[crate::event::Event],
+) -> Result<(), Response> {
+    if let Err(error) = state.log.append_batch(events) {
+        tracing::error!(%error, "failed to append organization-owned events");
+        return Err(
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist events").into_response(),
+        );
+    }
+    let mut views = state.views.write().await;
+    for event in events {
+        views.apply(event);
+    }
+    Ok(())
+}
+
 async fn list_cards(
     State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
     Query(q): Query<CardsQuery>,
 ) -> impl IntoResponse {
     let views = state.views.read().await;
     let filters = CardFilters {
         board_id: q.board_id,
         status: q.status,
+        organization_id: scope.map(|scope| scope.0 .0),
     };
     let cards: Vec<CardDto> = views
         .cards
@@ -3938,7 +4093,11 @@ async fn get_card(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     }
 }
 
-async fn create_card(State(state): State<AppState>, Json(body): Json<CreateCardBody>) -> Response {
+async fn create_card(
+    State(state): State<AppState>,
+    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    Json(body): Json<CreateCardBody>,
+) -> Response {
     let card_id = format!("card-{}", uuid::Uuid::new_v4());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3950,6 +4109,23 @@ async fn create_card(State(state): State<AppState>, Json(body): Json<CreateCardB
         title: body.title,
         created_at: now,
     };
+    if let Some(scope) = scope {
+        let events = [
+            event,
+            crate::event::Event::CardOrganizationAssigned {
+                card_id: card_id.clone(),
+                organization_id: scope.0 .0,
+            },
+        ];
+        if let Err(response) = append_and_apply_events(&state, &events).await {
+            return response;
+        }
+        let views = state.views.read().await;
+        return views.cards.get(&card_id).map_or_else(
+            || StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            |row| (StatusCode::CREATED, Json(CardDto::from_row(row))).into_response(),
+        );
+    }
     append_and_apply(&state, event).await
 }
 
@@ -5678,6 +5854,7 @@ mod tests {
         let all = views.cards.list(&crate::views::CardFilters {
             board_id: Some("b1".into()),
             status: None,
+            organization_id: None,
         });
         assert_eq!(all.len(), 3);
     }
@@ -5938,6 +6115,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn organization_owner_can_mint_enrollment_with_login_cookie() {
+        let (mut state, _dir) = test_state();
+        state.hall_iroh_id = Some(Arc::new(
+            "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320".to_string(),
+        ));
+        state
+            .auth_store
+            .bootstrap_admin("owner", "correct-horse", "default", "Default")
+            .unwrap();
+        let principal = state
+            .auth_store
+            .authenticate("owner", "correct-horse")
+            .unwrap()
+            .unwrap();
+        let session = state
+            .auth_store
+            .create_session(&principal.user_id, identity::unix_timestamp(), 60)
+            .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/enroll")
+                    .header("cookie", format!("olympus_session={}", session.token))
+                    .header("host", "127.0.0.1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     /// DELETE /api/nodes/:id revokes the node's iroh key from hall.toml and

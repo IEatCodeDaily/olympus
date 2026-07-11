@@ -1,0 +1,13 @@
+url: ${MAESTRO_BASE_URL}/projects
+name: Projects board loads
+properties:
+  junitId: olympus-projects-board
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Projects"
+    timeout: 15000
+- assertVisible: ".*cards.*"
+- takeScreenshot:
+    path: screenshots/projects-board

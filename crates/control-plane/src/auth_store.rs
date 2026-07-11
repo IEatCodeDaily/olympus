@@ -290,6 +290,16 @@ impl AuthStore {
         )?;
         Ok(count == 1)
     }
+
+    pub fn user_is_organization_owner(&self, user_id: &str) -> Result<bool> {
+        let connection = self.connection.lock().expect("auth store mutex poisoned");
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM organization_memberships WHERE user_id = ?1 AND role = 'owner'",
+            [user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
 }
 
 #[cfg(unix)]

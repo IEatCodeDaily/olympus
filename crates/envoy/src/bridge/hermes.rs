@@ -50,9 +50,9 @@ pub use olympus_proto::AcpFraming;
 /// Select the ACP adapter command for a session's agent string.
 ///
 /// Hermes profiles still run through `hermes acp` (with `-p <profile>` when a
-/// profile is explicitly selected). Claude Code and Codex run through pinned Zed
-/// ACP adapters via `npx -y`, so the control plane does not depend on mutable
-/// globally-installed adapter binaries.
+/// profile is explicitly selected). Claude Code uses the native binary directly
+/// (native install, not the ACP adapter wrapper). Codex still uses the pinned
+/// Zed ACP adapter via `bunx`.
 pub fn acp_command_for_agent(agent: Option<&str>) -> Vec<String> {
     let agent = agent.unwrap_or_default();
     match AgentKind::from_agent_str(agent) {
@@ -68,8 +68,8 @@ pub fn acp_command_for_agent(agent: Option<&str>) -> Vec<String> {
                 ]
             }
         }
-        AgentKind::ClaudeCode => vec!["npx".into(), "-y".into(), CLAUDE_CODE_ACP_PACKAGE.into()],
-        AgentKind::Codex => vec!["npx".into(), "-y".into(), CODEX_ACP_PACKAGE.into()],
+        AgentKind::ClaudeCode => vec!["claude".into()],
+        AgentKind::Codex => vec!["bunx".into(), CODEX_ACP_PACKAGE.into()],
     }
 }
 
@@ -1017,11 +1017,11 @@ mod tests {
     fn acp_command_for_agent_selects_pinned_cli_adapters() {
         assert_eq!(
             acp_command_for_agent(Some("claude-code")),
-            vec!["npx", "-y", "@zed-industries/claude-code-acp@0.16.2"]
+            vec!["claude"]
         );
         assert_eq!(
             acp_command_for_agent(Some("codex")),
-            vec!["npx", "-y", "@zed-industries/codex-acp@0.16.0"]
+            vec!["bunx", "@zed-industries/codex-acp@0.16.0"]
         );
     }
 

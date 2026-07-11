@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Bundle a Playwright run into test-evidence/<ts>/:
-#   - videos/*.mp4 (webm → h264 so they play in Hermes chat + browsers)
-#   - shots/*.png (all screenshots, flattened with test-dir prefix)
+# Bundle a Maestro run into test-evidence/<ts>/:
+#   - videos/*.mp4 (when a flow records one; Maestro web recording is beta)
+#   - shots/*.png (all screenshots, flattened)
 #   - contact-sheet.png (grid of all screenshots, via ffmpeg tile filter)
-#   - report/index.html (browsable Playwright HTML report)
-#   - results.json (machine-readable pass/fail)
+#   - report-*.xml (machine-readable JUnit pass/fail by viewport tier)
 #
 # Usage: bash scripts/evidence-bundle.sh
 # Output: echoes the output directory path on the last line.
@@ -14,30 +13,39 @@ cd "$(dirname "$0")/.."
 
 TS="${EVIDENCE_TS:-$(date +%Y%m%d-%H%M%S)}"
 OUT="test-evidence/$TS"
+if [[ -n "${MAESTRO_RESULTS_DIR:-}" ]]; then
+  RESULTS_DIRS=("$MAESTRO_RESULTS_DIR")
+else
+  RESULTS_DIRS=(test-results/maestro test-results/maestro-mobile)
+fi
 mkdir -p "$OUT/videos" "$OUT/shots"
 
-# 1. Videos: webm → mp4 (h264, faststart for web playback)
+# 1. Videos: Maestro records mp4 directly.
 count_videos=0
-find test-results -name 'video.webm' | while read -r v; do
-  name=$(basename "$(dirname "$v")")
-  ffmpeg -loglevel error -y -i "$v" \
-    -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
-    "$OUT/videos/$name.mp4" 2>/dev/null || true
+for results in "${RESULTS_DIRS[@]}"; do
+  [[ -d "$results" ]] || continue
+  find "$results" -name '*.mp4' | while read -r v; do
+    cp "$v" "$OUT/videos/$(basename "$v")"
+  done
 done
 count_videos=$(find "$OUT/videos" -name '*.mp4' 2>/dev/null | wc -l)
 
 # 2. Screenshots: flatten with test-dir prefix
-find test-results -name '*.png' ! -name 'test-failed-*' | while read -r p; do
-  dir=$(basename "$(dirname "$p")")
-  base=$(basename "$p")
-  cp "$p" "$OUT/shots/${dir}-${base}"
+for results in "${RESULTS_DIRS[@]}"; do
+  [[ -d "$results" ]] || continue
+  tier=$(basename "$results")
+  find "$results" -name '*.png' | while read -r p; do
+    dir=$(basename "$(dirname "$p")")
+    base=$(basename "$p")
+    cp "$p" "$OUT/shots/${tier}-${dir}-${base}"
+  done
 done
 
 count_shots=$(find "$OUT/shots" -name '*.png' 2>/dev/null | wc -l)
 
 # 3. Contact sheet (grid of all screenshots)
 if [ "$count_shots" -gt 0 ]; then
-  # All Playwright viewport screenshots share the same dimensions,
+  # All Maestro viewport screenshots share the same dimensions,
   # so the glob + tile filter works without per-input scaling.
   cols=6
   rows=$(( (count_shots + cols - 1) / cols ))
@@ -47,9 +55,13 @@ if [ "$count_shots" -gt 0 ]; then
     -frames:v 1 "$OUT/contact-sheet.png" 2>/dev/null || true
 fi
 
-# 4. HTML report + JSON results
-cp -r playwright-report "$OUT/report" 2>/dev/null || true
-cp test-results/results.json "$OUT/" 2>/dev/null || true
+# 4. JUnit reports + command logs
+for results in "${RESULTS_DIRS[@]}"; do
+  [[ -d "$results" ]] || continue
+  tier=$(basename "$results")
+  cp "$results/report.xml" "$OUT/report-${tier}.xml" 2>/dev/null || true
+  cp "$results/maestro.log" "$OUT/maestro-${tier}.log" 2>/dev/null || true
+done
 
 # 5. Summary manifest
 cat > "$OUT/manifest.txt" <<EOF
@@ -58,7 +70,7 @@ Timestamp: $TS
 Videos: $count_videos
 Screenshots: $count_shots
 Contact sheet: $([ -f "$OUT/contact-sheet.png" ] && echo yes || echo no)
-Report: $OUT/report/index.html
+Reports: $OUT/report-maestro.xml, $OUT/report-maestro-mobile.xml
 EOF
 
 echo "$OUT"
