@@ -34,3 +34,17 @@ Object.defineProperty(window, "IntersectionObserver", {
 
 // Mock scrollTo (components that auto-scroll)
 Element.prototype.scrollTo = () => {};
+
+// CodeMirror measures DOM ranges; jsdom does not implement these geometry APIs.
+Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect = () => ({
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  toJSON: () => ({}),
+});

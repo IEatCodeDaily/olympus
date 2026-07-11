@@ -115,7 +115,16 @@ export function setWorkspaceLayout(
   const count = PANE_COUNTS[layout];
   if (count >= state.panes.length) {
     const panes = [...state.panes];
-    while (panes.length < count) panes.push(pane(panes.length));
+    const activePane = state.panes.find((candidate) => candidate.id === state.activePaneId);
+    const activeTab = activePane?.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
+    while (panes.length < count) {
+      const nextPane = pane(panes.length);
+      if (activeTab) {
+        nextPane.tabs = [activeTab];
+        nextPane.activeTabId = activeTab.id;
+      }
+      panes.push(nextPane);
+    }
     return { ...state, layout, panes };
   }
 

@@ -48,6 +48,15 @@ describe("vault workspace", () => {
     expect(workspace.panes).toHaveLength(4);
   });
 
+  it("seeds newly split panes with the active editor instead of empty groups", () => {
+    const initial = openWorkspaceTab(createInitialWorkspace(null), note("one.md"));
+    const workspace = setWorkspaceLayout(initial, "columns");
+
+    expect(workspace.panes).toHaveLength(2);
+    expect(workspace.panes[1].tabs).toEqual([note("one.md")]);
+    expect(workspace.panes[1].activeTabId).toBe("note:one.md");
+  });
+
   it("derives unique frontmatter columns without duplicating built-in columns", () => {
     expect(deriveFrontmatterColumns([
       { frontmatter: { title: "One", status: "draft", cid: "one" } },

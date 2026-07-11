@@ -542,6 +542,14 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-11 — Replace the Vault's dual editor with a lossless live-preview workbench
+
+- Removed the Rich/Source mode switch and the source-only syntax denylist. Vault editing now uses one CodeMirror document model that preserves canonical Markdown byte-for-byte.
+- Added Obsidian-style live preview: inactive syntax markers collapse while heading, emphasis, link, list, and blockquote structure remains visible; the active line reveals exact Markdown for direct editing.
+- Moved layout controls onto the active pane's tab row, matching the VS Code editor-group model instead of spending a second row on global layout chrome.
+- New split groups inherit the active document instead of opening as empty dead space. Column and row separators support mouse and keyboard resizing with 20–80% bounds.
+- QA now enters the real editor and captures editor/split screenshots. The previous suite mocked Milkdown and never exercised the user-visible mode fallback; see postmortem 0018.
+
 ### 2026-07-10 — Redesign + reimplement the Hall login screen (`auth.tsx`) — kill inline styles, adopt tokens/`.ol-*`, add editorial identity, make it responsive
 
 - **The debt this closes:** the unauthenticated auth surface (`ui/src/auth.tsx`)

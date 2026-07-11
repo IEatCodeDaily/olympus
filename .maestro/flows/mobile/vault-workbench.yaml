@@ -1,0 +1,17 @@
+url: ${MAESTRO_BASE_URL}/vaults
+name: Vault mobile live-preview editor
+properties:
+  junitId: olympus-vault-workbench-mobile
+  junitClassname: ui.mobile
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Edit"
+    timeout: 15000
+- tapOn: "Edit"
+- assertVisible: "Save"
+- assertVisible: "Cancel"
+- assertNotVisible: "Rich"
+- assertNotVisible: "Source"
+- takeScreenshot:
+    path: screenshots/vault-mobile-live-preview
