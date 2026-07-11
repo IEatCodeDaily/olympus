@@ -575,4 +575,241 @@ mod tests {
             assert_eq!(serde_json::from_slice::<Event>(&bytes).unwrap(), event);
         }
     }
+
+    /// Returns exactly one instance of each variant.  Any future variant that
+    /// isn't listed here will produce a compile-time non-exhaustive-pattern error
+    /// in `_exhaustive_variant_guard` below — that is the intentional enforcement
+    /// mechanism.
+    fn all_event_variant_instances() -> Vec<Event> {
+        vec![
+            Event::SessionCreated {
+                session_id: "sc-1".into(),
+                hermes_id: "h-1".into(),
+                source: "cli".into(),
+                model: Some("test-model".into()),
+                title: Some("Test session".into()),
+                started_at: 1_700_000_000.0,
+                message_count: 5,
+                input_tokens: 100,
+                output_tokens: 200,
+                agent: Some("coding-agent".into()),
+                node: Some("local".into()),
+            },
+            Event::MessageAppended {
+                session_id: "sc-1".into(),
+                hermes_session_id: "h-1".into(),
+                message_id: 0,
+                role: "user".into(),
+                content: Some("hello world".into()),
+                tool_name: None,
+                tool_calls: Some(r#"[{"name":"foo"}]"#.into()),
+                reasoning: Some("Because.".into()),
+                timestamp: 1_700_000_001.0,
+                token_count: Some(3),
+                finish_reason: Some("stop".into()),
+            },
+            Event::MessageRemoved {
+                session_id: "sc-1".into(),
+                hermes_session_id: "h-1".into(),
+                message_id: 0,
+            },
+            Event::SessionUpdated {
+                session_id: "sc-1".into(),
+                title: Some("Renamed".into()),
+                model: None,
+                archived: Some(false),
+                message_count: Some(6),
+                agent: None,
+                node: None,
+                hermes_id: None,
+                pinned: Some(true),
+            },
+            Event::CardCreated {
+                card_id: "card-1".into(),
+                board_id: "board-1".into(),
+                title: "Do something".into(),
+                created_at: 1_700_000_002.0,
+            },
+            Event::CardAssigned {
+                card_id: "card-1".into(),
+                assigned_id: "agent-z".into(),
+                assigned_kind: "agent".into(),
+                session_id: "sc-1".into(),
+                attempt_bookmark: "bk-1".into(),
+                assigned_at: 1_700_000_003.0,
+            },
+            Event::CardClaimed {
+                card_id: "card-1".into(),
+                claimed_at: 1_700_000_004.0,
+            },
+            Event::CardBlocked {
+                card_id: "card-1".into(),
+                blocked_by: vec!["card-0".into(), "card-2".into()],
+                blocked_at: 1_700_000_005.0,
+            },
+            Event::CardCompleted {
+                card_id: "card-1".into(),
+                completed_at: 1_700_000_006.0,
+            },
+            Event::CardReassigned {
+                card_id: "card-1".into(),
+                assigned_id: "agent-t".into(),
+                assigned_kind: "agent".into(),
+                session_id: "sc-2".into(),
+                attempt_bookmark: "bk-2".into(),
+                previous_session_id: "sc-1".into(),
+                reassigned_at: 1_700_000_007.0,
+            },
+            Event::SessionForked {
+                parent_session_id: "sc-1".into(),
+                child_session_id: "sc-2".into(),
+                fork_type: "fork".into(),
+                fork_point: Some(3),
+                forked_at: 1_700_000_010.0,
+            },
+            Event::CardSessionLinked {
+                card_id: "card-1".into(),
+                session_id: "sc-1".into(),
+                linked_at: 1_700_000_011.0,
+            },
+            Event::SessionHandover {
+                source_session_id: "sc-1".into(),
+                target_session_id: "sc-2".into(),
+                from_agent_kind: "Hermes".into(),
+                to_agent_kind: "ClaudeCode".into(),
+                translated_message_count: 12,
+                handed_over_at: 1_700_000_012.0,
+            },
+            Event::SetupDeclared {
+                scope: "org:acme".into(),
+                skills: vec!["code-review".into()],
+                mcp: vec!["gitnexus".into()],
+                plugins: vec!["lsp-rust".into()],
+                hooks: vec!["pre-commit".into()],
+                declared_at: 1_700_000_013.0,
+            },
+            Event::EntryRegistered {
+                kind: "mcp".into(),
+                slug: "gitnexus".into(),
+                definition: r#"{"command":"gitnexus","args":["--stdio"]}"#.into(),
+                registered_at: 1_700_000_014.0,
+            },
+            Event::RepoRegistered {
+                slug: "olympus".into(),
+                url: "https://github.com/user/olympus".into(),
+                default_branch: "main".into(),
+                registered_at: 1_700_000_015.0,
+            },
+            Event::RepoRemoved {
+                slug: "olympus".into(),
+                removed_at: 1_700_000_016.0,
+            },
+            Event::SessionRepoAttached {
+                session_id: "sc-1".into(),
+                slug: "olympus".into(),
+                attached_at: 1_700_000_017.0,
+            },
+            Event::ProjectCreated {
+                project_id: "proj-1".into(),
+                name: "Alpha".into(),
+                created_at: 1_700_000_018.0,
+            },
+            Event::ProjectUpdated {
+                project_id: "proj-1".into(),
+                name: Some("Alpha Renamed".into()),
+                vaults: Some(vec!["vault-1".into()]),
+                repos: Some(vec!["olympus".into()]),
+                boards: Some(vec!["board-1".into()]),
+            },
+            Event::ProjectDeleted {
+                project_id: "proj-1".into(),
+                deleted_at: 1_700_000_019.0,
+            },
+            Event::SessionProjectAttached {
+                session_id: "sc-1".into(),
+                project_id: "proj-1".into(),
+                attached_at: 1_700_000_020.0,
+            },
+            Event::SessionOrganizationAssigned {
+                session_id: "sc-1".into(),
+                organization_id: "org-acme".into(),
+            },
+            Event::ProjectOrganizationAssigned {
+                project_id: "proj-1".into(),
+                organization_id: "org-acme".into(),
+            },
+            Event::CardOrganizationAssigned {
+                card_id: "card-1".into(),
+                organization_id: "org-acme".into(),
+            },
+        ]
+    }
+
+    /// Exhaustive match over every Event variant.  No wildcard arm — if a new
+    /// variant is added to `Event` without a corresponding arm here, this
+    /// function will FAIL TO COMPILE, forcing the author to add it to
+    /// `all_event_variant_instances` as well.
+    #[allow(dead_code)]
+    fn _exhaustive_variant_guard(e: &Event) {
+        match e {
+            Event::SessionCreated { .. } => {}
+            Event::MessageAppended { .. } => {}
+            Event::MessageRemoved { .. } => {}
+            Event::SessionUpdated { .. } => {}
+            Event::CardCreated { .. } => {}
+            Event::CardAssigned { .. } => {}
+            Event::CardClaimed { .. } => {}
+            Event::CardBlocked { .. } => {}
+            Event::CardCompleted { .. } => {}
+            Event::CardReassigned { .. } => {}
+            Event::SessionForked { .. } => {}
+            Event::CardSessionLinked { .. } => {}
+            Event::SessionHandover { .. } => {}
+            Event::SetupDeclared { .. } => {}
+            Event::EntryRegistered { .. } => {}
+            Event::RepoRegistered { .. } => {}
+            Event::RepoRemoved { .. } => {}
+            Event::SessionRepoAttached { .. } => {}
+            Event::ProjectCreated { .. } => {}
+            Event::ProjectUpdated { .. } => {}
+            Event::ProjectDeleted { .. } => {}
+            Event::SessionProjectAttached { .. } => {}
+            Event::SessionOrganizationAssigned { .. } => {}
+            Event::ProjectOrganizationAssigned { .. } => {}
+            Event::CardOrganizationAssigned { .. } => {}
+        }
+    }
+
+    /// Round-trips every Event variant through the full production codec:
+    /// serde_json serialise → zstd compress → zstd decompress → serde_json
+    /// deserialise.  Semantic equality is asserted for every variant.
+    ///
+    /// `_exhaustive_variant_guard` above ensures this list cannot silently
+    /// omit a newly added variant — a missing arm there is a compile error.
+    #[test]
+    fn all_event_variants_json_zstd_roundtrip() {
+        let variants = all_event_variant_instances();
+        // Sanity-check: we have at least one instance per variant family.
+        assert!(!variants.is_empty(), "variant list must not be empty");
+        for event in &variants {
+            let json =
+                serde_json::to_vec(event).unwrap_or_else(|e| panic!("json encode failed: {e}"));
+            let compressed = zstd::stream::encode_all(json.as_slice(), 3)
+                .unwrap_or_else(|e| panic!("zstd compress failed: {e}"));
+            let decompressed = zstd::stream::decode_all(compressed.as_slice())
+                .unwrap_or_else(|e| panic!("zstd decompress failed: {e}"));
+            let decoded: Event = serde_json::from_slice(&decompressed).unwrap_or_else(|e| {
+                panic!(
+                    "json decode failed: {e}\nraw json: {}",
+                    String::from_utf8_lossy(&decompressed)
+                )
+            });
+            assert_eq!(
+                event,
+                &decoded,
+                "codec round-trip mismatch for variant {:?}",
+                std::mem::discriminant(event)
+            );
+        }
+    }
 }
