@@ -11,7 +11,6 @@ path = "src/main.rs"
 [dependencies]
 olympus-proto = { path = "../proto" }
 olympus-envoy = { path = "../envoy" }
-redb.workspace = true
 serde.workspace = true
 postcard.workspace = true
 zstd.workspace = true

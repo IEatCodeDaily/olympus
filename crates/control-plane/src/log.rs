@@ -4,7 +4,6 @@
 //! same WAL transaction. Message history and FTS stay on disk; callers page it
 //! on demand instead of retaining decompressed messages in process memory.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -71,52 +70,6 @@ impl Log {
         Ok(Self {
             conn: Mutex::new(conn),
         })
-    }
-
-    /// Import the old redb log once, keeping ONLY Olympus-native events — the
-    /// imported Hermes state.db mirror is rebuilt from state.db on every boot
-    /// (see main.rs), so copying those events here would only be deleted again
-    /// by `retain_native` (at the cost of ~1GB of writes and 137K FTS trigger
-    /// deletes). Pages in bounded chunks so history is never resident in RAM.
-    ///
-    /// Runs only when the SQLite events table is empty (one-shot). Events are
-    /// scanned in seq order, so a session's `SessionCreated` (which carries the
-    /// `source`) is always seen before its messages.
-    pub fn migrate_from_redb(&self, path: &Path) -> Result<usize> {
-        if !path.exists() || self.event_count()? > 0 {
-            return Ok(0);
-        }
-        let legacy = crate::legacy_log::Log::open(path).context("opening legacy redb log")?;
-        const CHUNK: usize = 2_000;
-        let mut native_sessions: HashSet<String> = HashSet::new();
-        let mut migrated = 0usize;
-        let mut next_seq = 0u64;
-        loop {
-            let page = legacy.read_from(next_seq, CHUNK)?;
-            if page.is_empty() {
-                break;
-            }
-            next_seq = page.last().map(|(s, _)| s + 1).unwrap_or(next_seq);
-            let mut keep = Vec::new();
-            for (_, event) in page {
-                if let Event::SessionCreated {
-                    session_id, source, ..
-                } = &event
-                {
-                    if source == "olympus" {
-                        native_sessions.insert(session_id.clone());
-                    }
-                }
-                if is_native(&event, &native_sessions) {
-                    keep.push(event);
-                }
-            }
-            if !keep.is_empty() {
-                self.append_batch(&keep)?;
-                migrated += keep.len();
-            }
-        }
-        Ok(migrated)
     }
 
     pub fn append(&self, event: &Event) -> Result<u64> {
@@ -868,35 +821,6 @@ fn event_session_id(event: &Event) -> Option<&str> {
         _ => None,
     }
 }
-fn is_native(event: &Event, native: &HashSet<String>) -> bool {
-    match event {
-        Event::SetupDeclared { .. }
-        | Event::EntryRegistered { .. }
-        | Event::CardCreated { .. }
-        | Event::CardAssigned { .. }
-        | Event::CardClaimed { .. }
-        | Event::CardBlocked { .. }
-        | Event::CardCompleted { .. }
-        | Event::CardReassigned { .. }
-        | Event::SessionForked { .. }
-        | Event::CardSessionLinked { .. }
-        | Event::SessionHandover { .. }
-        | Event::RepoRegistered { .. }
-        | Event::RepoRemoved { .. }
-        | Event::SessionRepoAttached { .. }
-        | Event::ProjectCreated { .. }
-        | Event::ProjectUpdated { .. }
-        | Event::ProjectDeleted { .. }
-        | Event::SessionProjectAttached { .. }
-        | Event::ProjectOrganizationAssigned { .. }
-        | Event::CardOrganizationAssigned { .. } => true,
-        Event::SessionCreated { source, .. } => source == "olympus",
-        Event::SessionUpdated { session_id, .. }
-        | Event::MessageAppended { session_id, .. }
-        | Event::MessageRemoved { session_id, .. }
-        | Event::SessionOrganizationAssigned { session_id, .. } => native.contains(session_id),
-    }
-}
 
 fn session_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
     Ok(SessionRow {
@@ -1076,36 +1000,5 @@ mod tests {
         assert_eq!(session.org_id, "org-a");
         assert_eq!(log.recent_messages("s", 50).unwrap().len(), 1);
         assert_eq!(log.search("sqlite", 10).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn migrates_legacy_redb_once_and_preserves_event_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let legacy_path = dir.path().join("eventlog.redb");
-        let legacy = crate::legacy_log::Log::open(&legacy_path).unwrap();
-        legacy
-            .append(&Event::SessionCreated {
-                session_id: "legacy".into(),
-                hermes_id: "h-legacy".into(),
-                source: "olympus".into(),
-                model: None,
-                title: Some("migrated".into()),
-                started_at: 1.0,
-                message_count: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                agent: None,
-                node: None,
-            })
-            .unwrap();
-        drop(legacy);
-
-        let log = Log::open(&dir.path().join("olympus.db")).unwrap();
-        assert_eq!(log.migrate_from_redb(&legacy_path).unwrap(), 1);
-        assert_eq!(log.migrate_from_redb(&legacy_path).unwrap(), 0);
-        assert_eq!(
-            log.get_session("legacy").unwrap().unwrap().title.as_deref(),
-            Some("migrated")
-        );
     }
 }

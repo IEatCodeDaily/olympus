@@ -1,18 +1,16 @@
 //! Olympus control plane — core library.
 //!
-//! Phase 1: append-only event log over redb (`event`, `log`, `compress`).
+//! Phase 1: append-only event log (`event`, `log`).
 //! Phase 2: in-memory views (`views`).
 //! Phase 6: tantivy full-text search (`search`).
 
 pub mod auth;
 pub mod auth_store;
-pub mod compress;
 pub mod edit_model;
 pub mod enroll;
 pub mod event;
 pub mod import;
 pub mod irc;
-pub mod legacy_log;
 pub mod log;
 pub mod node;
 pub mod projects;
