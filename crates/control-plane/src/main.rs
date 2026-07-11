@@ -45,6 +45,16 @@ fn olympus_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".olympus"))
 }
 
+fn warn_if_obsolete_event_log_exists(home: &std::path::Path) {
+    let obsolete = home.join("eventlog.redb");
+    if obsolete.exists() {
+        tracing::warn!(
+            path = %obsolete.display(),
+            "obsolete redb event log ignored; SQLite olympus.db is the sole source of truth"
+        );
+    }
+}
+
 /// The default org slug for the single-operator case (ADR 0005 §3 — org replaces
 /// context). Multi-org management is post-MVP; the MVP runs one org. Override
 /// with `OLYMPUS_DEFAULT_ORG`.
@@ -76,6 +86,7 @@ async fn main() -> Result<()> {
 
     let home = olympus_home()?;
     std::fs::create_dir_all(&home).with_context(|| format!("creating {}", home.display()))?;
+    warn_if_obsolete_event_log_exists(&home);
 
     let token = auth::load_or_create_token()?;
     let auth_store = Arc::new(
@@ -379,4 +390,17 @@ async fn main() -> Result<()> {
 
     axum::serve(listener, app).await.context("serving")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn obsolete_redb_path_is_ignored_without_being_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("eventlog.redb")).unwrap();
+
+        warn_if_obsolete_event_log_exists(dir.path());
+    }
 }

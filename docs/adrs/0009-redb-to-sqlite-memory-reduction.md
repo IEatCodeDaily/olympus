@@ -285,6 +285,12 @@ functions of it. They can be rebuilt from `events` at any time.
 
 ## Consequences
 
+### Legacy log removal addendum
+
+The legacy redb log implementation and dependency have been deleted. Existing
+`~/.olympus/eventlog.redb` files are inert: Hall warns once at boot, ignores the
+file without reading it, and operators may remove it manually.
+
 - **RSS drops from ~1.4 GB to < 50 MB.** 15× reduction.
 - **Startup is faster.** No log replay into in-memory views — SQLite
   reads are lazy, first query pays the I/O, not the whole boot.
