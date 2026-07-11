@@ -40,7 +40,6 @@ use crate::bridge::acp::{
     AcpId, AcpMessage, AcpNotification, AcpRequest, AcpResponse, AgentEventAcpExt, Frame,
 };
 
-const CLAUDE_CODE_ACP_PACKAGE: &str = "@zed-industries/claude-code-acp@0.16.2";
 const CODEX_ACP_PACKAGE: &str = "@zed-industries/codex-acp@0.16.0";
 
 // AcpFraming moved to `olympus-proto` (ADR 0008); re-exported so existing
@@ -1015,10 +1014,7 @@ mod tests {
 
     #[test]
     fn acp_command_for_agent_selects_pinned_cli_adapters() {
-        assert_eq!(
-            acp_command_for_agent(Some("claude-code")),
-            vec!["claude"]
-        );
+        assert_eq!(acp_command_for_agent(Some("claude-code")), vec!["claude"]);
         assert_eq!(
             acp_command_for_agent(Some("codex")),
             vec!["bunx", "@zed-industries/codex-acp@0.16.0"]

@@ -127,10 +127,14 @@ impl RuntimeTable {
     /// capturing its capability flags.
     pub async fn register(&self, session_id: &str, runtime: Arc<dyn AgentRuntime>) {
         let resumable = runtime.resumable().await;
-        self.runtimes
-            .write()
-            .await
-            .insert(session_id.to_string(), RuntimeEntry { runtime, resumable, last_activity: std::time::Instant::now() });
+        self.runtimes.write().await.insert(
+            session_id.to_string(),
+            RuntimeEntry {
+                runtime,
+                resumable,
+                last_activity: std::time::Instant::now(),
+            },
+        );
     }
 
     /// The runtime registered for a session, if any.
