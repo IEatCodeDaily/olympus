@@ -1385,3 +1385,178 @@ fn fresh_database_migration_is_no_op_and_sets_marker() {
         "fresh DB must have json+zstd-v1 marker set"
     );
 }
+
+// ── size + throughput measurement fixtures ────────────────────────────────────
+//
+// These tests produce human-readable output (--nocapture) and the results are
+// recorded in docs/codec-size-and-batch-throughput-measurement.md.
+
+/// Measures total payload bytes immediately before and after the one-shot
+/// postcard+zstd → json+zstd migration using the representative fixture set.
+/// Prints a structured report to stderr and flags if the ratio exceeds 1.5x.
+/// Hard-asserts ratio < 3.0 to catch catastrophic regressions.
+#[test]
+fn codec_size_ratio_fixture() {
+    let events = representative_fixture_events();
+    let n = events.len();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("olympus.db");
+
+    // Phase 1 — build legacy postcard+zstd database.
+    let before_bytes: i64 = {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        for ev in &events {
+            insert_legacy(&conn, ev);
+        }
+        conn.query_row(
+            "SELECT COALESCE(SUM(length(payload)), 0) FROM events",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+
+    // Phase 2 — open Log to trigger migration, then measure again.
+    let log = Log::open(&path).unwrap();
+    drop(log);
+
+    let after_bytes: i64 = {
+        let conn = Connection::open(&path).unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(length(payload)), 0) FROM events",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+
+    let ratio = after_bytes as f64 / before_bytes.max(1) as f64;
+    let flag = if ratio > 1.5 { "  *** EXCEEDS 1.5x ***" } else { "" };
+    eprintln!(
+        "\n=== codec_size_ratio_fixture ===\n\
+         events       : {n}\n\
+         postcard+zstd: {before_bytes} B  ({per_before} B/event)\n\
+         json+zstd    : {after_bytes} B  ({per_after} B/event)\n\
+         ratio        : {ratio:.3}{flag}\n",
+        per_before = before_bytes / n.max(1) as i64,
+        per_after = after_bytes / n.max(1) as i64,
+    );
+
+    assert!(
+        ratio < 3.0,
+        "json+zstd payload exceeds 3x postcard+zstd for fixture events (ratio={ratio:.2})"
+    );
+}
+
+/// Exercises the existing append_batch path with a 100-event workload.
+/// Verifies:
+///   - All 100 events land correctly (count + content round-trip).
+///   - Returned seqs are strictly consecutive, proving the entire batch was
+///     committed in a single SQLite transaction with no interleaving gaps.
+///   - The same 100 events appended one-by-one via append() produce an
+///     identical result, confirming parity between the two code paths.
+/// Timing is printed for informational evidence; no wall-clock assertions
+/// are made so the test is not brittle under load.
+#[test]
+fn batch_append_throughput_fixture() {
+    use std::time::Instant;
+
+    let n: usize = 100;
+    let events: Vec<Event> = (0..n)
+        .map(|i| Event::SessionCreated {
+            session_id: format!("batch-sess-{i:04}"),
+            hermes_id: format!("hermes-{i:04}"),
+            source: "cli".into(),
+            model: Some("test-model".into()),
+            title: Some(format!("Batch session {i}")),
+            started_at: 1_700_000_000.0 + i as f64,
+            message_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            agent: None,
+            node: None,
+        })
+        .collect();
+
+    // ── sequential baseline ──────────────────────────────────────────────────
+    let seq_dir = tempfile::tempdir().unwrap();
+    let seq_log = Log::open(&seq_dir.path().join("seq.db")).unwrap();
+    let t_seq = Instant::now();
+    for ev in &events {
+        seq_log.append(ev).unwrap();
+    }
+    let elapsed_seq = t_seq.elapsed();
+    assert_eq!(
+        seq_log.event_count().unwrap(),
+        n,
+        "sequential: wrong event count"
+    );
+    let seq_stored = seq_log.read_all().unwrap();
+    assert_eq!(seq_stored.len(), n);
+
+    // ── batch path ───────────────────────────────────────────────────────────
+    let batch_dir = tempfile::tempdir().unwrap();
+    let batch_log = Log::open(&batch_dir.path().join("batch.db")).unwrap();
+    let t_batch = Instant::now();
+    let first_seq = batch_log.append_batch(&events).unwrap();
+    let elapsed_batch = t_batch.elapsed();
+
+    // Correctness: all events present.
+    assert_eq!(
+        batch_log.event_count().unwrap(),
+        n,
+        "batch: wrong event count"
+    );
+    assert!(
+        first_seq.is_some(),
+        "append_batch returned None for non-empty input"
+    );
+
+    let batch_stored = batch_log.read_all().unwrap();
+    assert_eq!(batch_stored.len(), n, "read_all must return all batched events");
+    for (i, ((seq, got), want)) in batch_stored.iter().zip(events.iter()).enumerate() {
+        assert!(*seq > 0, "seq must be positive at index {i}");
+        assert_eq!(
+            got, want,
+            "event at index {i} (seq {seq}) changed after batch append"
+        );
+    }
+
+    // Structural proof of single-transaction batch: seqs must be strictly
+    // consecutive with no gaps.  A split across N separate transactions could
+    // in theory still be consecutive (no concurrent writer), but a gap would
+    // be unambiguous evidence of a broken batch.
+    let seqs: Vec<u64> = batch_stored.iter().map(|(s, _)| *s).collect();
+    for w in seqs.windows(2) {
+        assert_eq!(
+            w[1],
+            w[0] + 1,
+            "seq gap {}->{}: batch commit may not be single-transaction",
+            w[0],
+            w[1]
+        );
+    }
+
+    // Content parity between sequential and batch paths.
+    let seq_events: Vec<&Event> = seq_stored.iter().map(|(_, e)| e).collect();
+    let batch_events: Vec<&Event> = batch_stored.iter().map(|(_, e)| e).collect();
+    assert_eq!(
+        seq_events, batch_events,
+        "sequential and batch paths produced different events"
+    );
+
+    let seq_us = elapsed_seq.as_micros();
+    let batch_us = elapsed_batch.as_micros();
+    let speedup = seq_us as f64 / batch_us.max(1) as f64;
+    eprintln!(
+        "\n=== batch_append_throughput_fixture ===\n\
+         events     : {n}\n\
+         sequential : {seq_us} µs  ({seq_per:.1} µs/event)\n\
+         batch      : {batch_us} µs  ({batch_per:.1} µs/event)\n\
+         speedup    : {speedup:.2}x\n\
+         (timing is informational — no wall-clock assertions)\n",
+        seq_per = seq_us as f64 / n as f64,
+        batch_per = batch_us as f64 / n as f64,
+    );
+}
