@@ -37,7 +37,10 @@ pub(crate) struct EventsQuery {
 /// This is the records-replication primitive for cross-node sync (ADR 0005 §5):
 /// olympus is the authority, nodes reconcile by tailing from their last
 /// checkpoint. Responses are `[{seq, event}, …]` in ascending order.
-pub(crate) async fn tail_events(State(state): State<AppState>, Query(q): Query<EventsQuery>) -> Response {
+pub(crate) async fn tail_events(
+    State(state): State<AppState>,
+    Query(q): Query<EventsQuery>,
+) -> Response {
     let since = q.since.unwrap_or(0);
     let limit = q.limit.unwrap_or(500).min(5000);
     match state.log.read_from(since, limit) {

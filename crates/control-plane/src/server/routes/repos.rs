@@ -55,7 +55,10 @@ pub(crate) async fn register_repo(
     append_and_apply(&state, event).await
 }
 
-pub(crate) async fn remove_repo(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+pub(crate) async fn remove_repo(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Response {
     if state.views.read().await.repos.get(&slug).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }

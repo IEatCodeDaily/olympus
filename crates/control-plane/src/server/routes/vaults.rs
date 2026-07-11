@@ -82,7 +82,10 @@ pub(crate) async fn create_vault(
     }
 }
 
-pub(crate) async fn list_vault_notes(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn list_vault_notes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     match state.vaults.list_notes(&id) {
         Ok(notes) => {
             let notes: Vec<NoteTreeEntryDto> = notes.into_iter().map(Into::into).collect();
@@ -92,7 +95,10 @@ pub(crate) async fn list_vault_notes(State(state): State<AppState>, Path(id): Pa
     }
 }
 
-pub(crate) async fn list_vault_documents(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn list_vault_documents(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     match state.vaults.list_documents(&id) {
         Ok(documents) => {
             let documents: Vec<NoteIndexEntryDto> = documents.into_iter().map(Into::into).collect();
@@ -167,7 +173,10 @@ pub(crate) fn vault_error(err: anyhow::Error) -> Response {
         .into_response()
 }
 
-pub(crate) async fn get_vault_graph(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn get_vault_graph(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     match state.vaults.graph(&id) {
         Ok(g) => {
             let dto = dto::VaultGraphDto {
@@ -197,7 +206,10 @@ pub(crate) async fn get_vault_graph(State(state): State<AppState>, Path(id): Pat
     }
 }
 
-pub(crate) async fn list_vault_collections(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn list_vault_collections(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     match state.vaults.list_collections(&id) {
         Ok(collections) => {
             let dtos: Vec<dto::CollectionSummaryDto> = collections

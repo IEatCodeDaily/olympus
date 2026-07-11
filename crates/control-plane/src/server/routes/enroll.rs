@@ -125,7 +125,10 @@ pub(crate) async fn enroll_install_script(
 /// GET /api/enroll/:token/binary — serve the olympus-envoy binary from
 /// `<home>/bin/olympus-envoy` (the deployed symlink). Token-gated. Streaming
 /// is unnecessary at ~20MB; read + send is fine for an enrollment path.
-pub(crate) async fn enroll_binary(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+pub(crate) async fn enroll_binary(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Response {
     if !state.enroll.is_valid(&token).await {
         return (StatusCode::FORBIDDEN, "enroll token invalid or expired").into_response();
     }
@@ -197,7 +200,10 @@ pub(crate) async fn enroll_register(
 
 /// GET /api/enroll/:token/status — is the enrolled node online yet? Token-gated
 /// polling endpoint for the installer's final verification step.
-pub(crate) async fn enroll_status(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+pub(crate) async fn enroll_status(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Response {
     if !state.enroll.is_valid(&token).await {
         return (StatusCode::FORBIDDEN, "enroll token invalid or expired").into_response();
     }

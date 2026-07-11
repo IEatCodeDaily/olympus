@@ -192,7 +192,10 @@ pub(crate) async fn block_card(
     append_and_apply(&state, event).await
 }
 
-pub(crate) async fn complete_card(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn complete_card(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())

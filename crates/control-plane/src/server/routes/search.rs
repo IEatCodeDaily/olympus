@@ -21,7 +21,10 @@ pub(crate) struct SearchQuery {
     limit: Option<usize>,
 }
 
-pub(crate) async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Response {
+pub(crate) async fn search(
+    State(state): State<AppState>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
     let Some(query) = q.q.filter(|s| !s.trim().is_empty()) else {
         return Json(json!({ "hits": [] })).into_response();
     };

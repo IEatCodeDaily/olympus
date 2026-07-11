@@ -25,7 +25,10 @@ pub(crate) struct RegistryQuery {
 }
 
 /// GET /api/registry?kind=mcp — list registry entries (ADR 0006 §9.4).
-pub(crate) async fn list_registry(State(state): State<AppState>, Query(q): Query<RegistryQuery>) -> Response {
+pub(crate) async fn list_registry(
+    State(state): State<AppState>,
+    Query(q): Query<RegistryQuery>,
+) -> Response {
     let views = state.views.read().await;
     let entries: Vec<RegistryEntryDto> = match q.kind.as_deref() {
         Some(kind) => views.registry.list_kind(kind),

@@ -1565,7 +1565,10 @@ pub(crate) async fn post_message(
 /// POST /api/sessions/:id/cancel — stop the in-flight turn for a managed
 /// session. Sends AgentCommand::Cancel to the runtime (ACP session/cancel) and
 /// clears the in-flight flag. No-op (still 200) if there's no active runtime.
-pub(crate) async fn cancel_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn cancel_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     if let Some(runtime) = state.bridge.get_runtime(&id).await {
         if let Err(e) = runtime.send(AgentCommand::Cancel).await {
             tracing::warn!(error = %e, session = %id, "cancel send failed");
@@ -1932,7 +1935,10 @@ pub(crate) async fn create_subsession(
 }
 
 /// GET /api/sessions/:id/subsessions — list direct children.
-pub(crate) async fn list_subsessions(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn list_subsessions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     let children: Vec<SessionDto> = {
         let views = state.views.read().await;
         let Some(parent) = views.sessions.get(&id) else {

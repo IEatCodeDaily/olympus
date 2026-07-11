@@ -37,7 +37,10 @@ pub(crate) async fn node_agents(State(state): State<AppState>, Path(id): Path<St
 /// automatic). For the local node the control plane re-runs discovery in-process;
 /// a remote node would forward a detect request to its envoy (TODO when the
 /// standalone envoy binary lands).
-pub(crate) async fn refresh_node_agents(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn refresh_node_agents(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
     if id != "local" {
         return (
             StatusCode::NOT_IMPLEMENTED,

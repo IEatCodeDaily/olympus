@@ -35,7 +35,10 @@ pub(crate) struct SetupQuery {
 /// - `?scope=org:acme` → that scope's raw declaration (or empty setup).
 /// - `?org=acme&project=web` → the *effective* (merged org+project) setup the
 ///   envoy would materialize for a session in that project (ADR 0006 §3.1).
-pub(crate) async fn get_setup(State(state): State<AppState>, Query(q): Query<SetupQuery>) -> Response {
+pub(crate) async fn get_setup(
+    State(state): State<AppState>,
+    Query(q): Query<SetupQuery>,
+) -> Response {
     let views = state.views.read().await;
     if let (Some(org), Some(project)) = (q.org.as_deref(), q.project.as_deref()) {
         let row = views.setup.effective_for_project(org, project);
@@ -84,7 +87,10 @@ pub(crate) struct PutSetupBody {
 
 /// PUT /api/setup — declare (set/replace) a scope's agent setup. PUT semantics:
 /// the body fully replaces the scope's prior declaration (ADR 0006 §3).
-pub(crate) async fn put_setup(State(state): State<AppState>, Json(body): Json<PutSetupBody>) -> Response {
+pub(crate) async fn put_setup(
+    State(state): State<AppState>,
+    Json(body): Json<PutSetupBody>,
+) -> Response {
     // Validate the scope shape: "org:<slug>" or "project:<org>/<project>".
     let scope = body.scope.trim();
     let valid = scope

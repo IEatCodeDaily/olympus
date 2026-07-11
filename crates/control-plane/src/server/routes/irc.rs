@@ -30,7 +30,10 @@ pub(crate) async fn list_irc_peers(State(state): State<AppState>) -> Response {
 }
 
 /// POST /api/irc/send — send a DM from one peer to another.
-pub(crate) async fn irc_send(State(state): State<AppState>, Json(body): Json<IrcSendBody>) -> Response {
+pub(crate) async fn irc_send(
+    State(state): State<AppState>,
+    Json(body): Json<IrcSendBody>,
+) -> Response {
     match state.irc.send(&body.from, &body.to, &body.content).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => (

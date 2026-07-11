@@ -25,7 +25,10 @@ pub(crate) async fn models(State(_state): State<AppState>) -> impl IntoResponse 
 /// GET /api/agents/:id/models — models the given agent can actually run
 /// (scoped to that agent's provider). This is what keeps the composer's model
 /// selector agent-specific — a Codex agent is never offered Claude models.
-pub(crate) async fn agent_models(State(_state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+pub(crate) async fn agent_models(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     let provider = agents::list_agents()
         .into_iter()
         .find(|a| a.id == id)
