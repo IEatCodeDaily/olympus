@@ -98,6 +98,9 @@ async fn main() -> Result<()> {
         }
     }
     let session_cookie_secure = std::env::var("OLYMPUS_INSECURE_COOKIES").as_deref() != Ok("1");
+    let allow_installation_token = std::env::var("OLYMPUS_ALLOW_INSTALLATION_TOKEN")
+        .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+        .unwrap_or(true);
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
     // ---- open the SQLite event log (sole source of truth for native data) ----
@@ -199,6 +202,7 @@ async fn main() -> Result<()> {
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
         auth_store,
+        allow_installation_token,
         session_cookie_secure,
         import_state: ImportState::running(), // Hermes import runs after bind (below)
         hermes_profile: Arc::new(profile),

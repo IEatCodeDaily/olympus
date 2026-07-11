@@ -7,6 +7,7 @@ pub mod bridge_mgr;
 pub mod dto;
 pub mod envoy_conn;
 mod identity;
+mod principal;
 pub mod ws;
 
 // Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
@@ -46,6 +47,7 @@ use dto::{
     CardDto, MessageDto, NoteDocumentDto, NoteIndexEntryDto, NoteTreeEntryDto, ProjectDto,
     RegistryEntryDto, SearchHitDto, SessionDto, SetupDto, VaultSummaryDto,
 };
+use principal::{OrgScope, Principal, RouteClass};
 use ws::ServerFrame;
 
 /// Import progress, surfaced on `/api/health`. Stored as an atomic so the
@@ -77,9 +79,6 @@ pub const IMPORT_IDLE: u8 = 0;
 pub const IMPORT_RUNNING: u8 = 1;
 pub const IMPORT_DONE: u8 = 2;
 
-#[derive(Clone)]
-struct OrganizationScope(String);
-
 /// Shared server state. Cheap to clone (everything behind `Arc`).
 #[derive(Clone)]
 pub struct AppState {
@@ -87,6 +86,7 @@ pub struct AppState {
     pub search: Arc<RwLock<SearchIndex>>,
     pub token: Arc<String>,
     pub auth_store: Arc<crate::auth_store::AuthStore>,
+    pub allow_installation_token: bool,
     pub session_cookie_secure: bool,
     pub import_state: ImportState,
     pub hermes_profile: Arc<String>,
@@ -201,11 +201,16 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/repos", get(list_repos).post(register_repo))
         .route("/api/repos/{slug}", get(get_repo).delete(remove_repo))
+        .route("/api/enroll", post(mint_enroll))
         .route("/api/auth/session", get(identity::current_session))
         .route("/api/auth/logout", post(identity::logout))
         .route("/api/organizations", get(identity::list_organizations))
         .route(
             "/api/organizations/{organization_id}/{*resource}",
+            any(organization_resource_proxy),
+        )
+        .route(
+            "/api/organizations/{organization_id}",
             any(organization_resource_proxy),
         )
         .route("/api/sessions/{id}/repos", axum::routing::post(attach_repo))
@@ -252,7 +257,6 @@ pub fn build_router(state: AppState) -> Router {
     // All enroll routes live in ONE router so axum doesn't shadow /api/enroll
     // with /api/enroll/{token} during a cross-router merge.
     let enroll = Router::new()
-        .route("/api/enroll", post(mint_enroll))
         .route("/api/enroll/{token}/install.sh", get(enroll_install_script))
         .route("/api/enroll/{token}/binary", get(enroll_binary))
         .route("/api/enroll/{token}/status", get(enroll_status))
@@ -396,9 +400,11 @@ async fn organization_resource_proxy(
     *request.uri_mut() = uri;
     *request.version_mut() = parts.version;
     *request.headers_mut() = parts.headers;
-    request
-        .extensions_mut()
-        .insert(OrganizationScope(organization_id.clone()));
+    request.extensions_mut().insert(OrgScope {
+        organization_id: organization_id.clone(),
+        role: "validated".to_string(),
+        admin: false,
+    });
     let scoped_state = if suffix == "vaults" || suffix.starts_with("vaults/") {
         let vaults = match state.vaults.for_organization(&organization_id) {
             Ok(vaults) => Arc::new(vaults),
@@ -470,86 +476,25 @@ fn cors_layer() -> CorsLayer {
 /// itself; here we still enforce Origin for it.
 async fn auth_gate(
     State(state): State<AppState>,
-    headers: HeaderMap,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let path = request.uri().path();
-    let is_ws = path == "/ws";
-    let auth = headers.get("authorization").and_then(|v| v.to_str().ok());
-    let bearer_authenticated = crate::auth::bearer_ok(auth, &state.token);
-    let legacy_ws_authenticated = is_ws
-        && request
-            .uri()
-            .query()
-            .and_then(|query| {
-                query
-                    .split('&')
-                    .find_map(|part| part.strip_prefix("token="))
-            })
-            .is_some_and(|token| token == state.token.as_str());
-    let provenance_present = headers.contains_key(axum::http::header::ORIGIN)
-        || headers.contains_key("sec-fetch-site")
-        || identity::session_token(&headers).is_some()
-        || bearer_authenticated
-        || legacy_ws_authenticated;
-    if provenance_present
-        && !crate::auth::request_origin_ok(
-            &headers,
-            bearer_authenticated || legacy_ws_authenticated,
-        )
-    {
-        return (StatusCode::FORBIDDEN, "forbidden origin").into_response();
-    }
+    use axum::extract::FromRequestParts;
 
-    let principal = if bearer_authenticated {
-        Some(crate::auth_store::Principal {
-            user_id: String::new(),
-            username: "operator".to_string(),
-            kind: "operator".to_string(),
-        })
-    } else if let Some(token) = identity::session_token(&headers) {
-        match state
-            .auth_store
-            .resolve_session(&token, identity::unix_timestamp())
-        {
-            Ok(Some(principal)) => Some(principal),
-            Ok(None) => return (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
-            Err(error) => {
-                tracing::error!(%error, "resolving Hall login session");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "authentication unavailable",
-                )
-                    .into_response();
-            }
-        }
-    } else if !is_ws {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    } else {
-        None
+    let (mut parts, body) = request.into_parts();
+    let principal = match Principal::from_request_parts(&mut parts, &state).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
     };
+    request = axum::extract::Request::from_parts(parts, body);
 
-    if let Some(principal) = principal {
-        if principal.kind == crate::auth_store::Principal::USER_KIND
-            && !user_cookie_path_allowed(path)
-        {
-            return (StatusCode::FORBIDDEN, "operator credential required").into_response();
-        }
-        if let Some(organization_id) = scoped_organization_id(path) {
-            if principal.kind != crate::auth_store::Principal::USER_KIND {
-                return (StatusCode::FORBIDDEN, "user login required").into_response();
-            }
-            match state
-                .auth_store
-                .user_has_organization(&principal.user_id, organization_id)
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    return (StatusCode::FORBIDDEN, "organization access denied").into_response()
-                }
+    let route = principal::route_class(request.uri().path());
+    let organization_exists = match route {
+        RouteClass::Organization(Some(organization_id)) => {
+            match state.auth_store.organization_exists(organization_id) {
+                Ok(exists) => exists,
                 Err(error) => {
-                    tracing::error!(%error, "authorizing organization membership");
+                    tracing::error!(%error, "checking organization existence");
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "authorization unavailable",
@@ -558,27 +503,22 @@ async fn auth_gate(
                 }
             }
         }
-        request.extensions_mut().insert(principal);
+        _ => false,
+    };
+    match principal::authorize(&principal, route, organization_exists) {
+        Ok(scope) => {
+            request.extensions_mut().insert(principal);
+            if let Some(scope) = scope {
+                request.extensions_mut().insert(scope);
+            }
+            next.run(request).await
+        }
+        Err(status) => (
+            status,
+            status.canonical_reason().unwrap_or("authorization denied"),
+        )
+            .into_response(),
     }
-    next.run(request).await
-}
-
-fn scoped_organization_id(path: &str) -> Option<&str> {
-    let suffix = path.strip_prefix("/api/organizations/")?;
-    let (organization_id, resource) = suffix.split_once('/')?;
-    (!organization_id.is_empty() && !resource.is_empty()).then_some(organization_id)
-}
-
-fn user_cookie_path_allowed(path: &str) -> bool {
-    path == "/ws"
-        || path == "/api/auth/session"
-        || path == "/api/auth/logout"
-        || path == "/api/organizations"
-        || path.starts_with("/api/organizations/")
-        || path == "/api/models"
-        || path == "/api/agents"
-        || (path.starts_with("/api/agents/") && path.ends_with("/models"))
-        || path == "/api/nodes/hall-identity"
 }
 
 // ---- query params ----
@@ -934,7 +874,7 @@ async fn put_registry_entry(
 
 async fn list_sessions(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Query(q): Query<SessionsQuery>,
 ) -> impl IntoResponse {
     let views = state.views.read().await;
@@ -954,7 +894,11 @@ async fn list_sessions(
         .sessions
         .list(&filters)
         .into_iter()
-        .filter(|row| scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0))
+        .filter(|row| {
+            scope
+                .as_ref()
+                .is_none_or(|scope| row.org_id == scope.0.organization_id)
+        })
         .filter(|r| match &sources {
             Some(list) if !list.is_empty() => list.iter().any(|s| s == &r.source),
             _ => true,
@@ -1031,12 +975,16 @@ async fn list_sessions(
 
 async fn get_session(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Path(id): Path<String>,
 ) -> Response {
     let views = state.views.read().await;
     match views.sessions.get(&id) {
-        Some(row) if scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0) => {
+        Some(row)
+            if scope
+                .as_ref()
+                .is_none_or(|scope| row.org_id == scope.0.organization_id) =>
+        {
             let mut dto = SessionDto::from_row(row);
             drop(views);
             let in_flight = state.bridge.in_flight_set().await;
@@ -1340,30 +1288,7 @@ fn derive_base_url(headers: &HeaderMap) -> Option<String> {
 /// POST /api/enroll (operator-authed) — mint a short-lived enroll token and
 /// return the ready-to-paste one-liner. The public URL is derived from the
 /// request's Host header (works for localhost AND the CF-tunnel domain).
-/// This route is NOT behind the auth_gate middleware (it shares a router
-/// with the public enroll routes); it does its own bearer check inline.
 async fn mint_enroll(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    // Installation-token operators and logged-in organization owners may mint
-    // enrollment capabilities. Ordinary members remain fail-closed.
-    let auth = headers.get("authorization").and_then(|v| v.to_str().ok());
-    let cookie_owner = identity::session_token(&headers)
-        .and_then(|token| {
-            state
-                .auth_store
-                .resolve_session(&token, identity::unix_timestamp())
-                .ok()
-                .flatten()
-        })
-        .and_then(|principal| {
-            state
-                .auth_store
-                .user_is_organization_owner(&principal.user_id)
-                .ok()
-        })
-        .unwrap_or(false);
-    if !crate::auth::bearer_ok(auth, &state.token) && !cookie_owner {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
     // Remote envoys connect over iroh; without a hall identity the installer
     // can't configure the envoy's --hall target. Fail honestly.
     let Some(hall_iroh) = state.hall_iroh_id.as_ref() else {
@@ -1724,14 +1649,18 @@ struct AttachProjectBody {
 
 async fn list_projects(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
 ) -> Response {
     let views = state.views.read().await;
     let rows: Vec<ProjectDto> = views
         .projects
         .list()
         .into_iter()
-        .filter(|row| scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0))
+        .filter(|row| {
+            scope
+                .as_ref()
+                .is_none_or(|scope| row.org_id == scope.0.organization_id)
+        })
         .map(ProjectDto::from_row)
         .collect();
     Json(json!({ "projects": rows, "total": rows.len() })).into_response()
@@ -1739,12 +1668,16 @@ async fn list_projects(
 
 async fn get_project(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Path(id): Path<String>,
 ) -> Response {
     let views = state.views.read().await;
     match views.projects.get(&id) {
-        Some(row) if scope.as_ref().is_none_or(|scope| row.org_id == scope.0 .0) => {
+        Some(row)
+            if scope
+                .as_ref()
+                .is_none_or(|scope| row.org_id == scope.0.organization_id) =>
+        {
             Json(ProjectDto::from_row(row)).into_response()
         }
         None | Some(_) => (
@@ -1757,7 +1690,7 @@ async fn get_project(
 
 async fn create_project(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Json(body): Json<CreateProjectBody>,
 ) -> Response {
     let name = body.name.trim().to_string();
@@ -1784,7 +1717,7 @@ async fn create_project(
     if let Some(scope) = scope {
         events.push(crate::event::Event::ProjectOrganizationAssigned {
             project_id: project_id.clone(),
-            organization_id: scope.0 .0,
+            organization_id: scope.0.organization_id,
         });
     }
     if let Err(response) = append_and_apply_events(&state, &events).await {
@@ -1799,7 +1732,7 @@ async fn create_project(
 
 async fn patch_project(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Path(id): Path<String>,
     Json(body): Json<PatchProjectBody>,
 ) -> Response {
@@ -1822,7 +1755,7 @@ async fn patch_project(
         .is_none_or(|project| {
             !scope
                 .as_ref()
-                .is_none_or(|scope| project.org_id == scope.0 .0)
+                .is_none_or(|scope| project.org_id == scope.0.organization_id)
         })
     {
         return (
@@ -1856,7 +1789,7 @@ async fn patch_project(
 
 async fn delete_project(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Path(id): Path<String>,
 ) -> Response {
     {
@@ -1878,7 +1811,7 @@ async fn delete_project(
         .is_none_or(|project| {
             !scope
                 .as_ref()
-                .is_none_or(|scope| project.org_id == scope.0 .0)
+                .is_none_or(|scope| project.org_id == scope.0.organization_id)
         })
     {
         return (
@@ -1901,7 +1834,7 @@ async fn delete_project(
 
 async fn attach_session_project(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Path(session_id): Path<String>,
     Json(body): Json<AttachProjectBody>,
 ) -> Response {
@@ -1917,7 +1850,7 @@ async fn attach_session_project(
         };
         if !scope
             .as_ref()
-            .is_none_or(|scope| session.org_id == scope.0 .0)
+            .is_none_or(|scope| session.org_id == scope.0.organization_id)
         {
             return (
                 StatusCode::NOT_FOUND,
@@ -1929,7 +1862,7 @@ async fn attach_session_project(
         if views.projects.get(&body.project_id).is_none_or(|project| {
             !scope
                 .as_ref()
-                .is_none_or(|scope| project.org_id == scope.0 .0)
+                .is_none_or(|scope| project.org_id == scope.0.organization_id)
         }) {
             return (
                 StatusCode::NOT_FOUND,
@@ -2600,7 +2533,7 @@ async fn handover_session(
 /// (via the body) or later via PATCH, any time before the first send.
 async fn create_session(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     body: Option<Json<CreateSessionBody>>,
 ) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
@@ -2611,7 +2544,7 @@ async fn create_session(
         mcp_servers: vec![],
         env: vec![],
     };
-    let organization_id = scope.as_ref().map(|scope| scope.0 .0.as_str());
+    let organization_id = scope.as_ref().map(|scope| scope.0.organization_id.as_str());
     match state.bridge.create_draft(&spec, organization_id) {
         Ok(ns) => {
             // Apply the one SessionCreated event directly into the view — do NOT
@@ -2632,7 +2565,7 @@ async fn create_session(
             let organization =
                 scope.map(|scope| crate::event::Event::SessionOrganizationAssigned {
                     session_id: ns.session_id.clone(),
-                    organization_id: scope.0 .0,
+                    organization_id: scope.0.organization_id,
                 });
             let dto = {
                 let mut views = state.views.write().await;
@@ -4053,9 +3986,11 @@ async fn append_and_apply_events(
 ) -> Result<(), Response> {
     if let Err(error) = state.log.append_batch(events) {
         tracing::error!(%error, "failed to append organization-owned events");
-        return Err(
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to persist events").into_response(),
-        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist events",
+        )
+            .into_response());
     }
     let mut views = state.views.write().await;
     for event in events {
@@ -4066,14 +4001,14 @@ async fn append_and_apply_events(
 
 async fn list_cards(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Query(q): Query<CardsQuery>,
 ) -> impl IntoResponse {
     let views = state.views.read().await;
     let filters = CardFilters {
         board_id: q.board_id,
         status: q.status,
-        organization_id: scope.map(|scope| scope.0 .0),
+        organization_id: scope.map(|scope| scope.0.organization_id),
     };
     let cards: Vec<CardDto> = views
         .cards
@@ -4095,7 +4030,7 @@ async fn get_card(State(state): State<AppState>, Path(id): Path<String>) -> Resp
 
 async fn create_card(
     State(state): State<AppState>,
-    scope: Option<axum::extract::Extension<OrganizationScope>>,
+    scope: Option<axum::extract::Extension<OrgScope>>,
     Json(body): Json<CreateCardBody>,
 ) -> Response {
     let card_id = format!("card-{}", uuid::Uuid::new_v4());
@@ -4114,7 +4049,7 @@ async fn create_card(
             event,
             crate::event::Event::CardOrganizationAssigned {
                 card_id: card_id.clone(),
-                organization_id: scope.0 .0,
+                organization_id: scope.0.organization_id,
             },
         ];
         if let Err(response) = append_and_apply_events(&state, &events).await {
@@ -4278,6 +4213,7 @@ mod tests {
             search: Arc::new(RwLock::new(search)),
             token: Arc::new("testtoken".to_string()),
             auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
+            allow_installation_token: true,
             session_cookie_secure: true,
             import_state: ImportState::done(),
             hermes_profile: Arc::new("default".into()),
@@ -4507,7 +4443,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(unknown_organization.status(), StatusCode::FORBIDDEN);
+        assert_eq!(unknown_organization.status(), StatusCode::NOT_FOUND);
 
         let legacy_operator_scoped = app
             .clone()
@@ -4520,7 +4456,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(legacy_operator_scoped.status(), StatusCode::FORBIDDEN);
+        assert_eq!(legacy_operator_scoped.status(), StatusCode::OK);
 
         let logout = app
             .clone()
@@ -4572,6 +4508,85 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn cookie_sessions_and_operator_flag_fail_closed() {
+        let (mut state, _dir) = test_state();
+        state
+            .auth_store
+            .bootstrap_admin("admin", "password-123", "default", "Default")
+            .unwrap();
+        let user = state
+            .auth_store
+            .authenticate("admin", "password-123")
+            .unwrap()
+            .unwrap();
+        let now = identity::unix_timestamp();
+        let live = state
+            .auth_store
+            .create_session(&user.user_id, now, 60)
+            .unwrap();
+        let live_cookie = format!("olympus_session={}", live.token);
+        let app = build_router(state.clone());
+
+        let absent_origin = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/session")
+                    .header("cookie", &live_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(absent_origin.status(), StatusCode::FORBIDDEN);
+
+        state.auth_store.revoke_session(&live.token).unwrap();
+        let revoked = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/session")
+                    .header("cookie", &live_cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+
+        let expired = state
+            .auth_store
+            .create_session(&user.user_id, now - 10, 1)
+            .unwrap();
+        let expired = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/session")
+                    .header("cookie", format!("olympus_session={}", expired.token))
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
+
+        state.allow_installation_token = false;
+        let disabled_operator = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .header("authorization", "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disabled_operator.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -4631,6 +4646,7 @@ mod tests {
             search: Arc::new(RwLock::new(search)),
             token: Arc::new("testtoken".to_string()),
             auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
+            allow_installation_token: true,
             session_cookie_secure: true,
             import_state: ImportState::done(),
             hermes_profile: Arc::new("default".to_string()),
@@ -6144,6 +6160,7 @@ mod tests {
                     .uri("/api/enroll")
                     .header("cookie", format!("olympus_session={}", session.token))
                     .header("host", "127.0.0.1:8787")
+                    .header("sec-fetch-site", "same-origin")
                     .body(Body::empty())
                     .unwrap(),
             )
