@@ -18,9 +18,10 @@ interface NotePageProps {
   vaultId: string;
   notePath: string | null;
   onNavigateNote: (path: string) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }
 
-export function NotePage({ vaultId, notePath }: NotePageProps) {
+export function NotePage({ vaultId, notePath, onDirtyChange }: NotePageProps) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: note, isLoading, error } = useVaultNote(vaultId, notePath);
@@ -33,6 +34,7 @@ export function NotePage({ vaultId, notePath }: NotePageProps) {
     if (!note) return;
     setDraft(note.markdown);
     setDirty(false);
+    onDirtyChange(false);
     setSaveError(null);
   }, [note?.path, vaultId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -72,6 +74,7 @@ export function NotePage({ vaultId, notePath }: NotePageProps) {
       await qc.invalidateQueries({ queryKey: qk.vaultNote(vaultId, notePath) });
       await qc.invalidateQueries({ queryKey: qk.vaultNotes(vaultId) });
       setDirty(false);
+      onDirtyChange(false);
     } catch (saveFailure) {
       setSaveError(saveFailure instanceof Error ? saveFailure.message : "Save failed");
     } finally {
@@ -102,8 +105,10 @@ export function NotePage({ vaultId, notePath }: NotePageProps) {
           onSave={handleSave}
           onDelete={handleDelete}
           onChange={(markdown) => {
+            const nextDirty = markdown !== note.markdown;
             setDraft(markdown);
-            setDirty(markdown !== note.markdown);
+            setDirty(nextDirty);
+            onDirtyChange(nextDirty);
           }}
         />
       </Suspense>

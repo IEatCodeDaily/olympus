@@ -90,7 +90,6 @@ export function VaultMarkdownEditor({
           <ToolbarButton label="Blockquote" text="Quote" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("> ")} />
         </div>
         <div className="vault-note-actions">
-          {dirty && <span className="vault-save-state">Unsaved</span>}
           {onSave && <button type="button" className="btn pri" aria-label="Save note" disabled={saving || !dirty} onClick={onSave}>{saving ? "Saving…" : "Save"}</button>}
           {onDelete && <button type="button" className="vault-toolbar-button danger" aria-label="Delete note" onClick={onDelete}>Delete</button>}
         </div>

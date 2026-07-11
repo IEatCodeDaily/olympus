@@ -628,7 +628,6 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
 .vault-toolbar-button.strike { text-decoration: line-through; }
 .vault-toolbar-button.danger:hover, .vault-toolbar-button.danger:focus-visible { background: var(--err-wash); color: var(--err); }
 .vault-toolbar-divider { width: var(--border-w); height: 18px; flex: 0 0 auto; margin: 0 var(--space-1); background: var(--border); }
-.vault-save-state { color: var(--faint); font: var(--fw-medium) var(--fs-10)/1 var(--font-mono); text-transform: uppercase; letter-spacing: var(--tracking-wide); }
 .vault-save-error, .vault-source-warning { flex: 0 0 auto; padding: var(--space-3) var(--space-4); border-bottom: var(--border-w) solid var(--err-line); background: var(--err-wash); color: var(--err); font-size: var(--fs-12); }
 .vault-source-warning { border-color: var(--warn-line); background: var(--warn-wash); color: var(--dim); }
 .vault-source-editor { min-width: 0; min-height: 0; flex: 1; overflow: hidden; background: var(--bg-elev); }

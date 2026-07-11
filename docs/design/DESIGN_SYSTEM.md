@@ -542,6 +542,12 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-11 — Put Vault dirty state in the tab title
+
+- Replaced the editor toolbar's `Unsaved` label with a VS Code-style ` *` suffix on the affected pane's tab title.
+- Saving or reloading the note removes the suffix; split panes track their own editor draft state.
+- The formatting toolbar keeps only editing and persistence actions, reducing duplicate status chrome.
+
 ### 2026-07-11 — Make Vault notes an always-editable, full-pane writing surface
 
 - Removed the remaining View/Edit interaction. Opening a note now opens the live-preview editor directly; there is no second rendered-note state or Edit/Cancel ceremony.

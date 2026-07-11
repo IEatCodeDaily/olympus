@@ -19,8 +19,14 @@ properties:
 - assertNotVisible: "Cancel"
 - assertNotVisible: "Rich"
 - assertNotVisible: "Source"
+- tapOn:
+    point: "64%,45%"
+- inputText: "x"
+- assertVisible: ".*\\*"
 - takeScreenshot:
     path: screenshots/vault-lossless-editor
+- tapOn: "Save"
+- assertNotVisible: ".*\\*"
 - tapOn:
     point: "94%,7%"
 - takeScreenshot:
