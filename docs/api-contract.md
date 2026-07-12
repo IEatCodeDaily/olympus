@@ -70,6 +70,24 @@ export interface Session {
   forkType: "sub" | "parallel" | null;
   // origin marker for forks: "forked from telegram", etc. (PRD Flow B)
   managed: boolean;           // true = Olympus-driven (steerable); false = observed/read-only
+  capabilities: CapabilitySet | null; // null = legacy full grant
+}
+
+export interface CapabilitySet {
+  version: 1;
+  ids: string[];               // dotted IDs, optional :resource suffix
+  readablePaths: string[];
+  writablePaths: string[];     // every writable path is also readable
+  linkedRepos: string[];
+  linkedVaults: string[];
+  resourceLimits: {
+    maxCpuSeconds: number | null;
+    maxMemoryBytes: number | null;
+    maxWallSeconds: number | null;
+    maxConcurrentJobs: number | null;
+  };
+  canFork: boolean;
+  signature: string;           // Hall HMAC; clients must treat as opaque
 }
 
 export type SessionSource =

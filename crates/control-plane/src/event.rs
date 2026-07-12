@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::server::capability::CapabilitySet;
+
 /// Events (v1 — MVP-scoped) that the log stores.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Event {
@@ -241,6 +243,14 @@ pub enum Event {
     SessionOrganizationAssigned {
         session_id: String,
         organization_id: String,
+    },
+    /// Assigns or narrows a Hall-signed capability envelope for a session.
+    SessionCapabilitiesAssigned {
+        session_id: String,
+        capabilities: CapabilitySet,
+        assigned_by: String,
+        #[serde(default)]
+        parent_session_id: Option<String>,
     },
     /// Assigns a project to its organization without reshaping the historical
     /// ProjectCreated payload while keeping schema evolution additive.
@@ -734,6 +744,12 @@ mod tests {
                 session_id: "sc-1".into(),
                 organization_id: "org-acme".into(),
             },
+            Event::SessionCapabilitiesAssigned {
+                session_id: "sc-1".into(),
+                capabilities: CapabilitySet::default(),
+                assigned_by: "operator".into(),
+                parent_session_id: None,
+            },
             Event::ProjectOrganizationAssigned {
                 project_id: "proj-1".into(),
                 organization_id: "org-acme".into(),
@@ -775,6 +791,7 @@ mod tests {
             Event::ProjectDeleted { .. } => {}
             Event::SessionProjectAttached { .. } => {}
             Event::SessionOrganizationAssigned { .. } => {}
+            Event::SessionCapabilitiesAssigned { .. } => {}
             Event::ProjectOrganizationAssigned { .. } => {}
             Event::CardOrganizationAssigned { .. } => {}
         }

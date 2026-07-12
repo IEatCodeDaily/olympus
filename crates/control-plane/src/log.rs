@@ -52,6 +52,15 @@ impl Log {
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_sessions_org ON sessions(org_id);")
             .context("indexing sessions by organization")?;
+        let has_capabilities = conn
+            .prepare("PRAGMA table_info(sessions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|column| column == "capabilities");
+        if !has_capabilities {
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN capabilities TEXT;")
+                .context("migrating sessions table to add capabilities")?;
+        }
         for table in ["cards", "projects"] {
             let has_org_id = conn
                 .prepare(&format!("PRAGMA table_info({table})"))?
@@ -255,8 +264,8 @@ impl Log {
         let mut stmt = conn.prepare(
             "SELECT session_id, hermes_id, source, model, title, started_at,
                     message_count, input_tokens, output_tokens, archived, pinned,
-                    last_activity, agent, node, parent_session_id, card_id, project_id, org_id
-             FROM sessions ORDER BY started_at DESC, session_id",
+                    last_activity, agent, node, parent_session_id, card_id, project_id, org_id,
+                    capabilities FROM sessions ORDER BY started_at DESC, session_id",
         )?;
         let rows = stmt.query_map([], session_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -268,8 +277,8 @@ impl Log {
         conn.query_row(
             "SELECT session_id, hermes_id, source, model, title, started_at,
                     message_count, input_tokens, output_tokens, archived, pinned,
-                    last_activity, agent, node, parent_session_id, card_id, project_id, org_id
-             FROM sessions WHERE session_id = ?1",
+                    last_activity, agent, node, parent_session_id, card_id, project_id, org_id,
+                    capabilities FROM sessions WHERE session_id = ?1",
             [id],
             session_row,
         )
@@ -607,6 +616,16 @@ fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 params![session_id, organization_id],
             )?;
         }
+        Event::SessionCapabilitiesAssigned {
+            session_id,
+            capabilities,
+            ..
+        } => {
+            tx.execute(
+                "UPDATE sessions SET capabilities=?2 WHERE session_id=?1",
+                params![session_id, serde_json::to_string(capabilities)?],
+            )?;
+        }
         Event::SessionUpdated {
             session_id,
             title,
@@ -927,6 +946,7 @@ fn event_type(event: &Event) -> &'static str {
         Event::ProjectDeleted { .. } => "project.deleted",
         Event::SessionProjectAttached { .. } => "session.project_attached",
         Event::SessionOrganizationAssigned { .. } => "session.organization_assigned",
+        Event::SessionCapabilitiesAssigned { .. } => "session.capabilities_assigned",
         Event::ProjectOrganizationAssigned { .. } => "project.organization_assigned",
         Event::CardOrganizationAssigned { .. } => "card.organization_assigned",
     }
@@ -971,7 +991,8 @@ fn event_session_id(event: &Event) -> Option<&str> {
         | Event::CardSessionLinked { session_id, .. }
         | Event::SessionRepoAttached { session_id, .. }
         | Event::SessionProjectAttached { session_id, .. }
-        | Event::SessionOrganizationAssigned { session_id, .. } => Some(session_id),
+        | Event::SessionOrganizationAssigned { session_id, .. }
+        | Event::SessionCapabilitiesAssigned { session_id, .. } => Some(session_id),
         Event::CardAssigned { session_id, .. } => Some(session_id),
         Event::SessionForked {
             child_session_id, ..
@@ -1004,6 +1025,17 @@ fn session_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         card_id: r.get(15)?,
         project_id: r.get(16)?,
         org_id: r.get(17)?,
+        capabilities: r
+            .get::<_, Option<String>>(18)?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    18,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
     })
 }
 fn message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
@@ -1062,7 +1094,7 @@ PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAG
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT NOT NULL,payload BLOB NOT NULL,created_at REAL NOT NULL,session_id TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,hermes_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT '',model TEXT,title TEXT,started_at REAL NOT NULL,message_count INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,last_activity REAL NOT NULL DEFAULT 0,agent TEXT,node TEXT,parent_session_id TEXT,card_id TEXT,project_id TEXT,org_id TEXT NOT NULL DEFAULT 'personal');
+CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,hermes_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT '',model TEXT,title TEXT,started_at REAL NOT NULL,message_count INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,last_activity REAL NOT NULL DEFAULT 0,agent TEXT,node TEXT,parent_session_id TEXT,card_id TEXT,project_id TEXT,org_id TEXT NOT NULL DEFAULT 'personal',capabilities TEXT);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC); CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source); CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived); CREATE INDEX IF NOT EXISTS idx_sessions_pinned ON sessions(pinned);
 CREATE TABLE IF NOT EXISTS messages(session_id TEXT NOT NULL,message_id INTEGER NOT NULL,role TEXT NOT NULL,content TEXT,tool_name TEXT,tool_calls TEXT,reasoning TEXT,timestamp REAL NOT NULL,token_count INTEGER,finish_reason TEXT,PRIMARY KEY(session_id,message_id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(session_id,timestamp);

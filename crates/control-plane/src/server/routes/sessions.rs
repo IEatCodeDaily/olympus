@@ -10,8 +10,9 @@ use serde_json::json;
 
 use super::support::{append_and_apply, now_epoch};
 use crate::bridge::{AgentCommand, AgentEvent};
+use crate::server::capability::CapabilitySet;
 use crate::server::dto::{MessageDto, SessionDto};
-use crate::server::principal::OrgScope;
+use crate::server::principal::{OrgScope, Principal};
 use crate::server::ws::ServerFrame;
 use crate::server::AppState;
 use crate::views::Filters;
@@ -84,6 +85,8 @@ pub(crate) struct CreateSessionBody {
     agent: Option<String>,
     #[serde(default)]
     node: Option<String>,
+    #[serde(default)]
+    capabilities: Option<CapabilitySet>,
 }
 
 /// Body for `PATCH /api/sessions/:id` — bind/rebind agent, node, model, or title
@@ -103,6 +106,8 @@ pub(crate) struct PatchSessionBody {
     archived: Option<bool>,
     #[serde(default)]
     pinned: Option<bool>,
+    #[serde(default)]
+    capabilities: Option<CapabilitySet>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -110,6 +115,8 @@ pub(crate) struct PatchSessionBody {
 pub(crate) struct ForkSessionBody {
     #[serde(default)]
     fork_type: Option<String>,
+    #[serde(default)]
+    capabilities: Option<CapabilitySet>,
 }
 
 /// Request body for POST /api/sessions/:id/handover.
@@ -147,6 +154,52 @@ pub(crate) struct CreateSubsessionBody {
     title: Option<String>,
     #[serde(default)]
     prompt: Option<String>,
+    #[serde(default)]
+    capabilities: Option<CapabilitySet>,
+}
+
+fn assigned_by(principal: &Principal) -> String {
+    match principal {
+        Principal::Operator => "operator".into(),
+        Principal::User { user_id, .. } => format!("user:{user_id}"),
+    }
+}
+
+fn capability_error(error: &'static str, message: impl Into<String>) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": error, "message": message.into() })),
+    )
+        .into_response()
+}
+
+#[allow(clippy::result_large_err)]
+fn signed_capability_event(
+    state: &AppState,
+    session_id: String,
+    mut capabilities: CapabilitySet,
+    principal: &Principal,
+    parent_session_id: Option<String>,
+) -> Result<crate::event::Event, Response> {
+    state
+        .capability_signer
+        .sign(&mut capabilities)
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_capabilities",
+                    "message": error.to_string(),
+                })),
+            )
+                .into_response()
+        })?;
+    Ok(crate::event::Event::SessionCapabilitiesAssigned {
+        session_id,
+        capabilities,
+        assigned_by: assigned_by(principal),
+        parent_session_id,
+    })
 }
 
 /// Body for `POST /api/sessions/:id/complete` — the check gate.
@@ -414,10 +467,32 @@ pub(crate) async fn create_session(
                     session_id: ns.session_id.clone(),
                     organization_id: scope.0.organization_id,
                 });
+            let capability_event = match body.capabilities.clone() {
+                Some(capabilities) => match signed_capability_event(
+                    &state,
+                    ns.session_id.clone(),
+                    capabilities,
+                    &Principal::Operator,
+                    None,
+                ) {
+                    Ok(event) => Some(event),
+                    Err(response) => return response,
+                },
+                None => None,
+            };
+            if let Some(event) = capability_event.as_ref() {
+                if let Err(error) = state.log.append(event) {
+                    tracing::error!(%error, "persisting session capabilities");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
             let dto = {
                 let mut views = state.views.write().await;
                 views.apply(&created);
                 if let Some(event) = organization.as_ref() {
+                    views.apply(event);
+                }
+                if let Some(event) = capability_event.as_ref() {
                     views.apply(event);
                 }
                 views
@@ -458,6 +533,7 @@ pub(crate) async fn create_session(
                         liveness: "active".to_string(),
                         parent_session_id: None,
                         card_id: None,
+                        capabilities: None,
                     })
             };
 
@@ -513,7 +589,7 @@ pub(crate) async fn patch_session(
     // The session must exist. Runtime rebinds (agent/node/model) are managed-
     // only; pin/archive/title are metadata and work on ANY session (observed
     // sessions can be pinned or archived without being steerable).
-    {
+    let capability_event = {
         let views = state.views.read().await;
         let Some(row) = views.sessions.get(&id) else {
             return (StatusCode::NOT_FOUND, "session not found").into_response();
@@ -529,7 +605,35 @@ pub(crate) async fn patch_session(
             )
                 .into_response();
         }
-    }
+        match body.capabilities.clone() {
+            None => None,
+            Some(requested) => {
+                if let Some(existing) = row.capabilities.as_ref() {
+                    if !requested.is_narrower_than(existing) {
+                        return capability_error(
+                            "capability_expansion",
+                            "session capabilities may only be narrowed",
+                        );
+                    }
+                } else if !views.messages.recent(&id, 1).is_empty() || !row.hermes_id.is_empty() {
+                    return capability_error(
+                        "capabilities_locked",
+                        "capabilities may be first assigned only before the agent starts",
+                    );
+                }
+                match signed_capability_event(
+                    &state,
+                    id.clone(),
+                    requested,
+                    &Principal::Operator,
+                    None,
+                ) {
+                    Ok(event) => Some(event),
+                    Err(response) => return response,
+                }
+            }
+        }
+    };
 
     let event = crate::event::Event::SessionUpdated {
         session_id: id.clone(),
@@ -549,10 +653,22 @@ pub(crate) async fn patch_session(
         )
             .into_response();
     }
+    if let Some(capability_event) = capability_event.as_ref() {
+        if let Err(e) = state.log.append(capability_event) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
+            )
+                .into_response();
+        }
+    }
 
     let dto = {
         let mut views = state.views.write().await;
         views.apply(&event);
+        if let Some(capability_event) = capability_event.as_ref() {
+            views.apply(capability_event);
+        }
         views.sessions.get(&id).map(SessionDto::from_row)
     };
 
@@ -606,6 +722,31 @@ pub(crate) async fn fork_session(
         (source, messages)
     };
 
+    let child_capabilities = match (&source.capabilities, body.capabilities) {
+        (Some(parent), Some(mut requested)) => {
+            if !parent.can_fork {
+                return capability_error("capability_denied", "parent lacks session.fork");
+            }
+            requested.signature.clear();
+            let effective = CapabilitySet::intersect(parent, &requested);
+            if effective != requested {
+                return capability_error(
+                    "capability_expansion",
+                    "requested child capabilities exceed the parent",
+                );
+            }
+            Some(effective)
+        }
+        (Some(parent), None) => {
+            if !parent.can_fork {
+                return capability_error("capability_denied", "parent lacks session.fork");
+            }
+            let mut inherited = parent.clone();
+            inherited.signature.clear();
+            Some(inherited)
+        }
+        (None, requested) => requested,
+    };
     let fork_type = body.fork_type.unwrap_or_else(|| "sub".to_string());
     let fork = match state
         .bridge
@@ -694,6 +835,7 @@ pub(crate) async fn fork_session(
                 liveness: "active".to_string(),
                 parent_session_id: None,
                 card_id: None,
+                capabilities: None,
             },
         }
     };
@@ -713,19 +855,40 @@ pub(crate) async fn fork_session(
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0),
     };
+    let capability_event = match child_capabilities {
+        Some(capabilities) => match signed_capability_event(
+            &state,
+            fork.session_id.clone(),
+            capabilities,
+            &Principal::Operator,
+            Some(id.clone()),
+        ) {
+            Ok(event) => Some(event),
+            Err(response) => return response,
+        },
+        None => None,
+    };
     if let Err(e) = state.log.append(&forked_event) {
         tracing::warn!(error = %e, "failed to append SessionForked event");
     }
     {
         let mut views = state.views.write().await;
         views.apply(&forked_event);
+        if let Some(event) = capability_event.as_ref() {
+            if let Err(error) = state.log.append(event) {
+                tracing::error!(%error, "persisting fork capabilities");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            views.apply(event);
+        }
     }
-    // Re-read the child row to get the projected card_id (inherited from parent).
+    // Re-read the child row to get projected inherited state.
     if let Some(child_row) = {
         let views = state.views.read().await;
         views.sessions.get(&fork.session_id).cloned()
     } {
         dto.card_id = child_row.card_id.clone();
+        dto.capabilities = child_row.capabilities.clone().map(Box::new);
     }
 
     let _ = state.deltas.send(ServerFrame::SessionAdded {
@@ -1791,14 +1954,43 @@ pub(crate) async fn create_subsession(
 ) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
 
-    let (parent_agent, parent_space, parent_organization) = {
+    let (parent_agent, parent_space, parent_organization, parent_capabilities) = {
         let views = state.views.read().await;
         let Some(parent) = views.sessions.get(&id) else {
             return (StatusCode::NOT_FOUND, "parent session not found").into_response();
         };
         let agent = body.agent.clone().or_else(|| parent.agent.clone());
         let space = state.bridge.space_path(&parent.org_id, &id);
-        (agent, space, parent.org_id.clone())
+        (
+            agent,
+            space,
+            parent.org_id.clone(),
+            parent.capabilities.clone(),
+        )
+    };
+    let child_capabilities = match (parent_capabilities, body.capabilities.clone()) {
+        (Some(parent), Some(mut requested)) => {
+            if !parent.can_fork {
+                return capability_error("capability_denied", "parent lacks session.fork");
+            }
+            requested.signature.clear();
+            let effective = CapabilitySet::intersect(&parent, &requested);
+            if effective != requested {
+                return capability_error(
+                    "capability_expansion",
+                    "requested child capabilities exceed the parent",
+                );
+            }
+            Some(effective)
+        }
+        (Some(mut parent), None) => {
+            if !parent.can_fork {
+                return capability_error("capability_denied", "parent lacks session.fork");
+            }
+            parent.signature.clear();
+            Some(parent)
+        }
+        (None, requested) => requested,
     };
 
     let spec = crate::server::bridge_mgr::RuntimeSpec {
@@ -1860,12 +2052,32 @@ pub(crate) async fn create_subsession(
         fork_point: None,
         forked_at: now_epoch(),
     };
+    let capability_event = match child_capabilities {
+        Some(capabilities) => match signed_capability_event(
+            &state,
+            ns.session_id.clone(),
+            capabilities,
+            &Principal::Operator,
+            Some(id.clone()),
+        ) {
+            Ok(event) => Some(event),
+            Err(response) => return response,
+        },
+        None => None,
+    };
     if let Err(e) = state.log.append(&forked_event) {
         tracing::warn!(error = %e, "failed to append SessionForked for subsession");
     }
     {
         let mut views = state.views.write().await;
         views.apply(&forked_event);
+        if let Some(event) = capability_event.as_ref() {
+            if let Err(error) = state.log.append(event) {
+                tracing::error!(%error, "persisting subsession capabilities");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            views.apply(event);
+        }
     }
 
     // Optionally enqueue the first user message.
@@ -2135,6 +2347,20 @@ pub(crate) async fn handover_session(
         organization_id: source.org_id.clone(),
     };
     let mut events = vec![created, organization];
+    if let Some(mut capabilities) = source.capabilities.clone() {
+        capabilities.signature.clear();
+        let capability_event = match signed_capability_event(
+            &state,
+            target_id.clone(),
+            capabilities,
+            &Principal::Operator,
+            Some(id.clone()),
+        ) {
+            Ok(event) => event,
+            Err(response) => return response,
+        };
+        events.push(capability_event);
+    }
     events.extend(messages.iter().enumerate().map(|(idx, msg)| {
         crate::event::Event::MessageAppended {
             session_id: target_id.clone(),

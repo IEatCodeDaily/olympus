@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use crate::search::SearchHit as IndexHit;
+use crate::server::capability::CapabilitySet;
 use crate::vault::{
     NoteDocument, NoteIndexEntry, NoteTreeEntry, NoteTreeEntryKind, VaultBackend, VaultSummary,
 };
@@ -55,6 +56,8 @@ pub struct SessionDto {
     /// Card that owns this session tree, if linked (ADR 0006 §7 footgun 3).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub card_id: Option<String>,
+    /// Hall-signed capability envelope; null means legacy full grant.
+    pub capabilities: Option<Box<CapabilitySet>>,
 }
 
 /// Recency window (seconds) within which an OBSERVED session (one Olympus does
@@ -127,6 +130,7 @@ impl SessionDto {
             liveness: "idle".into(),
             parent_session_id: row.parent_session_id.clone(),
             card_id: row.card_id.clone(),
+            capabilities: row.capabilities.clone().map(Box::new),
         }
     }
 }
@@ -646,6 +650,7 @@ mod tests {
             parent_session_id: None,
             card_id: None,
             project_id: None,
+            capabilities: None,
         }
     }
 

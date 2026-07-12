@@ -4,10 +4,11 @@
 //! router, shared state, the auth middleware, and the read-only REST handlers
 //! that back the UI's session list, transcript view, and search.
 pub mod bridge_mgr;
+pub mod capability;
 pub mod dto;
 pub mod envoy_conn;
 mod identity;
-mod principal;
+pub mod principal;
 mod routes;
 pub mod ws;
 
@@ -81,6 +82,7 @@ pub struct AppState {
     pub views: Arc<RwLock<ViewManager>>,
     pub search: Arc<RwLock<SearchIndex>>,
     pub token: Arc<String>,
+    pub capability_signer: Arc<capability::CapabilitySigner>,
     pub auth_store: Arc<crate::auth_store::AuthStore>,
     pub allow_installation_token: bool,
     pub session_cookie_secure: bool,
