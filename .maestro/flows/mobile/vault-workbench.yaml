@@ -1,5 +1,5 @@
 url: ${MAESTRO_BASE_URL}/vaults
-name: Vault mobile live-preview editor
+name: Vault mobile Milkdown rich editor
 properties:
   junitId: olympus-vault-workbench-mobile
   junitClassname: ui.mobile
@@ -10,9 +10,14 @@ properties:
     timeout: 15000
 - assertVisible: "Save"
 - assertVisible: "Delete"
-- assertNotVisible: "Edit"
-- assertNotVisible: "Cancel"
-- assertNotVisible: "Rich"
-- assertNotVisible: "Source"
+- assertVisible: "Cancel"
+- tapOn:
+    point: "50%,50%"
+- inputText: "mobile-"
+- assertVisible: ".*\\*"
+- tapOn: "Save"
+- tapOn:
+    point: "94%,11%"
+- tapOn: "Edit source"
 - takeScreenshot:
-    path: screenshots/vault-mobile-live-preview
+    path: screenshots/vault-mobile-source-escape

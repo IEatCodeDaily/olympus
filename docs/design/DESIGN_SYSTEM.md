@@ -542,6 +542,12 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-12 — Reinstate Milkdown without forced source ejection
+
+- Reversed postmortem 0018's editor resolution while retaining its QA and losslessness lessons: Milkdown/Crepe is again the default Vault note surface, with real-editor component and browser coverage required.
+- Replaced the Rich/Source toggle and syntax denylist with an overflow **Edit source / Edit rich** action. Unsupported Markdown stays in rich mode through byte-preserving literal passthrough blocks; unresolved jj conflicts are the sole automatic CodeMirror path.
+- Retained explicit Save/Cancel and the VS Code-style dirty `*` tab marker. Frontmatter remains outside Milkdown and byte-identical across rich edits.
+
 ### 2026-07-11 — Put Vault dirty state in the tab title
 
 - Replaced the editor toolbar's `Unsaved` label with a VS Code-style ` *` suffix on the affected pane's tab title.

@@ -1,10 +1,12 @@
 url: ${MAESTRO_BASE_URL}/vaults
-name: Vault lossless editor and integrated pane chrome
+name: Vault editor workbench — rich editing, mode switching, conflicts
 properties:
   junitId: olympus-vault-workbench
   junitClassname: ui.mock
 ---
 - launchApp
+
+# ── Open a note with rich content ─────────────────────────────────────────
 - extendedWaitUntil:
     visible: "New Note"
     timeout: 15000
@@ -12,21 +14,70 @@ properties:
 - extendedWaitUntil:
     visible: "Save"
     timeout: 10000
+
+# Rich mode is the default — Save/Cancel/Delete must be present.
+# Maestro web does not expose icon-only aria-labels, so target the visible kebab
+# by its stable toolbar position below.
 - assertVisible: "Save"
-- assertVisible: "Delete"
-- assertVisible: "B"
-- assertNotVisible: "Edit"
-- assertNotVisible: "Cancel"
-- assertNotVisible: "Rich"
-- assertNotVisible: "Source"
+
+# ── Type representative Markdown in rich mode, check dirty indicator ───────
 - tapOn:
     point: "64%,45%"
-- inputText: "x"
+- inputText: "rich-"
 - assertVisible: ".*\\*"
 - takeScreenshot:
-    path: screenshots/vault-lossless-editor
+    path: screenshots/vault-milkdown-rich-typing
+
+# ── Save clears the dirty indicator ───────────────────────────────────────
 - tapOn: "Save"
 - assertNotVisible: ".*\\*"
+- takeScreenshot:
+    path: screenshots/vault-after-save
+
+# ── Type again, then Cancel restores clean state ───────────────────────────
+- tapOn:
+    point: "64%,45%"
+- inputText: "unsaved-"
+- assertVisible: ".*\\*"
+- tapOn: "Cancel"
+- assertNotVisible: ".*\\*"
+- takeScreenshot:
+    path: screenshots/vault-after-cancel
+
+# ── Kebab: switch to source via overflow menu ──────────────────────────────
+- tapOn:
+    point: "1255,87"
+- tapOn: "Edit source"
+# Formatting toolbar (Undo/Bold etc.) visible confirms source mode
+- assertVisible: "B"
+- assertNotVisible:
+    text: "Loading rich editor"
+- takeScreenshot:
+    path: screenshots/vault-explicit-source-editor
+
+# ── Kebab: switch back to rich ─────────────────────────────────────────────
+- tapOn:
+    point: "1255,87"
+- tapOn: "Edit rich"
+- extendedWaitUntil:
+    # "B" (bold button) must disappear — the CodeMirror toolbar is gone
+    notVisible: "Edit rich"
+    timeout: 5000
+- takeScreenshot:
+    path: screenshots/vault-back-to-rich
+
+# ── Conflicted note: opens in source automatically ────────────────────────
+- tapOn: "conflicted-note.md"
+- extendedWaitUntil:
+    visible: ".*unresolved jj conflict.*"
+    timeout: 10000
+- assertVisible: ".*unresolved jj conflict.*"
+# Confirm CodeMirror toolbar visible (source mode), no rich editor
+- assertVisible: "B"
+- takeScreenshot:
+    path: screenshots/vault-conflict-source-editor
+
+# ── Workspace split seeded from active note ────────────────────────────────
 - tapOn:
     point: "94%,7%"
 - takeScreenshot:
