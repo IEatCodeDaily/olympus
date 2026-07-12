@@ -225,7 +225,9 @@ async fn main() -> Result<()> {
         sync_connected: sync_connected.clone(),
         irc: olympus_control_plane::irc::IrcBus::new(),
         nodes: node_registry.clone(),
-        envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::new(),
+        envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::with_log(
+            log_arc.clone(),
+        ),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
         vaults: Arc::new(VaultStore::new(org_workspace_root(&default_org())?)),
         state_db: state_db_reader.map(Arc::new),
