@@ -22,12 +22,13 @@ use futures::StreamExt;
 use olympus_envoy::{
     bridge::{AgentCommand, AgentEvent, AgentRuntime},
     discovery,
+    job_table::{JobSpec, JobTable},
     mock_runtime::MockAgentRuntime,
     runtime_table::RuntimeTable,
     spool::EventSpool,
 };
 use olympus_proto::{
-    frames::{EnvoyFrame, HallFrame},
+    frames::{EnvoyFrame, HallFrame, NodeRole},
     runtime::RuntimeSpec,
     version::{BuildVersion, PROTOCOL_VERSION},
 };
@@ -101,6 +102,12 @@ async fn main() -> Result<()> {
     let table = Arc::new(table);
     let state_dir = envoy_state_dir(&node_id)?;
     let spool = Arc::new(EventSpool::open(&state_dir)?);
+    let roles = configured_roles()?;
+    let job_root = arg_value("--job-root")
+        .or_else(|| std::env::var("OLYMPUS_JOB_ROOT").ok())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state_dir.join("jobs"));
+    let jobs = Arc::new(JobTable::new(job_root)?);
     if let Some(state_db) = observer_state_db()? {
         let observer_spool = spool.clone();
         std::thread::Builder::new()
@@ -131,6 +138,8 @@ async fn main() -> Result<()> {
                         &hostname_val,
                         agents.clone(),
                         spool.clone(),
+                        jobs.clone(),
+                        roles.clone(),
                     )
                     .await
                     {
@@ -171,6 +180,8 @@ async fn main() -> Result<()> {
             &hostname_val,
             agents.clone(),
             spool.clone(),
+            jobs.clone(),
+            roles.clone(),
         )
         .await
         {
@@ -199,6 +210,7 @@ struct Conn {
     writer: Mutex<BufWriter<BoxedWriter>>,
     table: Arc<RuntimeTable>,
     spool: Arc<EventSpool>,
+    jobs: Arc<JobTable>,
     turn: Mutex<std::collections::HashMap<String, u64>>,
 }
 
@@ -261,6 +273,8 @@ async fn run_connection<R, W>(
     hostname: &str,
     agents: Vec<discovery::AgentInfo>,
     spool: Arc<EventSpool>,
+    jobs: Arc<JobTable>,
+    roles: Vec<NodeRole>,
 ) -> Result<()>
 where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -270,6 +284,7 @@ where
         writer: Mutex::new(BufWriter::new(Box::new(writer) as BoxedWriter)),
         table: table.clone(),
         spool,
+        jobs,
         turn: Mutex::new(std::collections::HashMap::new()),
     });
 
@@ -293,6 +308,7 @@ where
         version: BuildVersion::for_binary(env!("CARGO_PKG_VERSION")),
         agents: Some(agents_json),
         runtimes,
+        roles,
     };
     conn.send_frame(&hello).await?;
     tracing::info!("hello sent");
@@ -501,6 +517,48 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
             let result = serde_json::json!({ "agents": agents });
             conn.send_resp_result(req_id, result).await;
         }
+        HallFrame::DispatchJob {
+            req_id,
+            job_id,
+            argv,
+            env_allowlist,
+            cwd,
+            timeout_secs,
+            max_output_bytes,
+        } => {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let output_conn = conn.clone();
+            tokio::spawn(async move {
+                while let Some(mut frame) = rx.recv().await {
+                    let id = match &frame {
+                        EnvoyFrame::JobOutput { job_id, .. }
+                        | EnvoyFrame::JobResult { job_id, .. } => job_id.clone(),
+                        _ => continue,
+                    };
+                    let Ok(seq) = output_conn.next_seq(&id) else { continue };
+                    match &mut frame {
+                        EnvoyFrame::JobOutput { seq: value, .. }
+                        | EnvoyFrame::JobResult { seq: value, .. } => *value = seq,
+                        _ => {}
+                    }
+                    if output_conn.spool.append(&frame).is_ok() {
+                        let _ = output_conn.send_frame(&frame).await;
+                    }
+                }
+            });
+            let result = conn.jobs.spawn(
+                JobSpec { job_id, argv, env_allowlist, cwd, timeout_secs, max_output_bytes },
+                tx,
+            ).await;
+            match result {
+                Ok(()) => conn.send_resp(req_id, true, None).await,
+                Err(error) => conn.send_resp(req_id, false, Some(&format!("{error:#}"))).await,
+            }
+        }
+        HallFrame::CancelJob { req_id, job_id } => match conn.jobs.cancel(&job_id).await {
+            Ok(()) => conn.send_resp(req_id, true, None).await,
+            Err(error) => conn.send_resp(req_id, false, Some(&format!("{error:#}"))).await,
+        },
         HallFrame::Ack { session_id, seq } => {
             conn.spool.acknowledge(&session_id, seq)?;
             tracing::debug!(session = %session_id, seq, "ack from Hall truncated spool");
@@ -730,4 +788,24 @@ fn arg_value(key: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn configured_roles() -> Result<Vec<NodeRole>> {
+    let raw = arg_value("--roles").or_else(|| std::env::var("OLYMPUS_ENVOY_ROLES").ok());
+    let mut roles = vec![NodeRole::AgentRuntime];
+    if let Some(raw) = raw {
+        for role in raw.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+            match role {
+                "agent_runtime" | "agent-runtime" => {}
+                "job_runner" | "job-runner" => roles.push(NodeRole::JobRunner),
+                other => anyhow::bail!("unknown envoy role: {other}"),
+            }
+        }
+    }
+    roles.sort_by_key(|role| match role {
+        NodeRole::AgentRuntime => 0,
+        NodeRole::JobRunner => 1,
+    });
+    roles.dedup();
+    Ok(roles)
 }

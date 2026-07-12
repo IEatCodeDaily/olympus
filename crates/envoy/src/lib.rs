@@ -8,6 +8,7 @@
 pub mod adapter;
 pub mod bridge;
 pub mod discovery;
+pub mod job_table;
 pub mod mock_runtime;
 pub mod observer;
 pub mod runtime_table;

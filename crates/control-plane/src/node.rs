@@ -110,12 +110,14 @@ const EVICTION_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct NodeRegistry {
     nodes: Arc<RwLock<HashMap<String, NodeEntry>>>,
+    roles: Arc<RwLock<HashMap<String, Vec<olympus_proto::frames::NodeRole>>>>,
 }
 
 impl NodeRegistry {
     pub fn new() -> Self {
         Self {
             nodes: Arc::new(RwLock::new(HashMap::new())),
+            roles: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -220,6 +222,19 @@ impl NodeRegistry {
     /// Remove a node from the registry (bye or disconnect).
     pub async fn deregister(&self, node_id: &str) {
         self.nodes.write().await.remove(node_id);
+        self.roles.write().await.remove(node_id);
+    }
+
+    pub async fn set_roles(&self, node_id: &str, roles: Vec<olympus_proto::frames::NodeRole>) {
+        self.roles.write().await.insert(node_id.to_owned(), roles);
+    }
+
+    pub async fn has_role(&self, node_id: &str, role: olympus_proto::frames::NodeRole) -> bool {
+        self.roles
+            .read()
+            .await
+            .get(node_id)
+            .is_some_and(|roles| roles.contains(&role))
     }
 
     /// List all nodes with current status, evicting stale ones.
@@ -628,6 +643,7 @@ async fn handle_envoy_hello(
         version: build_version,
         agents,
         runtimes,
+        roles,
     } = frame
     else {
         unreachable!("handle_envoy_hello called with non-Hello frame")
@@ -679,6 +695,7 @@ async fn handle_envoy_hello(
             agents_parsed,
         )
         .await;
+    registry.set_roles(&node_id, roles).await;
 
     // Create the EnvoyConnection and store it for RemoteRuntime.
     let conn = envoy_conns.insert(&node_id, writer).await;
@@ -777,6 +794,18 @@ async fn handle_envoy_frame(
         }
         EnvoyFrame::Runtimes { runtimes: _ } => {
             tracing::debug!("runtimes table update received (S4 will process)");
+        }
+        EnvoyFrame::JobOutput { job_id, seq, stream, data } => {
+            if let Some(c) = conn {
+                crate::server::routes::jobs::apply_output(&job_id, stream, data).await;
+                let _ = c.send_request(olympus_proto::frames::HallFrame::Ack { session_id: job_id, seq }).await;
+            }
+        }
+        EnvoyFrame::JobResult { job_id, seq, exit_code, truncated, timed_out, cancelled } => {
+            if let Some(c) = conn {
+                crate::server::routes::jobs::apply_result(&job_id, exit_code, truncated, timed_out, cancelled).await;
+                let _ = c.send_request(olympus_proto::frames::HallFrame::Ack { session_id: job_id, seq }).await;
+            }
         }
     }
     FrameOutcome::Continue

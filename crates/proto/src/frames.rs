@@ -25,6 +25,20 @@ use crate::agent::AgentCommand;
 use crate::runtime::RuntimeSpec;
 use crate::version::BuildVersion;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeRole {
+    AgentRuntime,
+    JobRunner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStream {
+    Stdout,
+    Stderr,
+}
+
 /// A normalized, read-only observation from Hermes `state.db`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -162,6 +176,27 @@ pub enum HallFrame {
         #[serde(rename = "reqId")]
         req_id: u64,
     },
+    DispatchJob {
+        #[serde(rename = "reqId")]
+        req_id: u64,
+        #[serde(rename = "jobId")]
+        job_id: String,
+        argv: Vec<String>,
+        #[serde(default, rename = "envAllowlist")]
+        env_allowlist: Vec<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(rename = "timeoutSecs")]
+        timeout_secs: u64,
+        #[serde(rename = "maxOutputBytes")]
+        max_output_bytes: u64,
+    },
+    CancelJob {
+        #[serde(rename = "reqId")]
+        req_id: u64,
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
     /// Spool truncation watermark: Hall has durably applied events for
     /// `session_id` up to and including `seq`.
     Ack {
@@ -202,6 +237,8 @@ pub enum EnvoyFrame {
         /// used by Hall to relearn locations and drive `resume_from`.
         #[serde(default)]
         runtimes: Vec<RuntimeStatus>,
+        #[serde(default)]
+        roles: Vec<NodeRole>,
     },
     /// Liveness beat.
     Heartbeat {
@@ -245,6 +282,24 @@ pub enum EnvoyFrame {
     },
     /// Runtimes-table update (sent in hello and on change).
     Runtimes { runtimes: Vec<RuntimeStatus> },
+    JobOutput {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        seq: u64,
+        stream: JobStream,
+        data: String,
+    },
+    JobResult {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        seq: u64,
+        #[serde(rename = "exitCode")]
+        exit_code: Option<i32>,
+        truncated: bool,
+        #[serde(rename = "timedOut")]
+        timed_out: bool,
+        cancelled: bool,
+    },
 }
 
 impl HallFrame {
@@ -259,7 +314,9 @@ impl HallFrame {
             | HallFrame::Stop { req_id, .. }
             | HallFrame::RespondPermission { req_id, .. }
             | HallFrame::Drain { req_id, .. }
-            | HallFrame::Probe { req_id } => Some(*req_id),
+            | HallFrame::Probe { req_id }
+            | HallFrame::DispatchJob { req_id, .. }
+            | HallFrame::CancelJob { req_id, .. } => Some(*req_id),
             HallFrame::Ack { .. } | HallFrame::ResumeFrom { .. } => None,
         }
     }
@@ -372,6 +429,7 @@ mod tests {
                 version: BuildVersion::for_binary("0.1.0"),
                 agents: Some(json!([{"id": "default", "kind": "hermes"}])),
                 runtimes: vec![sample_runtime_status()],
+                roles: vec![NodeRole::AgentRuntime, NodeRole::JobRunner],
             },
             EnvoyFrame::Heartbeat {
                 node_id: "envoy-1".into(),

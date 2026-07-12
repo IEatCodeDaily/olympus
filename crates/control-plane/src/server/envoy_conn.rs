@@ -95,7 +95,9 @@ impl EnvoyConnection {
             | HallFrame::Stop { .. }
             | HallFrame::RespondPermission { .. }
             | HallFrame::Drain { .. }
-            | HallFrame::Probe { .. } => {
+            | HallFrame::Probe { .. }
+            | HallFrame::DispatchJob { .. }
+            | HallFrame::CancelJob { .. } => {
                 let id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
                 let frame_with_id = inject_req_id(frame, id);
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -332,6 +334,8 @@ fn inject_req_id(frame: HallFrame, req_id: u64) -> HallFrame {
         },
         HallFrame::Drain { to_node, .. } => HallFrame::Drain { req_id, to_node },
         HallFrame::Probe { .. } => HallFrame::Probe { req_id },
+        HallFrame::DispatchJob { job_id, argv, env_allowlist, cwd, timeout_secs, max_output_bytes, .. } => HallFrame::DispatchJob { req_id, job_id, argv, env_allowlist, cwd, timeout_secs, max_output_bytes },
+        HallFrame::CancelJob { job_id, .. } => HallFrame::CancelJob { req_id, job_id },
         // Fire-and-forget frames pass through unchanged.
         other => other,
     }
