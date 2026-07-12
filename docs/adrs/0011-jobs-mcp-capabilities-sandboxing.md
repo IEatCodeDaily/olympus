@@ -60,6 +60,12 @@ new `AgentEvent` variant into the session stream (async push, not polling).
 
 ## Build order (each phase independently shippable)
 
+> **Amended by ADR 0012/0013 (2026-07-12):** the phase list below stands, but
+> Phase 3 (capability model) is pulled forward ahead of Phase 2, the workflow
+> engine of Phase 5 is bound to ADR 0013's bounded-chain decision, and each
+> phase now lands under the ADR 0012 extension doctrine (JOBS-1 becomes the
+> first activity provider; MCP fulfills the session-tool class).
+
 1. Job dispatch — proto frames + envoy JobTable + Hello roles. Alone unblocks
    remote compilation offload.
 2. MCP server on Hall.
