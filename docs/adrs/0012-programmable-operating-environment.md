@@ -26,15 +26,25 @@ target — Olympus builds above host operating systems, never replaces them.
 - **Plugin** — an executable component supplied by a package.
 - **Capability** — a permission or callable operation exposed to a principal
   (e.g. `github.pr.create`, `vault.text.search`).
-- **Application** — an interactive UI contribution (IDE, Draw.io, database
-  browser) running in a sandboxed frame.
+- **Application** — see ADR 0015: "app" = Olympus-managed service (own
+  supervised process + datastore, arm's-length MCP/CLI/API integration);
+  "embedded app" = a browser-only UI contribution in a sandboxed frame
+  (IDE, Draw.io, database browser). The unqualified term is retired.
 - **Workflow template** — a versioned workflow definition installed by a
   package, instantiated with caller parameters.
 
 "Plugin" is never used as a catch-all. One package format, several explicit
 **extension classes**: activity provider, trigger provider, resource provider,
-session tool provider, runtime adapter, workspace application,
-indexer/extractor, policy provider, view provider, storage provider.
+session tool provider, runtime adapter, embedded app (UI contribution —
+renamed from "workspace application" by ADR 0015), indexer/extractor, policy
+provider, view provider, storage provider.
+
+> **Amended by ADR 0015 (2026-07-12):** "app" now denotes an
+> Olympus-**managed service** (separate supervised binary/runtime + own
+> datastore, integrating only via MCP/CLI/API) — distinct from plugins, which
+> interface with Olympus internals through the extension classes above. A
+> managed app gains in-Olympus presence (views, vault embeds) only through a
+> companion plugin. See ADR 0015 for the full model.
 
 ## First principles (locked)
 
