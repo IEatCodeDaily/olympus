@@ -1,5 +1,5 @@
 url: ${MAESTRO_BASE_URL}/vaults
-name: Vault lossless editor and integrated pane chrome
+name: Vault Milkdown rich editor and source escape hatch
 properties:
   junitId: olympus-vault-workbench
   junitClassname: ui.mock
@@ -14,19 +14,27 @@ properties:
     timeout: 10000
 - assertVisible: "Save"
 - assertVisible: "Delete"
-- assertVisible: "B"
-- assertNotVisible: "Edit"
-- assertNotVisible: "Cancel"
-- assertNotVisible: "Rich"
-- assertNotVisible: "Source"
+- assertVisible: "Cancel"
+- assertVisible: "Note actions"
 - tapOn:
     point: "64%,45%"
-- inputText: "x"
+- inputText: " rich"
 - assertVisible: ".*\\*"
 - takeScreenshot:
-    path: screenshots/vault-lossless-editor
+    path: screenshots/vault-milkdown-rich-editor
 - tapOn: "Save"
 - assertNotVisible: ".*\\*"
+- tapOn: "Note actions"
+- tapOn: "Edit source"
+- assertVisible: "B"
+- takeScreenshot:
+    path: screenshots/vault-explicit-source-editor
+- tapOn: "Note actions"
+- tapOn: "Edit rich"
+- tapOn: "conflicted-note.md"
+- assertVisible: ".*unresolved jj conflict.*"
+- takeScreenshot:
+    path: screenshots/vault-conflict-source-editor
 - tapOn:
     point: "94%,7%"
 - takeScreenshot:

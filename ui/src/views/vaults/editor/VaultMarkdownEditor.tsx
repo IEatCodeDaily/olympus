@@ -1,4 +1,4 @@
-import { useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { autocompletion } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
@@ -17,16 +17,72 @@ interface VaultMarkdownEditorProps {
   saving?: boolean;
   saveError?: string | null;
   onSave?: () => void;
+  onCancel?: () => void;
   onDelete?: () => void;
+  /** Initial mode override per-tab — only used at mount, not controlled. */
+  editorMode?: "rich" | "source";
+  /** Called whenever the user explicitly switches modes. */
+  onEditorModeChange?: (mode: "rich" | "source") => void;
 }
 
 const EMPTY_SUGGESTIONS: VaultSuggestion[] = [];
+const MilkdownRichEditor = lazy(() => import("./MilkdownRichEditor").then((module) => ({ default: module.MilkdownRichEditor })));
+
+export function VaultMarkdownEditor(props: VaultMarkdownEditorProps) {
+  const conflicted = hasJjConflictMarkers(props.markdown);
+  const [mode, setMode] = useState<"rich" | "source">(() => {
+    // Conflicts always start in source — no override possible.
+    if (conflicted) return "source";
+    // Honour the per-tab persisted mode, if provided.
+    return props.editorMode ?? "rich";
+  });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editorGeneration, setEditorGeneration] = useState(0);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "e") return;
+      event.preventDefault();
+      setMode((current) => {
+        const next = current === "rich" ? "source" : (conflicted ? "source" : "rich");
+        props.onEditorModeChange?.(next);
+        return next;
+      });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [conflicted]);
+
+  return (
+    <div className="vault-markdown-editor">
+      <div className="vault-note-mode-actions">
+        {props.onSave && <button type="button" className="btn pri" aria-label="Save note" disabled={props.saving || !props.dirty} onClick={props.onSave}>{props.saving ? "Saving…" : "Save"}</button>}
+        {props.onCancel && <button type="button" className="vault-toolbar-button" aria-label="Cancel edits" disabled={props.saving || !props.dirty} onClick={() => { props.onCancel?.(); setEditorGeneration((generation) => generation + 1); }}>Cancel</button>}
+        {props.onDelete && <button type="button" className="vault-toolbar-button danger" aria-label="Delete note" onClick={props.onDelete}>Delete</button>}
+        <button type="button" className="vault-toolbar-button" aria-label="Note actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>⋯</button>
+        {menuOpen && (
+          <div className="vault-note-menu" role="menu">
+            <button type="button" role="menuitem" onClick={() => { const next = mode === "rich" ? "source" : "rich"; setMode(next); props.onEditorModeChange?.(next); setMenuOpen(false); }} disabled={conflicted && mode === "source"}>
+              {mode === "rich" ? "Edit source" : "Edit rich"}
+            </button>
+          </div>
+        )}
+      </div>
+      {props.saveError && <div className="vault-save-error" role="alert">{props.saveError}</div>}
+      {mode === "rich" ? (
+        <Suspense fallback={<div className="vault-editor-loading">Loading rich editor…</div>}>
+          <MilkdownRichEditor key={editorGeneration} markdown={props.markdown} onChange={props.onChange} suggestions={props.suggestions} />
+        </Suspense>
+      ) : <SourceMarkdownEditor {...props} onSave={undefined} onDelete={undefined} saveError={null} />}
+    </div>
+  );
+}
 
 function preventToolbarBlur(event: ReactMouseEvent<HTMLButtonElement>) {
   event.preventDefault();
 }
 
-export function VaultMarkdownEditor({
+export function SourceMarkdownEditor({
   markdown,
   onChange,
   suggestions = EMPTY_SUGGESTIONS,
@@ -72,7 +128,7 @@ export function VaultMarkdownEditor({
   };
 
   return (
-    <div className="vault-markdown-editor">
+    <div className="vault-source-markdown-editor">
       <div className="vault-note-toolbar" role="toolbar" aria-label="Note formatting">
         <div className="vault-note-tools">
           <ToolbarButton label="Undo" text="↶" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && undo(editorRef.current)} />

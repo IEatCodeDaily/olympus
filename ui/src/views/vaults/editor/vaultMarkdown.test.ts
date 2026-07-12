@@ -2,12 +2,24 @@ import { describe, expect, it } from "vitest";
 import {
   collectVaultSuggestions,
   findVaultSuggestion,
+  fromRichMarkdown,
   hasJjConflictMarkers,
   joinVaultMarkdown,
   serializeVaultSuggestion,
   splitVaultMarkdown,
+  toRichMarkdown,
   type VaultSuggestion,
 } from "./vaultMarkdown";
+
+const preservedFixtures = [
+  "<!-- keep this exact -->",
+  "Footnote[^1]\n\n[^1]: detail",
+  "Read [the design][design].\n\n[design]: /design.md \"Design\"",
+  ":::warning {#careful}\nDo not normalize me.\n:::",
+  "<Component value={\"raw\"} />",
+  "import X from \"./x\"",
+  "export default function Foo() {}",
+] as const;
 
 describe("Vault Markdown frontmatter boundary", () => {
   it("splits and rejoins YAML frontmatter byte-for-byte", () => {
@@ -30,6 +42,34 @@ describe("Vault Markdown frontmatter boundary", () => {
 });
 
 describe("collectVaultSuggestions", () => {
+  it("shows preserved syntax literally in the rich surface", () => {
+    expect(toRichMarkdown("<!-- keep this exact -->")).toContain("<!-- keep this exact -->");
+  });
+
+  it.each(preservedFixtures)("round-trips preserved rich-editor syntax: %s", (markdown) => {
+    expect(fromRichMarkdown(toRichMarkdown(markdown))).toBe(markdown);
+  });
+
+  it("bridges wikilinks only in prose and decodes malformed links defensively", () => {
+    const markdown = [
+      "See [[docs/design.md|Design]].",
+      "",
+      "`[[inline.md]]`",
+      "",
+      "````md",
+      "```",
+      "[[nested-fence.md]]",
+      "```",
+      "````",
+    ].join("\n");
+    const rich = toRichMarkdown(markdown);
+    expect(rich).toContain("olympus-wikilink:");
+    expect(rich).toContain("`[[inline.md]]`");
+    expect(rich).toContain("[[nested-fence.md]]");
+    expect(fromRichMarkdown(rich)).toBe(markdown);
+    expect(fromRichMarkdown("[bad](olympus-wikilink:%E0%A4%A)")).toBe("[bad](olympus-wikilink:%E0%A4%A)");
+  });
+
   it("reuses stable mentions, labels, and linked note targets", () => {
     expect(
       collectVaultSuggestions(

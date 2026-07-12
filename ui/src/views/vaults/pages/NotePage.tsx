@@ -19,9 +19,11 @@ interface NotePageProps {
   notePath: string | null;
   onNavigateNote: (path: string) => void;
   onDirtyChange: (dirty: boolean) => void;
+  editorMode?: "rich" | "source";
+  onEditorModeChange?: (mode: "rich" | "source") => void;
 }
 
-export function NotePage({ vaultId, notePath, onDirtyChange }: NotePageProps) {
+export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEditorModeChange }: NotePageProps) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: note, isLoading, error } = useVaultNote(vaultId, notePath);
@@ -92,6 +94,13 @@ export function NotePage({ vaultId, notePath, onDirtyChange }: NotePageProps) {
     }
   };
 
+  const handleCancel = () => {
+    setDraft(note.markdown);
+    setDirty(false);
+    onDirtyChange(false);
+    setSaveError(null);
+  };
+
   return (
     <div className="vault-content vault-note-surface">
       <Suspense fallback={<div className="vault-editor-loading">Loading editor…</div>}>
@@ -103,7 +112,10 @@ export function NotePage({ vaultId, notePath, onDirtyChange }: NotePageProps) {
           saving={saving}
           saveError={saveError}
           onSave={handleSave}
+          onCancel={handleCancel}
           onDelete={handleDelete}
+          editorMode={editorMode}
+          onEditorModeChange={onEditorModeChange}
           onChange={(markdown) => {
             const nextDirty = markdown !== note.markdown;
             setDraft(markdown);

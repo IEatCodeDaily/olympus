@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useRef, useState, useCallback, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { Icon } from "../../../components/Icon";
 import { GraphPage } from "../pages/GraphPage";
 import { NotePage } from "../pages/NotePage";
@@ -26,6 +26,18 @@ export function VaultWorkspace({
   const [columnSplit, setColumnSplit] = useState(50);
   const [rowSplit, setRowSplit] = useState(50);
   const [dirtyTabs, setDirtyTabs] = useState<Set<string>>(() => new Set());
+  // Per-tab editor mode — key is `${paneId}:${tabId}`, value is "source" or "rich".
+  // We only store "source" overrides; absence means "rich" (the default).
+  const [tabModes, setTabModes] = useState<Map<string, "rich" | "source">>(() => new Map());
+
+  const handleEditorModeChange = useCallback((paneId: string, tabId: string, mode: "rich" | "source") => {
+    setTabModes((current) => {
+      const next = new Map(current);
+      if (mode === "rich") next.delete(`${paneId}:${tabId}`);
+      else next.set(`${paneId}:${tabId}`, mode);
+      return next;
+    });
+  }, []);
   const hasColumnSplit = state.layout === "columns" || state.layout === "grid";
   const hasRowSplit = state.layout === "rows" || state.layout === "grid";
 
@@ -111,6 +123,8 @@ export function VaultWorkspace({
                         return next;
                       });
                     }}
+                    editorMode={tabModes.get(`${pane.id}:${activeTab.id}`)}
+                    onEditorModeChange={(mode) => handleEditorModeChange(pane.id, activeTab.id, mode)}
                   />
                 ) : (
                   <div className="empty-state vault-pane-empty"><div className="empty-state-icon"><Icon name="plus" size={28} /></div><div className="empty-state-title">Empty pane</div><div className="empty-state-msg">Open a file or view from the sidebar.</div></div>
@@ -150,10 +164,10 @@ export function VaultWorkspace({
   );
 }
 
-function TabContent({ vaultId, tab, onOpenNote, onDirtyChange }: { vaultId: string; tab: WorkspaceTab; onOpenNote: (path: string, title?: string) => void; onDirtyChange: (dirty: boolean) => void }) {
+function TabContent({ vaultId, tab, onOpenNote, onDirtyChange, editorMode, onEditorModeChange }: { vaultId: string; tab: WorkspaceTab; onOpenNote: (path: string, title?: string) => void; onDirtyChange: (dirty: boolean) => void; editorMode?: "rich" | "source"; onEditorModeChange?: (mode: "rich" | "source") => void }) {
   if (tab.kind === "graph") return <GraphPage vaultId={vaultId} onOpenNote={onOpenNote} />;
   if (tab.kind === "table") return <VaultTablePage vaultId={vaultId} onOpenNote={onOpenNote} />;
-  return <NotePage vaultId={vaultId} notePath={tab.path ?? null} onNavigateNote={onOpenNote} onDirtyChange={onDirtyChange} />;
+  return <NotePage vaultId={vaultId} notePath={tab.path ?? null} onNavigateNote={onOpenNote} onDirtyChange={onDirtyChange} editorMode={editorMode} onEditorModeChange={onEditorModeChange} />;
 }
 
 function LayoutButton({ label, layout, active, onLayout, icon }: { label: string; layout: VaultWorkspaceLayout; active: boolean; onLayout: (layout: VaultWorkspaceLayout) => void; icon: "panel-right" | "panel-left" | "panel-bottom" | "layout-grid" }) {

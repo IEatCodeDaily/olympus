@@ -575,6 +575,7 @@ export const VAULT_NOTES: Record<string, NoteTreeEntry[]> = {
       ],
     },
     { path: "acp-wire-spike.md", title: "acp-wire-spike.md", updatedAt: NOW - 86400, kind: "note", children: [] },
+    { path: "conflicted-note.md", title: "conflicted-note.md", updatedAt: NOW - 90000, kind: "note", children: [] },
   ],
   "ops-runbooks": [
     {
@@ -663,6 +664,15 @@ Frame capture of a live \`session/resume\` across the ACP boundary.
 - The \`message.delta\` frame carries UTF-8 text fragments.
 
 Related: [[redb-compaction.md]] · [[event-log-design.md]]`,
+    "conflicted-note.md": [
+      "# Conflicted note",
+      "",
+      `${"<".repeat(7)} working-copy`,
+      "human text",
+      "=".repeat(7),
+      "agent text",
+      `${">".repeat(7)} revision`,
+    ].join("\n"),
   },
   "ops-runbooks": {
     "boot.md": `# Ops boot

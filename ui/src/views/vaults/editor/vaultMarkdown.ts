@@ -43,6 +43,33 @@ export function joinVaultMarkdown(document: VaultMarkdownDocument): string {
   return document.frontmatter + document.body;
 }
 
+const PRESERVED_INFO = "olympus-preserved:";
+
+export function toRichMarkdown(markdown: string): string {
+  const preserved = preserveUnsupportedParagraphs(markdown);
+  return transformMarkdownProse(preserved, (prose) =>
+    prose.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (source, path, alias) => {
+      const label = escapeMarkdownLabel(alias ?? noteLabel(path));
+      return `[${label}](olympus-wikilink:${encodeURIComponent(source)})`;
+    }),
+  );
+}
+
+export function fromRichMarkdown(markdown: string): string {
+  const canonical = transformMarkdownProse(markdown, (prose) =>
+    prose
+      .replace(
+        /\[(?:\\.|[^\]])*\]\(olympus-wikilink:([^)]+)\)/g,
+        (link, encodedSource) => safeDecodeWikilink(link, encodedSource),
+      )
+      .replace(/\\\[\\\[([^\]\n]+)(?:\\\]\\\]|\]\])/g, "[[$1]]"),
+  );
+  return canonical.replace(
+    / {0,3}`{3,}olympus-preserved:([^\s]+)\s*\r?\n[\s\S]*?\r?\n {0,3}`{3,}/g,
+    (block, encoded) => safeDecodePreserved(block, encoded),
+  );
+}
+
 
 export function collectVaultSuggestions(
   markdown: string,
@@ -128,4 +155,91 @@ function isInsideInlineCode(text: string): boolean {
 
 function noteLabel(path: string): string {
   return (path.split("/").pop() ?? path).replace(/\.md$/, "");
+}
+
+function preserveUnsupportedParagraphs(markdown: string): string {
+  return markdown
+    .split(/(\r?\n[ \t]*\r?\n)/)
+    .map((paragraph, index) => {
+      if (index % 2 === 1 || !isUnsupportedParagraph(paragraph)) return paragraph;
+      return `\`\`\`${PRESERVED_INFO}${encodeURIComponent(paragraph)}\n${paragraph}\n\`\`\``;
+    })
+    .join("");
+}
+
+function isUnsupportedParagraph(paragraph: string): boolean {
+  return (
+    new RegExp("<" + "!--[\\s\\S]*?--" + ">").test(paragraph) ||
+    /<\/?[A-Za-z][^>\n]*>/.test(paragraph) ||
+    /\[\^[^\]]+\]/.test(paragraph) ||
+    /^\s{0,3}\[[^\]\n]+\]:\s+\S+/m.test(paragraph) ||
+    /^\s*:{2,}[A-Za-z][^\n]*$/m.test(paragraph) ||
+    /^\s*(?:import|export)\s/m.test(paragraph)
+  );
+}
+
+function escapeMarkdownLabel(label: string): string {
+  return label.replace(/([\\\]])/g, "\\$1");
+}
+
+function safeDecodeWikilink(link: string, encodedSource: string): string {
+  try {
+    const source = decodeURIComponent(encodedSource);
+    return /^\[\[[^\n]+\]\]$/.test(source) ? source : link;
+  } catch {
+    return link;
+  }
+}
+
+function safeDecodePreserved(block: string, encodedSource: string): string {
+  try {
+    return decodeURIComponent(encodedSource);
+  } catch {
+    return block;
+  }
+}
+
+function transformMarkdownProse(markdown: string, transform: (prose: string) => string): string {
+  let fence: { marker: string; length: number } | null = null;
+  return markdown.replace(/[^\r\n]*(?:\r\n|\n|$)/g, (line) => {
+    if (!line) return line;
+    const content = line.replace(/\r?\n$/, "");
+    const newline = line.slice(content.length);
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    if (fence) {
+      if (marker?.[0] === fence.marker && marker.length >= fence.length && new RegExp(`^ {0,3}${fence.marker}{${fence.length},}\\s*$`).test(content)) fence = null;
+      return line;
+    }
+    if (marker) {
+      fence = { marker: marker[0], length: marker.length };
+      return line;
+    }
+    if (/^(?: {4}|\t)/.test(content)) return line;
+    return transformInlineProse(content, transform) + newline;
+  });
+}
+
+function transformInlineProse(line: string, transform: (prose: string) => string): string {
+  let result = "";
+  let proseStart = 0;
+  let cursor = 0;
+  while (cursor < line.length) {
+    if (line[cursor] !== "`" || (cursor > 0 && line[cursor - 1] === "\\")) {
+      cursor += 1;
+      continue;
+    }
+    let runEnd = cursor + 1;
+    while (line[runEnd] === "`") runEnd += 1;
+    const delimiter = line.slice(cursor, runEnd);
+    const close = line.indexOf(delimiter, runEnd);
+    if (close < 0) {
+      cursor = runEnd;
+      continue;
+    }
+    result += transform(line.slice(proseStart, cursor));
+    result += line.slice(cursor, close + delimiter.length);
+    cursor = close + delimiter.length;
+    proseStart = cursor;
+  }
+  return result + transform(line.slice(proseStart));
 }
