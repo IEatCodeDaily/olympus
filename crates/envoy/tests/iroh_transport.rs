@@ -81,6 +81,7 @@ async fn iroh_loopback_hello_round_trip() {
         version: BuildVersion::for_binary("0.0.0-test"),
         agents: None,
         runtimes: vec![],
+        roles: vec![olympus_proto::frames::NodeRole::AgentRuntime],
     };
     let mut line = serde_json::to_string(&hello).unwrap();
     line.push('\n');

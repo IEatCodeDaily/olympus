@@ -9,7 +9,7 @@ pub mod dto;
 pub mod envoy_conn;
 mod identity;
 pub mod principal;
-mod routes;
+pub(crate) mod routes;
 pub mod ws;
 
 // Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
@@ -139,6 +139,7 @@ pub fn build_router(state: AppState) -> Router {
     let protected = Router::new()
         .merge(routes::sessions::router())
         .merge(routes::irc::router())
+        .merge(routes::jobs::router())
         .merge(routes::search::router())
         .merge(routes::agents::router())
         .merge(routes::cards::router())

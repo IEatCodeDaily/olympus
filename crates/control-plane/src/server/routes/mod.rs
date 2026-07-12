@@ -10,6 +10,7 @@ pub(crate) mod cards;
 pub(crate) mod enroll;
 pub(crate) mod events;
 pub(crate) mod irc;
+pub(crate) mod jobs;
 pub(crate) mod nodes;
 pub(crate) mod organizations;
 pub(crate) mod projects;

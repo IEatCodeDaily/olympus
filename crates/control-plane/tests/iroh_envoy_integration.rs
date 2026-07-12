@@ -120,6 +120,7 @@ async fn iroh_envoy_hello_registers_in_registry() {
         version: BuildVersion::for_binary("0.0.0-test"),
         agents: None,
         runtimes: vec![],
+        roles: vec![olympus_proto::frames::NodeRole::AgentRuntime],
     };
     let mut line = serde_json::to_string(&hello).unwrap();
     line.push('\n');
@@ -195,6 +196,7 @@ async fn iroh_ensure_runtime_round_trip() {
         version: BuildVersion::for_binary("0.0.0-test"),
         agents: None,
         runtimes: vec![],
+        roles: vec![olympus_proto::frames::NodeRole::AgentRuntime],
     };
     let mut line = serde_json::to_string(&hello).unwrap();
     line.push('\n');
