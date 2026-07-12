@@ -73,6 +73,7 @@ pub fn route_class(path: &str) -> RouteClass<'_> {
         || path == "/api/organizations"
         || path == "/api/models"
         || path == "/api/agents"
+        || path == "/api/edge/static"
         || (path.starts_with("/api/agents/") && path.ends_with("/models"))
         || path == "/api/nodes/hall-identity"
     {

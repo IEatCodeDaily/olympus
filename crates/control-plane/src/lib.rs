@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod auth_store;
+pub mod edge;
 pub mod edit_model;
 pub mod enroll;
 pub mod event;

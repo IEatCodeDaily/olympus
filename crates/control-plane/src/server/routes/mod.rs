@@ -7,6 +7,7 @@
 
 pub(crate) mod agents;
 pub(crate) mod cards;
+pub(crate) mod edge;
 pub(crate) mod enroll;
 pub(crate) mod events;
 pub(crate) mod irc;

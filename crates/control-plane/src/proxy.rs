@@ -20,6 +20,7 @@
 //! WebSocket upgrades are forwarded transparently.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -61,6 +62,10 @@ pub struct ProxyEndpoint {
     pub project_id: Option<String>,
     /// Auth mode for this endpoint.
     pub auth_mode: ProxyAuth,
+    /// External edge path prefix.
+    pub path_prefix: String,
+    /// Optional static artifact root.
+    pub artifact_root: Option<PathBuf>,
     /// Endpoint status.
     pub status: ProxyStatus,
 }
@@ -161,6 +166,10 @@ pub struct CreateProxyBody {
     pub project_id: Option<String>,
     #[serde(default = "default_auth")]
     pub auth_mode: ProxyAuth,
+    #[serde(default)]
+    pub path_prefix: Option<String>,
+    #[serde(default)]
+    pub artifact_root: Option<PathBuf>,
 }
 
 fn default_auth() -> ProxyAuth {
@@ -198,9 +207,37 @@ pub async fn create_proxy_endpoint(
         session_id: body.session_id,
         project_id: body.project_id,
         auth_mode: body.auth_mode,
+        path_prefix: body.path_prefix.unwrap_or_else(|| format!("/app/{slug}/")),
+        artifact_root: body.artifact_root,
         status: ProxyStatus::Active,
     };
 
+    if !valid_path_prefix(&endpoint.path_prefix)
+        || (endpoint.artifact_root.is_some() && endpoint.path_prefix.starts_with("/app/"))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid pathPrefix for edge route" })),
+        )
+            .into_response();
+    }
+    if let Some(root) = &endpoint.artifact_root {
+        if let Err(error) = crate::edge::validate_artifact_root(root) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("unsafe artifactRoot: {error}") })),
+            )
+                .into_response();
+        }
+    }
+    if let Err(error) = state.edge.upsert(endpoint.edge_route()) {
+        tracing::warn!(slug = %slug, %error, "edge route registration refused");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "edge unavailable" })),
+        )
+            .into_response();
+    }
     state.proxy.upsert(endpoint.clone()).await;
 
     tracing::info!(
@@ -217,7 +254,16 @@ pub async fn delete_proxy_endpoint(
     State(state): State<crate::server::AppState>,
     Path(slug): Path<String>,
 ) -> Response {
-    if state.proxy.remove(&slug).await {
+    if state.proxy.get(&slug).await.is_some() {
+        if let Err(error) = state.edge.remove(&slug) {
+            tracing::warn!(slug = %slug, %error, "edge route removal refused");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "edge unavailable" })),
+            )
+                .into_response();
+        }
+        state.proxy.remove(&slug).await;
         tracing::info!(slug = %slug, "proxy endpoint removed");
         Json(json!({ "ok": true })).into_response()
     } else {
@@ -226,6 +272,34 @@ pub async fn delete_proxy_endpoint(
             Json(json!({ "error": "endpoint not found" })),
         )
             .into_response()
+    }
+}
+
+fn valid_path_prefix(path: &str) -> bool {
+    path.ends_with('/')
+        && ["/app/", "/static/", "/artifacts/"]
+            .iter()
+            .any(|allowed| path.starts_with(allowed))
+        && !path.split('/').any(|segment| matches!(segment, "." | ".."))
+}
+
+impl ProxyEndpoint {
+    pub fn edge_route(&self) -> crate::edge::Route {
+        crate::edge::Route {
+            id: self.slug.clone(),
+            path_prefix: self.path_prefix.clone(),
+            upstream: self.artifact_root.is_none().then(|| crate::edge::HostPort {
+                host: self.host.clone(),
+                port: self.port,
+            }),
+            artifact_root: self.artifact_root.clone(),
+            auth_policy: match self.auth_mode {
+                ProxyAuth::Public => crate::edge::AuthPolicy::Public,
+                ProxyAuth::Token(_) => crate::edge::AuthPolicy::AppGrant,
+                ProxyAuth::SessionScoped => crate::edge::AuthPolicy::SessionScoped,
+            },
+            websocket: self.artifact_root.is_none(),
+        }
     }
 }
 
@@ -479,6 +553,8 @@ mod tests {
             session_id: Some("sess-1".into()),
             project_id: None,
             auth_mode: ProxyAuth::Public,
+            path_prefix: "/app/test/".into(),
+            artifact_root: None,
             status: ProxyStatus::Active,
         };
         table.upsert(ep.clone()).await;
@@ -498,6 +574,8 @@ mod tests {
             session_id: None,
             project_id: None,
             auth_mode: ProxyAuth::Public,
+            path_prefix: "/app/test/".into(),
+            artifact_root: None,
             status: ProxyStatus::Active,
         };
         table.upsert(ep1).await;
@@ -509,6 +587,8 @@ mod tests {
             session_id: None,
             project_id: None,
             auth_mode: ProxyAuth::Public,
+            path_prefix: "/app/test/".into(),
+            artifact_root: None,
             status: ProxyStatus::Active,
         };
         table.upsert(ep2).await;
@@ -527,6 +607,8 @@ mod tests {
             session_id: None,
             project_id: None,
             auth_mode: ProxyAuth::Public,
+            path_prefix: "/app/test/".into(),
+            artifact_root: None,
             status: ProxyStatus::Active,
         };
         table.upsert(ep).await;
@@ -547,6 +629,8 @@ mod tests {
                 session_id: None,
                 project_id: None,
                 auth_mode: ProxyAuth::Public,
+                path_prefix: "/app/test/".into(),
+                artifact_root: None,
                 status: ProxyStatus::Active,
             };
             table.upsert(ep).await;

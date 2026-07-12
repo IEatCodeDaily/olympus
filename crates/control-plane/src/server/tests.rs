@@ -71,6 +71,7 @@ fn test_state() -> (AppState, tempfile::TempDir) {
         envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
         hall_iroh_id: None,
         proxy: crate::proxy::ProxyTable::new(),
+        edge: crate::edge::EdgeManager::new(crate::edge::MemoryDriver::available()),
         vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
             dir.path().join("default"),
             crate::vault::JjMode::Disabled,
@@ -505,6 +506,7 @@ async fn sort_by_message_count_orders_descending() {
         envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
         hall_iroh_id: None,
         proxy: crate::proxy::ProxyTable::new(),
+        edge: crate::edge::EdgeManager::new(crate::edge::MemoryDriver::available()),
         vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
             dir.path().join("default"),
             crate::vault::JjMode::Disabled,
