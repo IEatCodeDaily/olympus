@@ -28,6 +28,7 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
   const navigate = useNavigate();
   const { data: note, isLoading, error } = useVaultNote(vaultId, notePath);
   const [draft, setDraft] = useState("");
+  const [draftPath, setDraftPath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -35,6 +36,7 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
   useEffect(() => {
     if (!note) return;
     setDraft(note.markdown);
+    setDraftPath(note.path);
     setDirty(false);
     onDirtyChange(false);
     setSaveError(null);
@@ -52,7 +54,7 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
     );
   }
 
-  if (isLoading) {
+  if (isLoading || (note && draftPath !== note.path)) {
     return <div className="vault-content vault-note-surface"><div className="vault-editor-loading">Loading note…</div></div>;
   }
 

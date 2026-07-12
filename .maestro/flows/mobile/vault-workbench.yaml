@@ -11,13 +11,13 @@ properties:
 - assertVisible: "Save"
 - assertVisible: "Delete"
 - assertVisible: "Cancel"
-- assertVisible: "Note actions"
 - tapOn:
     point: "50%,50%"
-- inputText: " mobile"
+- inputText: "mobile-"
 - assertVisible: ".*\\*"
 - tapOn: "Save"
-- tapOn: "Note actions"
+- tapOn:
+    point: "94%,11%"
 - tapOn: "Edit source"
 - takeScreenshot:
     path: screenshots/vault-mobile-source-escape

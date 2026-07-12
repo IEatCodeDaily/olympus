@@ -50,6 +50,19 @@ describe("collectVaultSuggestions", () => {
     expect(fromRichMarkdown(toRichMarkdown(markdown))).toBe(markdown);
   });
 
+  it.each([
+    ["HTML comment", "```html\n<!-- literal -->\n```"],
+    ["MDX import", "```mdx\nimport X from \"./x\"\n```"],
+    ["MDX tag", "```mdx\n<Component value={\"raw\"} />\n```"],
+    [
+      "preservation marker",
+      "```olympus-preserved:not-encoded\nliteral user-authored content\n```",
+    ],
+  ])("leaves user-authored fenced %s byte-identical", (_name, markdown) => {
+    expect(toRichMarkdown(markdown)).toBe(markdown);
+    expect(fromRichMarkdown(markdown)).toBe(markdown);
+  });
+
   it("bridges wikilinks only in prose and decodes malformed links defensively", () => {
     const markdown = [
       "See [[docs/design.md|Design]].",

@@ -55,7 +55,8 @@ Dirty comparison is against the originally loaded complete Markdown bytes, not a
 - `MilkdownRichEditor` passes only `body` through `toRichMarkdown` and Crepe. `frontmatter` is stored in a ref created from the loaded complete Markdown and is rejoined with `joinVaultMarkdown` for every emitted change.
 - Raw-node preservation is a reversible bridge, not a warning. Before parsing, unsupported paragraphs are wrapped in fenced blocks with an `olympus-preserved:<encoded-original>` info string and literal visible content. After serialization, the encoded original replaces the whole preserved fence.
 - Preservation applies at paragraph/block granularity for comments, footnote definitions/usages, reference link definitions, directives/containers, MDX-ish JSX tags, and import/export paragraphs. Expand the set by adding new fixture rows; never by broadening source-mode fallback.
-- Bridge decoding is defensive. Malformed percent encoding or an encoded payload that does not validate as the expected construct leaves the visible Markdown untouched instead of throwing or dropping content.
+- Preservation detection must track Markdown fence boundaries before classifying paragraphs. Fenced comments, imports, JSX, and even literal `olympus-preserved:` examples are user-authored code and must remain byte-identical rather than being wrapped or decoded.
+- Bridge decoding is defensive. Malformed percent encoding, or an encoded payload that does not exactly equal the visible passthrough body, leaves the visible Markdown untouched instead of throwing or dropping content.
 
 ## Reversible syntax adapters
 
@@ -90,6 +91,8 @@ Serialize lifecycle operations through a promise held in a ref:
 4. Ignore listener callbacks after disposal.
 
 Prove this with an E2E assertion that exactly one `.ProseMirror` exists after entering edit mode.
+
+The note page must also avoid mounting a newly keyed editor with the previous tab's draft during a note switch. Wait until the fetched note path and initialized draft path agree before mounting Milkdown; otherwise its one-time `defaultValue` captures stale bytes and the selected tab can display the prior note indefinitely.
 
 ## Fixture matrix
 

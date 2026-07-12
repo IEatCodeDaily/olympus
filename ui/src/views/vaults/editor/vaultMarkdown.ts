@@ -65,8 +65,8 @@ export function fromRichMarkdown(markdown: string): string {
       .replace(/\\\[\\\[([^\]\n]+)(?:\\\]\\\]|\]\])/g, "[[$1]]"),
   );
   return canonical.replace(
-    / {0,3}`{3,}olympus-preserved:([^\s]+)\s*\r?\n[\s\S]*?\r?\n {0,3}`{3,}/g,
-    (block, encoded) => safeDecodePreserved(block, encoded),
+    / {0,3}(`{3,})olympus-preserved:([^\s]+)\s*\r?\n([\s\S]*?)\r?\n {0,3}\1/g,
+    (block, _fence, encoded, literal) => safeDecodePreserved(block, encoded, literal),
   );
 }
 
@@ -158,13 +158,45 @@ function noteLabel(path: string): string {
 }
 
 function preserveUnsupportedParagraphs(markdown: string): string {
-  return markdown
-    .split(/(\r?\n[ \t]*\r?\n)/)
-    .map((paragraph, index) => {
-      if (index % 2 === 1 || !isUnsupportedParagraph(paragraph)) return paragraph;
-      return `\`\`\`${PRESERVED_INFO}${encodeURIComponent(paragraph)}\n${paragraph}\n\`\`\``;
-    })
-    .join("");
+  let fence: { marker: string; length: number } | null = null;
+  let prose = "";
+  let result = "";
+  const flushProse = () => {
+    result += prose
+      .split(/(\r?\n[ \t]*\r?\n)/)
+      .map((paragraph, index) => {
+        if (index % 2 === 1 || !isUnsupportedParagraph(paragraph)) return paragraph;
+        return `\`\`\`${PRESERVED_INFO}${encodeURIComponent(paragraph)}\n${paragraph}\n\`\`\``;
+      })
+      .join("");
+    prose = "";
+  };
+
+  for (const line of markdown.match(/[^\r\n]*(?:\r\n|\n|$)/g) ?? []) {
+    if (!line) continue;
+    const content = line.replace(/\r?\n$/, "");
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    const openedFence = !fence && Boolean(marker);
+    if (!fence && marker) {
+      flushProse();
+      fence = { marker: marker[0], length: marker.length };
+    }
+    if (fence) {
+      result += line;
+      if (
+        !openedFence &&
+        marker?.[0] === fence.marker &&
+        marker.length >= fence.length &&
+        new RegExp(`^ {0,3}${fence.marker}{${fence.length},}\\s*$`).test(content)
+      ) {
+        fence = null;
+      }
+    } else {
+      prose += line;
+    }
+  }
+  flushProse();
+  return result;
 }
 
 function isUnsupportedParagraph(paragraph: string): boolean {
@@ -191,9 +223,10 @@ function safeDecodeWikilink(link: string, encodedSource: string): string {
   }
 }
 
-function safeDecodePreserved(block: string, encodedSource: string): string {
+function safeDecodePreserved(block: string, encodedSource: string, literal: string): string {
   try {
-    return decodeURIComponent(encodedSource);
+    const decoded = decodeURIComponent(encodedSource);
+    return decoded === literal ? decoded : block;
   } catch {
     return block;
   }

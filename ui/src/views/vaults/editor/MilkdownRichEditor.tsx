@@ -32,7 +32,10 @@ export function MilkdownRichEditor({ markdown, onChange, suggestions = EMPTY_SUG
   const initialBodyRef = useRef(toRichMarkdown(loadedDocumentRef.current.body));
   const [activeMatch, setActiveMatch] = useState<VaultSuggestionMatch | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     if (!rootRef.current) return;

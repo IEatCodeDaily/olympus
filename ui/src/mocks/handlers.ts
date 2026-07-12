@@ -130,6 +130,7 @@ export const handlers = [
       managed: true,
       agent: body.agent ?? null,
       node: body.node ?? null,
+      capabilities: null,
       liveness: "active" as const,
     };
     SESSIONS.unshift(draft);

@@ -15,14 +15,15 @@ properties:
     visible: "Save"
     timeout: 10000
 
-# Rich mode is the default — Save/Cancel/Delete and Note actions must be present
+# Rich mode is the default — Save/Cancel/Delete must be present.
+# Maestro web does not expose icon-only aria-labels, so target the visible kebab
+# by its stable toolbar position below.
 - assertVisible: "Save"
-- assertVisible: "Note actions"
 
 # ── Type representative Markdown in rich mode, check dirty indicator ───────
 - tapOn:
     point: "64%,45%"
-- inputText: " rich"
+- inputText: "rich-"
 - assertVisible: ".*\\*"
 - takeScreenshot:
     path: screenshots/vault-milkdown-rich-typing
@@ -36,15 +37,16 @@ properties:
 # ── Type again, then Cancel restores clean state ───────────────────────────
 - tapOn:
     point: "64%,45%"
-- inputText: " unsaved"
+- inputText: "unsaved-"
 - assertVisible: ".*\\*"
-- tapOn: "Cancel edits"
+- tapOn: "Cancel"
 - assertNotVisible: ".*\\*"
 - takeScreenshot:
     path: screenshots/vault-after-cancel
 
 # ── Kebab: switch to source via overflow menu ──────────────────────────────
-- tapOn: "Note actions"
+- tapOn:
+    point: "1255,87"
 - tapOn: "Edit source"
 # Formatting toolbar (Undo/Bold etc.) visible confirms source mode
 - assertVisible: "B"
@@ -54,7 +56,8 @@ properties:
     path: screenshots/vault-explicit-source-editor
 
 # ── Kebab: switch back to rich ─────────────────────────────────────────────
-- tapOn: "Note actions"
+- tapOn:
+    point: "1255,87"
 - tapOn: "Edit rich"
 - extendedWaitUntil:
     # "B" (bold button) must disappear — the CodeMirror toolbar is gone
