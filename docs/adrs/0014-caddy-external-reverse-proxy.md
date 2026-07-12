@@ -85,8 +85,13 @@ removed after Caddy paths are verified.
   the reason both the version floor and origin enforcement are mandatory).
 - Caddy runs unprivileged, same user as envoy; no admin API route is ever
   exposed through Caddy itself.
-- Artifact roots served with symlink-following disabled; path-traversal
-  tests in the acceptance suite.
+- Artifact roots are **symlink-free by construction** (amended 2026-07-12:
+  stock Caddy has no symlink-disable option in file_server — the guarantee
+  moves to the writer, which Olympus fully controls): the `static.publish`
+  write path rejects symlinks (lstat every created entry; refuse symlink
+  sources), route registration validates the root contains no symlinks
+  before EdgeDriver applies it, and path-traversal tests stay in the
+  acceptance suite. Caddy stays stock — no custom modules.
 
 ### Auth architecture (Hall is the sole authority)
 
