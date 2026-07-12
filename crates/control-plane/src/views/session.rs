@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use crate::event::Event;
+use crate::server::capability::CapabilitySet;
 
 /// Filters applied to [`SessionView::list`].
 ///
@@ -69,6 +70,8 @@ pub struct SessionRow {
     pub card_id: Option<String>,
     /// Project attached to this session, if any (from SessionProjectAttached).
     pub project_id: Option<String>,
+    /// Hall-signed capability envelope. None preserves legacy full authority.
+    pub capabilities: Option<CapabilitySet>,
 }
 
 /// In-memory projection of sessions from the event log (ADR §2.4).
@@ -135,6 +138,7 @@ impl SessionView {
                         parent_session_id: None,
                         card_id: None,
                         project_id: None,
+                        capabilities: None,
                     },
                 );
             }
@@ -183,6 +187,15 @@ impl SessionView {
             } => {
                 if let Some(row) = self.sessions.get_mut(session_id) {
                     row.org_id = organization_id.clone();
+                }
+            }
+            Event::SessionCapabilitiesAssigned {
+                session_id,
+                capabilities,
+                ..
+            } => {
+                if let Some(row) = self.sessions.get_mut(session_id) {
+                    row.capabilities = Some(capabilities.clone());
                 }
             }
             Event::MessageAppended {

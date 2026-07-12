@@ -688,7 +688,8 @@ mod tests {
                     liveness: "idle".into(),
                     parent_session_id: None,
                     card_id: None,
-                }
+                    capabilities: None,
+                },
             },
             &subs,
         ));
@@ -990,6 +991,7 @@ mod tests {
                 crate::search::SearchIndex::open(&dir.path().join("idx")).unwrap(),
             )),
             token: Arc::new("t".into()),
+            capability_signer: Arc::new(crate::server::capability::CapabilitySigner::for_tests()),
             auth_store: Arc::new(crate::auth_store::AuthStore::open_in_memory().unwrap()),
             allow_installation_token: true,
             session_cookie_secure: true,

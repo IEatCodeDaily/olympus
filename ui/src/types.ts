@@ -27,6 +27,26 @@ export interface Session {
   agent: string | null;       // Hermes profile bound to this session (assignable)
   node: string | null;        // node the runtime runs on ("local" for now)
   liveness?: "running" | "input-required" | "active" | "idle"; // managed: running/input-required from bridge; observed: active from recency; else idle
+  capabilities: CapabilitySet | null; // null preserves the legacy full grant
+}
+
+export interface ResourceLimits {
+  maxCpuSeconds: number | null;
+  maxMemoryBytes: number | null;
+  maxWallSeconds: number | null;
+  maxConcurrentJobs: number | null;
+}
+
+export interface CapabilitySet {
+  version: 1;
+  ids: string[];
+  readablePaths: string[];
+  writablePaths: string[];
+  linkedRepos: string[];
+  linkedVaults: string[];
+  resourceLimits: ResourceLimits;
+  canFork: boolean;
+  signature: string;
 }
 
 export type SessionSource =

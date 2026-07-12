@@ -89,6 +89,10 @@ async fn main() -> Result<()> {
     warn_if_obsolete_event_log_exists(&home);
 
     let token = auth::load_or_create_token()?;
+    let capability_signer = Arc::new(
+        olympus_control_plane::server::capability::CapabilitySigner::load_or_create(&home)
+            .context("loading capability signing key")?,
+    );
     let auth_store = Arc::new(
         olympus_control_plane::auth_store::AuthStore::open(&home.join("auth.sqlite"))
             .context("opening Hall authentication store")?,
@@ -212,6 +216,7 @@ async fn main() -> Result<()> {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
         token: Arc::new(token.clone()),
+        capability_signer,
         auth_store,
         allow_installation_token,
         session_cookie_secure,
