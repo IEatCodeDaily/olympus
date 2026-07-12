@@ -9,6 +9,9 @@
 //! `docs/reviews/acp-wire-spike.md` for the source-verified ACP method table.
 
 pub mod acp;
+pub mod child;
+pub mod client;
+pub mod framing;
 pub mod hermes;
 
 use std::pin::Pin;
