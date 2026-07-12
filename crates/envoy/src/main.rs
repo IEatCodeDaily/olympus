@@ -101,6 +101,13 @@ async fn main() -> Result<()> {
     let table = Arc::new(table);
     let state_dir = envoy_state_dir(&node_id)?;
     let spool = Arc::new(EventSpool::open(&state_dir)?);
+    if let Some(state_db) = observer_state_db()? {
+        let observer_spool = spool.clone();
+        std::thread::Builder::new()
+            .name("olympus-statedb-observer".into())
+            .spawn(move || run_observer(state_db, observer_spool))
+            .context("spawning state.db observer")?;
+    }
 
     // Transport selection: `--hall iroh:<node-id>` connects via iroh (public
     // n0 relays, ADR 0008 §1 / S7); otherwise UDS (default local path).
@@ -308,6 +315,30 @@ where
         })
     };
 
+    let replay_handle = {
+        let replay_conn = conn.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let sessions = match replay_conn.spool.sessions() {
+                    Ok(sessions) => sessions,
+                    Err(_) => break,
+                };
+                for session_id in sessions {
+                    let frames = match replay_conn.spool.read(&session_id, None) {
+                        Ok(frames) => frames,
+                        Err(_) => continue,
+                    };
+                    for frame in frames {
+                        if replay_conn.send_frame(&frame).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        })
+    };
+
     // Idle session reaper — terminates agent sessions that have been idle
     // longer than IDLE_REAP_THRESHOLD. Sessions can be resumed later via
     // ensure_runtime with a resume_hermes_id. Frees memory and child
@@ -369,6 +400,7 @@ where
     // Read loop exited (Hall disconnected or error). Abort the heartbeat and
     // reaper tasks so they don't leak holding Arc clones across reconnects.
     hb_handle.abort();
+    replay_handle.abort();
     reaper_handle.abort();
 
     Ok(())
@@ -535,6 +567,67 @@ async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Re
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
+
+fn observer_state_db() -> Result<Option<PathBuf>> {
+    let path = if let Some(path) = arg_value("--state-db") {
+        PathBuf::from(path)
+    } else if let Ok(path) = std::env::var("HERMES_STATE_DB") {
+        PathBuf::from(path)
+    } else {
+        let home = std::env::var("HOME").context("HOME is not set")?;
+        PathBuf::from(home).join(".hermes").join("state.db")
+    };
+    Ok(path.exists().then_some(path))
+}
+
+fn run_observer(path: PathBuf, spool: Arc<EventSpool>) {
+    let mut observer = match olympus_envoy::observer::StateDbObserver::open(&path) {
+        Ok(observer) => observer,
+        Err(error) => {
+            tracing::error!(error = %error, db = %path.display(), "state.db observer failed to start");
+            return;
+        }
+    };
+    loop {
+        match observer.poll(1_000) {
+            Ok(events) => {
+                let active = !events.is_empty();
+                for payload in events {
+                    let hermes_id = match &payload {
+                        olympus_proto::frames::ObservedEvent::Session { hermes_id, .. }
+                        | olympus_proto::frames::ObservedEvent::Message { hermes_id, .. } => {
+                            hermes_id
+                        }
+                    };
+                    let session_id = format!("observed:{hermes_id}");
+                    let frame = EnvoyFrame::Observed {
+                        seq: match spool.next_seq(&session_id) {
+                            Ok(seq) => seq,
+                            Err(error) => {
+                                tracing::error!(error = %error, "allocating observation sequence");
+                                continue;
+                            }
+                        },
+                        session_id,
+                        payload,
+                    };
+                    if let Err(error) = spool.append(&frame) {
+                        tracing::error!(error = %error, "spooling state.db observation");
+                    }
+                }
+                std::thread::sleep(if active {
+                    std::time::Duration::from_secs(2)
+                } else {
+                    std::time::Duration::from_secs(30)
+                });
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "state.db observation poll failed");
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            }
+        }
+    }
+}
 
 impl Conn {
     /// The turn id to stamp on event frames for the current turn. We reuse the

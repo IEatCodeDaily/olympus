@@ -224,6 +224,9 @@ fn event_identity(frame: &EnvoyFrame) -> Option<(&str, u64)> {
     match frame {
         EnvoyFrame::Event {
             session_id, seq, ..
+        }
+        | EnvoyFrame::Observed {
+            session_id, seq, ..
         } => Some((session_id, *seq)),
         _ => None,
     }

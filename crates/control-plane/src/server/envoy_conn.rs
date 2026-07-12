@@ -171,6 +171,82 @@ impl EnvoyConnection {
         Ok(is_new)
     }
 
+    pub async fn apply_observed(
+        &self,
+        transport_session_id: &str,
+        seq: u64,
+        payload: olympus_proto::frames::ObservedEvent,
+    ) -> Result<bool> {
+        use olympus_proto::frames::ObservedEvent;
+        let (hermes_id, message_id, event) = match payload {
+            ObservedEvent::Session {
+                hermes_id,
+                source,
+                model,
+                title,
+                started_at,
+                message_count,
+                input_tokens,
+                output_tokens,
+                archived: _,
+            } => {
+                let event = crate::event::Event::SessionCreated {
+                    session_id: hermes_id.clone(),
+                    hermes_id: hermes_id.clone(),
+                    source,
+                    model,
+                    title,
+                    started_at,
+                    message_count,
+                    input_tokens,
+                    output_tokens,
+                    agent: None,
+                    node: None,
+                };
+                (hermes_id, None, event)
+            }
+            ObservedEvent::Message {
+                hermes_id,
+                message_id,
+                role,
+                content,
+                tool_name,
+                tool_calls,
+                reasoning,
+                timestamp,
+                token_count,
+                finish_reason,
+            } => {
+                let event = crate::event::Event::MessageAppended {
+                    session_id: hermes_id.clone(),
+                    hermes_session_id: hermes_id.clone(),
+                    message_id,
+                    role,
+                    content,
+                    tool_name,
+                    tool_calls,
+                    reasoning,
+                    timestamp,
+                    token_count,
+                    finish_reason,
+                };
+                (hermes_id, Some(message_id), event)
+            }
+        };
+        let is_new = match &self.log {
+            Some(log) => {
+                log.accept_observed(transport_session_id, seq, &hermes_id, message_id, &event)?
+            }
+            None => true,
+        };
+        self.send_request(HallFrame::Ack {
+            session_id: transport_session_id.to_owned(),
+            seq,
+        })
+        .await?;
+        Ok(is_new)
+    }
+
     pub fn watermark(&self, session_id: &str) -> Result<Option<u64>> {
         self.log
             .as_ref()
@@ -655,6 +731,99 @@ mod tests {
         assert_eq!(events.recv().await.unwrap(), AgentEvent::Text("two".into()));
         assert!(events.try_recv().is_err());
         assert_eq!(reopened.envoy_watermark("s1").unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn observed_state_db_rows_survive_hall_restart_exactly_once() {
+        use olympus_envoy::observer::StateDbObserver;
+        use olympus_envoy::spool::EventSpool;
+        use olympus_proto::frames::{EnvoyFrame, ObservedEvent};
+        use rusqlite::Connection;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_db = dir.path().join("state.db");
+        let db = Connection::open(&state_db).unwrap();
+        db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,model TEXT,title TEXT,started_at REAL,message_count INTEGER,input_tokens INTEGER,output_tokens INTEGER,archived INTEGER); CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,role TEXT,content TEXT,tool_name TEXT,tool_calls TEXT,reasoning TEXT,timestamp REAL,token_count INTEGER,finish_reason TEXT,active INTEGER,compacted INTEGER); INSERT INTO sessions VALUES('seed','cli',NULL,NULL,0,0,0,0,0);").unwrap();
+        drop(db);
+        let mut observer = StateDbObserver::open(&state_db).unwrap();
+        let spool = EventSpool::open(&dir.path().join("envoy")).unwrap();
+        let hall_db = dir.path().join("hall.db");
+
+        let insert = |session: &str, content: &str, timestamp: f64| {
+            let db = Connection::open(&state_db).unwrap();
+            db.execute(
+                "INSERT OR IGNORE INTO sessions VALUES(?1,'telegram','m','title',?2,1,0,0,0)",
+                rusqlite::params![session, timestamp],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO messages(session_id,role,content,timestamp,active,compacted) VALUES(?1,'user',?2,?3,1,0)",
+                rusqlite::params![session, content, timestamp],
+            )
+            .unwrap();
+        };
+        let spool_poll = |observer: &mut StateDbObserver, spool: &EventSpool| {
+            for payload in observer.poll(100).unwrap() {
+                let hermes_id = match &payload {
+                    ObservedEvent::Session { hermes_id, .. }
+                    | ObservedEvent::Message { hermes_id, .. } => hermes_id,
+                };
+                let transport_id = format!("observed:{hermes_id}");
+                let frame = EnvoyFrame::Observed {
+                    seq: spool.next_seq(&transport_id).unwrap(),
+                    session_id: transport_id,
+                    payload,
+                };
+                spool.append(&frame).unwrap();
+            }
+        };
+
+        insert("remote", "one", 1.0);
+        spool_poll(&mut observer, &spool);
+        let log = Arc::new(crate::log::Log::open(&hall_db).unwrap());
+        let (writer, _peer) = tokio::io::duplex(4096);
+        let conn = EnvoyConnection::new(Box::new(writer), Some(log.clone()));
+        for frame in spool.read("observed:remote", None).unwrap() {
+            if let EnvoyFrame::Observed {
+                session_id,
+                seq,
+                payload,
+            } = frame
+            {
+                conn.apply_observed(&session_id, seq, payload)
+                    .await
+                    .unwrap();
+            }
+        }
+        assert_eq!(log.recent_messages("remote", 10).unwrap().len(), 1);
+        drop(conn);
+        drop(log);
+
+        insert("remote", "two", 2.0);
+        spool_poll(&mut observer, &spool);
+        let reopened = Arc::new(crate::log::Log::open(&hall_db).unwrap());
+        let (writer, _peer) = tokio::io::duplex(4096);
+        let conn = EnvoyConnection::new(Box::new(writer), Some(reopened.clone()));
+        for _ in 0..2 {
+            for frame in spool.read("observed:remote", None).unwrap() {
+                if let EnvoyFrame::Observed {
+                    session_id,
+                    seq,
+                    payload,
+                } = frame
+                {
+                    conn.apply_observed(&session_id, seq, payload)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        let messages = reopened.recent_messages("remote", 10).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content.as_deref(), Some("one"));
+        assert_eq!(messages[1].content.as_deref(), Some("two"));
+        reopened.retain_native().unwrap();
+        assert_eq!(reopened.recent_messages("remote", 10).unwrap().len(), 2);
     }
 
     #[tokio::test]

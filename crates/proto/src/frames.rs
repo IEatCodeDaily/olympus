@@ -25,6 +25,46 @@ use crate::agent::AgentCommand;
 use crate::runtime::RuntimeSpec;
 use crate::version::BuildVersion;
 
+/// A normalized, read-only observation from Hermes `state.db`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ObservedEvent {
+    Session {
+        #[serde(rename = "hermesId")]
+        hermes_id: String,
+        source: String,
+        model: Option<String>,
+        title: Option<String>,
+        #[serde(rename = "startedAt")]
+        started_at: f64,
+        #[serde(rename = "messageCount")]
+        message_count: u64,
+        #[serde(rename = "inputTokens")]
+        input_tokens: u64,
+        #[serde(rename = "outputTokens")]
+        output_tokens: u64,
+        archived: bool,
+    },
+    Message {
+        #[serde(rename = "hermesId")]
+        hermes_id: String,
+        #[serde(rename = "messageId")]
+        message_id: u64,
+        role: String,
+        content: Option<String>,
+        #[serde(rename = "toolName")]
+        tool_name: Option<String>,
+        #[serde(rename = "toolCalls")]
+        tool_calls: Option<String>,
+        reasoning: Option<String>,
+        timestamp: f64,
+        #[serde(rename = "tokenCount")]
+        token_count: Option<u64>,
+        #[serde(rename = "finishReason")]
+        finish_reason: Option<String>,
+    },
+}
+
 /// One entry in the envoy's runtimes table: which session it holds, its
 /// backing Hermes session id, and resume metadata (ADR 0008 §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -196,6 +236,13 @@ pub enum EnvoyFrame {
         seq: u64,
         payload: crate::agent::AgentEvent,
     },
+    /// A host observation, sequenced and spooled exactly like runtime events.
+    Observed {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        seq: u64,
+        payload: ObservedEvent,
+    },
     /// Runtimes-table update (sent in hello and on change).
     Runtimes { runtimes: Vec<RuntimeStatus> },
 }
@@ -350,6 +397,22 @@ mod tests {
                 turn_id: "t-1".into(),
                 seq: 11,
                 payload: AgentEvent::Text("chunk".into()),
+            },
+            EnvoyFrame::Observed {
+                session_id: "observed:s-1".into(),
+                seq: 12,
+                payload: ObservedEvent::Message {
+                    hermes_id: "s-1".into(),
+                    message_id: 3,
+                    role: "user".into(),
+                    content: Some("hello".into()),
+                    tool_name: None,
+                    tool_calls: None,
+                    reasoning: None,
+                    timestamp: 1.0,
+                    token_count: None,
+                    finish_reason: None,
+                },
             },
             EnvoyFrame::Runtimes {
                 runtimes: vec![sample_runtime_status()],
