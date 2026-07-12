@@ -112,6 +112,8 @@ pub struct AppState {
     pub hall_iroh_id: Option<Arc<String>>,
     /// Reverse proxy routing table — slug → backend target.
     pub proxy: crate::proxy::ProxyTable,
+    /// Desired external-edge state and its sole serialized driver.
+    pub edge: crate::edge::EdgeManager,
     /// Markdown-first knowledge vault storage (ADR 0004).
     pub vaults: Arc<crate::vault::VaultStore>,
     /// Read-only connection to the Hermes `state.db` for on-demand message
@@ -150,6 +152,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::projects::router())
         .merge(routes::repos::router())
         .merge(routes::organizations::router())
+        .merge(routes::edge::router())
         .route("/api/enroll", post(routes::enroll::mint_enroll))
         .route(
             "/api/proxy",
@@ -183,6 +186,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
         .route("/api/auth/login", post(identity::login))
+        .route("/api/edge/auth", get(routes::edge::forward_auth))
         .merge(protected)
         .merge(routes::enroll::router())
         .merge(proxy_forward)
@@ -293,6 +297,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "snapshot": { "sessions": state.snapshot_sessions, "messages": state.snapshot_messages },
         "syncConnected": state.sync_connected.load(Ordering::SeqCst),
         "hermesProfile": state.hermes_profile.as_str(),
+        "edge": if state.edge.healthy() { "ready" } else { "missing" },
     }))
 }
 

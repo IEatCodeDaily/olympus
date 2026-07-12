@@ -234,6 +234,9 @@ async fn main() -> Result<()> {
             log_arc.clone(),
         ),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
+        edge: olympus_control_plane::edge::EdgeManager::new(Arc::new(
+            olympus_control_plane::edge::caddy::CaddyDriver::localhost("127.0.0.1:8787"),
+        )),
         vaults: Arc::new(VaultStore::new(org_workspace_root(&default_org())?)),
         state_db: state_db_reader.map(Arc::new),
         projects: Arc::new(olympus_control_plane::projects::ProjectStore::new(
@@ -247,6 +250,23 @@ async fn main() -> Result<()> {
         home: Arc::new(home.clone()),
         hall_iroh_id: None, // set below after endpoint creation
     };
+
+    // Caddy may restart independently of Hall and lose its dynamic subtree.
+    // Re-apply the full desired level periodically; the driver serializes its
+    // writer and the full-subtree PATCH is idempotent.
+    {
+        let edge = state.edge.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if let Err(error) = edge.converge() {
+                    tracing::debug!(%error, "edge reconciliation deferred");
+                }
+            }
+        });
+    }
 
     // Negative-polarity rollback flag: Envoy observation is default-on, so the
     // legacy Hall poll is disabled unless an operator explicitly sets this to

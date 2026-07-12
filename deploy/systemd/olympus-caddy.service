@@ -1,0 +1,25 @@
+[Unit]
+Description=Olympus Caddy edge (Caddy >= 2.11.1)
+After=network-online.target olympus-hall.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStartPre=/bin/sh -c 'test "$(caddy version | sed -n "s/^v\([0-9.]*\).*/\1/p")" = "2.11.1" || dpkg --compare-versions "$(caddy version | sed -n "s/^v\([0-9.]*\).*/\1/p")" ge 2.11.1'
+ExecStart=/usr/bin/caddy run --environ --config %h/.olympus/caddy/caddy.json
+ExecReload=/usr/bin/caddy reload --config %h/.olympus/caddy/caddy.json --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/caddy %h/.config/caddy %h/.olympus
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=default.target

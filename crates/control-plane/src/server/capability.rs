@@ -29,6 +29,8 @@ pub mod ids {
     pub const PACKAGE_INSTALL: &str = "package.install";
     pub const PACKAGE_GRANT: &str = "package.grant";
     pub const PACKAGE_ACTIVATE: &str = "package.activate";
+    pub const PROXY_ROUTE_REGISTER: &str = "proxy.route.register";
+    pub const STATIC_PUBLISH: &str = "static.publish";
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

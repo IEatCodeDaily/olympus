@@ -1011,6 +1011,7 @@ mod tests {
             envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
             hall_iroh_id: None,
             proxy: ProxyTable::new(),
+            edge: crate::edge::EdgeManager::new(crate::edge::MemoryDriver::available()),
             vaults: Arc::new(crate::vault::VaultStore::with_jj_mode(
                 dir.path().join("v"),
                 crate::vault::JjMode::Disabled,

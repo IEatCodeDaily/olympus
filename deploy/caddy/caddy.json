@@ -1,0 +1,17 @@
+{
+  "admin": {
+    "listen": "127.0.0.1:2019",
+    "enforce_origin": true,
+    "origins": ["127.0.0.1:2019"]
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "olympus": {
+          "listen": [":8080"],
+          "routes": []
+        }
+      }
+    }
+  }
+}
