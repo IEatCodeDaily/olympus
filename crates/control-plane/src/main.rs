@@ -243,42 +243,44 @@ async fn main() -> Result<()> {
         hall_iroh_id: None, // set below after endpoint creation
     };
 
-    let sync_log = Arc::clone(&log_arc);
-    let sync_views = Arc::clone(&state.views);
-    let sync_search = Arc::clone(&state.search);
-    let sync_deltas = state.deltas.clone();
-    let sync_state_db = state_db.clone();
-    let sync_connected_flag = sync_connected.clone();
-    std::thread::Builder::new()
-        .name("olympus-live-sync".into())
-        .spawn(move || {
-            tracing::info!(db = %sync_state_db.display(), "live sync worker starting");
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                sync::run_live_sync(
-                    sync_state_db,
-                    sync_log,
-                    sync_views,
-                    sync_search,
-                    sync_deltas,
-                    sync_connected_flag.clone(),
-                )
-            }));
-            // The worker is no longer connected once the loop exits for any reason.
-            sync_connected_flag.store(false, Ordering::SeqCst);
-            match result {
-                Ok(Ok(())) => tracing::warn!("live sync worker loop returned (unexpected)"),
-                Ok(Err(err)) => tracing::error!(error = %err, "live sync worker errored"),
-                Err(panic) => {
-                    let msg = panic
-                        .downcast_ref::<&str>()
-                        .map(|s| s.to_string())
-                        .or_else(|| panic.downcast_ref::<String>().cloned())
-                        .unwrap_or_else(|| "unknown panic".into());
-                    tracing::error!(panic = %msg, "live sync worker PANICKED");
+    // Negative-polarity rollback flag: Envoy observation is default-on, so the
+    // legacy Hall poll is disabled unless an operator explicitly sets this to
+    // false/0/off.
+    let disable_hall_statedb_poll = std::env::var("OLYMPUS_DISABLE_HALL_STATEDB_POLL")
+        .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+        .unwrap_or(true);
+    if !disable_hall_statedb_poll {
+        let sync_log = Arc::clone(&log_arc);
+        let sync_views = Arc::clone(&state.views);
+        let sync_search = Arc::clone(&state.search);
+        let sync_deltas = state.deltas.clone();
+        let sync_state_db = state_db.clone();
+        let sync_connected_flag = sync_connected.clone();
+        std::thread::Builder::new()
+            .name("olympus-live-sync".into())
+            .spawn(move || {
+                tracing::info!(db = %sync_state_db.display(), "legacy Hall live sync worker starting");
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sync::run_live_sync(
+                        sync_state_db,
+                        sync_log,
+                        sync_views,
+                        sync_search,
+                        sync_deltas,
+                        sync_connected_flag.clone(),
+                    )
+                }));
+                sync_connected_flag.store(false, Ordering::SeqCst);
+                match result {
+                    Ok(Ok(())) => tracing::warn!("live sync worker loop returned (unexpected)"),
+                    Ok(Err(err)) => tracing::error!(error = %err, "live sync worker errored"),
+                    Err(_) => tracing::error!("live sync worker panicked"),
                 }
-            }
-        })
-        .expect("spawn live sync thread");
+            })
+            .expect("spawn live sync thread");
+    } else {
+        tracing::info!("Hall state.db poll disabled; Envoy observation is authoritative");
+    }
 
     // Spawn the iroh listener for REMOTE envoys (ADR 0008 §1, S7). Public n0
     // relays; peers are gated by the node-id allowlist in ~/.olympus/hall.toml

@@ -764,6 +764,17 @@ async fn handle_envoy_frame(
                 }
             }
         }
+        EnvoyFrame::Observed {
+            session_id,
+            seq,
+            payload,
+        } => {
+            if let Some(c) = conn {
+                if let Err(error) = c.apply_observed(&session_id, seq, payload).await {
+                    tracing::warn!(session = %session_id, seq, error = %error, "envoy observation rejected; leaving unacked");
+                }
+            }
+        }
         EnvoyFrame::Runtimes { runtimes: _ } => {
             tracing::debug!("runtimes table update received (S4 will process)");
         }

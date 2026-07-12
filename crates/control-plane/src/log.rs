@@ -147,6 +147,55 @@ impl Log {
         Ok(true)
     }
 
+    pub fn accept_observed(
+        &self,
+        transport_session_id: &str,
+        seq: u64,
+        hermes_id: &str,
+        message_id: Option<u64>,
+        event: &Event,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+        let tx = conn.transaction()?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT seq FROM envoy_watermarks WHERE session_id=?1",
+                [transport_session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.is_some_and(|watermark| seq <= watermark as u64) {
+            return Ok(false);
+        }
+        let expected = current.map_or(0, |watermark| watermark as u64 + 1);
+        anyhow::ensure!(
+            seq == expected,
+            "envoy observation sequence gap for {transport_session_id}: expected {expected}, got {seq}"
+        );
+        tx.execute(
+            "INSERT OR IGNORE INTO observed_sessions(hermes_id) VALUES(?1)",
+            [hermes_id],
+        )?;
+        let is_new = if let Some(message_id) = message_id {
+            tx.execute(
+                "INSERT OR IGNORE INTO observed_messages(hermes_id,message_id) VALUES(?1,?2)",
+                params![hermes_id, message_id as i64],
+            )? == 1
+        } else {
+            true
+        };
+        if is_new {
+            append_in_tx(&tx, event)?;
+        }
+        tx.execute(
+            "INSERT INTO envoy_watermarks(session_id,seq) VALUES(?1,?2)
+             ON CONFLICT(session_id) DO UPDATE SET seq=excluded.seq",
+            params![transport_session_id, seq as i64],
+        )?;
+        tx.commit()?;
+        Ok(is_new)
+    }
+
     pub fn envoy_watermark(&self, session_id: &str) -> Result<Option<u64>> {
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
         conn.query_row(
@@ -174,7 +223,8 @@ impl Log {
         // Build native session set once (temp table = index-friendly).
         tx.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS _native AS
-             SELECT session_id FROM sessions WHERE source = 'olympus';",
+             SELECT session_id FROM sessions WHERE source = 'olympus'
+             UNION SELECT hermes_id FROM observed_sessions;",
         )?;
 
         // Delete non-native events. session_id IS NULL events are
@@ -1027,6 +1077,8 @@ CREATE TABLE IF NOT EXISTS projects(project_id TEXT PRIMARY KEY,name TEXT NOT NU
 CREATE TABLE IF NOT EXISTS repos(slug TEXT PRIMARY KEY,url TEXT NOT NULL,default_branch TEXT NOT NULL,registered_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS session_repos(session_id TEXT NOT NULL,slug TEXT NOT NULL,attached_at REAL NOT NULL,PRIMARY KEY(session_id,slug));
 CREATE TABLE IF NOT EXISTS envoy_watermarks(session_id TEXT PRIMARY KEY,seq INTEGER NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS observed_sessions(hermes_id TEXT PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS observed_messages(hermes_id TEXT NOT NULL,message_id INTEGER NOT NULL,PRIMARY KEY(hermes_id,message_id)) WITHOUT ROWID;
 "#;
 
 #[cfg(test)]

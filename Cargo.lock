@@ -2627,6 +2627,7 @@ dependencies = [
  "hostname",
  "iroh",
  "olympus-proto",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
