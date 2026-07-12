@@ -627,7 +627,7 @@ async fn handle_envoy_hello(
         protocol_version,
         version: build_version,
         agents,
-        runtimes: _,
+        runtimes,
     } = frame
     else {
         unreachable!("handle_envoy_hello called with non-Hello frame")
@@ -682,6 +682,25 @@ async fn handle_envoy_hello(
 
     // Create the EnvoyConnection and store it for RemoteRuntime.
     let conn = envoy_conns.insert(&node_id, writer).await;
+    for runtime in runtimes {
+        let watermark = match conn.watermark(&runtime.session_id) {
+            Ok(Some(seq)) => seq,
+            Ok(None) => u64::MAX,
+            Err(error) => {
+                tracing::error!(session = %runtime.session_id, error = %error, "reading envoy replay watermark");
+                continue;
+            }
+        };
+        if let Err(error) = conn
+            .send_request(olympus_proto::frames::HallFrame::ResumeFrom {
+                session_id: runtime.session_id,
+                seq: watermark,
+            })
+            .await
+        {
+            tracing::error!(error = %error, "requesting envoy spool replay");
+        }
+    }
     *connected_node = Some(node_id);
 
     HelloOutcome::Accepted(conn)
@@ -736,11 +755,13 @@ async fn handle_envoy_frame(
         EnvoyFrame::Event {
             session_id,
             turn_id: _,
-            seq: _,
+            seq,
             payload,
         } => {
             if let Some(c) = conn {
-                c.forward_event(&session_id, payload);
+                if let Err(error) = c.apply_event(&session_id, seq, payload).await {
+                    tracing::warn!(session = %session_id, seq, error = %error, "envoy event rejected; leaving unacked");
+                }
             }
         }
         EnvoyFrame::Runtimes { runtimes: _ } => {

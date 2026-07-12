@@ -61,16 +61,18 @@ pub struct EnvoyConnection {
     /// Olympus session id. RemoteRuntime reads this to implement
     /// `hermes_session_id()`.
     hermes_ids: std::sync::Mutex<HashMap<String, String>>,
+    log: Option<Arc<crate::log::Log>>,
 }
 
 impl EnvoyConnection {
-    fn new(writer: BoxedWriter) -> Arc<Self> {
+    fn new(writer: BoxedWriter, log: Option<Arc<crate::log::Log>>) -> Arc<Self> {
         Arc::new(Self {
             writer: Mutex::new(tokio::io::BufWriter::new(writer)),
             pending: Mutex::new(HashMap::new()),
             next_req_id: AtomicU64::new(1),
             event_channels: std::sync::Mutex::new(HashMap::new()),
             hermes_ids: std::sync::Mutex::new(HashMap::new()),
+            log,
         })
     }
 
@@ -148,6 +150,31 @@ impl EnvoyConnection {
                 let _ = tx.send(event);
             }
         }
+    }
+
+    /// Durably gate the sequence, forward a new event once, and acknowledge
+    /// the resulting high-water mark. Duplicates are acked without forwarding;
+    /// gaps fail closed and remain unacked.
+    pub async fn apply_event(&self, session_id: &str, seq: u64, event: AgentEvent) -> Result<bool> {
+        let is_new = match &self.log {
+            Some(log) => log.accept_envoy_seq(session_id, seq)?,
+            None => true,
+        };
+        if is_new {
+            self.forward_event(session_id, event);
+        }
+        self.send_request(HallFrame::Ack {
+            session_id: session_id.to_owned(),
+            seq,
+        })
+        .await?;
+        Ok(is_new)
+    }
+
+    pub fn watermark(&self, session_id: &str) -> Result<Option<u64>> {
+        self.log
+            .as_ref()
+            .map_or(Ok(None), |log| log.envoy_watermark(session_id))
     }
 
     /// Get or create the broadcast sender for a session's event channel, then
@@ -239,6 +266,7 @@ fn inject_req_id(frame: HallFrame, req_id: u64) -> HallFrame {
 #[derive(Clone, Default)]
 pub struct EnvoyConnections {
     inner: Arc<RwLock<HashMap<String, Arc<EnvoyConnection>>>>,
+    log: Option<Arc<crate::log::Log>>,
 }
 
 impl EnvoyConnections {
@@ -246,9 +274,16 @@ impl EnvoyConnections {
         Self::default()
     }
 
+    pub fn with_log(log: Arc<crate::log::Log>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+            log: Some(log),
+        }
+    }
+
     /// Register a connection for a node. Returns the connection.
     pub async fn insert(&self, node_id: &str, writer: BoxedWriter) -> Arc<EnvoyConnection> {
-        let conn = EnvoyConnection::new(writer);
+        let conn = EnvoyConnection::new(writer, self.log.clone());
         self.inner
             .write()
             .await
@@ -493,7 +528,7 @@ mod tests {
         s1.set_nonblocking(true).unwrap();
         let stream = tokio::net::UnixStream::from_std(s1).unwrap();
         let (_reader, writer) = stream.into_split();
-        EnvoyConnection::new(Box::new(writer))
+        EnvoyConnection::new(Box::new(writer), None)
     }
 
     #[tokio::test]
@@ -562,5 +597,87 @@ mod tests {
         conn.fail_all().await;
         // Receiver should get an error (sender dropped).
         assert!(rx.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn durable_watermark_drops_duplicates_across_hall_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("hall.db");
+        let log = Arc::new(crate::log::Log::open(&db).unwrap());
+        let (writer, mut peer) = tokio::io::duplex(4096);
+        let conn = EnvoyConnection::new(Box::new(writer), Some(log.clone()));
+        let mut events = conn.subscribe_events("s1");
+
+        assert!(conn
+            .apply_event("s1", 0, AgentEvent::Text("zero".into()))
+            .await
+            .unwrap());
+        assert!(!conn
+            .apply_event("s1", 0, AgentEvent::Text("duplicate".into()))
+            .await
+            .unwrap());
+        assert!(conn
+            .apply_event("s1", 1, AgentEvent::Text("one".into()))
+            .await
+            .unwrap());
+        assert_eq!(
+            events.recv().await.unwrap(),
+            AgentEvent::Text("zero".into())
+        );
+        assert_eq!(events.recv().await.unwrap(), AgentEvent::Text("one".into()));
+        assert!(events.try_recv().is_err());
+        assert_eq!(log.envoy_watermark("s1").unwrap(), Some(1));
+
+        use tokio::io::AsyncReadExt as _;
+        let mut ack_bytes = vec![0; 512];
+        let count = peer.read(&mut ack_bytes).await.unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&ack_bytes[..count])
+                .matches("\"kind\":\"ack\"")
+                .count(),
+            3
+        );
+        drop(conn);
+        drop(log);
+
+        let reopened = Arc::new(crate::log::Log::open(&db).unwrap());
+        let (writer, _peer) = tokio::io::duplex(4096);
+        let conn = EnvoyConnection::new(Box::new(writer), Some(reopened.clone()));
+        let mut events = conn.subscribe_events("s1");
+        assert!(!conn
+            .apply_event("s1", 1, AgentEvent::Text("replayed-one".into()))
+            .await
+            .unwrap());
+        assert!(conn
+            .apply_event("s1", 2, AgentEvent::Text("two".into()))
+            .await
+            .unwrap());
+        assert_eq!(events.recv().await.unwrap(), AgentEvent::Text("two".into()));
+        assert!(events.try_recv().is_err());
+        assert_eq!(reopened.envoy_watermark("s1").unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn sequence_gap_is_not_forwarded_or_acknowledged() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let log = Arc::new(crate::log::Log::open(file.path()).unwrap());
+        let (writer, mut peer) = tokio::io::duplex(512);
+        let conn = EnvoyConnection::new(Box::new(writer), Some(log.clone()));
+        let mut events = conn.subscribe_events("s1");
+
+        let error = conn
+            .apply_event("s1", 2, AgentEvent::Text("gap".into()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("expected 0, got 2"));
+        assert!(events.try_recv().is_err());
+        assert_eq!(log.envoy_watermark("s1").unwrap(), None);
+        use tokio::io::AsyncReadExt as _;
+        let mut byte = [0];
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), peer.read(&mut byte))
+                .await
+                .is_err()
+        );
     }
 }

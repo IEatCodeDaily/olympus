@@ -14,7 +14,6 @@
 //!   olympus-envoy [--socket <path>] [--node-id <id>] [--mock]
 //! Defaults: socket = `$OLYMPUS_CONTROL_SOCKET` or `~/.olympus/control.sock`.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,6 +24,7 @@ use olympus_envoy::{
     discovery,
     mock_runtime::MockAgentRuntime,
     runtime_table::RuntimeTable,
+    spool::EventSpool,
 };
 use olympus_proto::{
     frames::{EnvoyFrame, HallFrame},
@@ -99,6 +99,8 @@ async fn main() -> Result<()> {
     // (ADR 0008 §2). The runtime table (and its ACP children) survives across
     // reconnects; each new connection re-sends hello.
     let table = Arc::new(table);
+    let state_dir = envoy_state_dir(&node_id)?;
+    let spool = Arc::new(EventSpool::open(&state_dir)?);
 
     // Transport selection: `--hall iroh:<node-id>` connects via iroh (public
     // n0 relays, ADR 0008 §1 / S7); otherwise UDS (default local path).
@@ -121,6 +123,7 @@ async fn main() -> Result<()> {
                         &node_id,
                         &hostname_val,
                         agents.clone(),
+                        spool.clone(),
                     )
                     .await
                     {
@@ -160,6 +163,7 @@ async fn main() -> Result<()> {
             &node_id,
             &hostname_val,
             agents.clone(),
+            spool.clone(),
         )
         .await
         {
@@ -182,13 +186,13 @@ fn envoy_state_dir(node_id: &str) -> Result<PathBuf> {
 /// Type-erased writer — UDS write half locally, iroh QUIC SendStream remotely.
 type BoxedWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
 
-/// Shared connection state: the writer (mutex-guarded), the runtime table, and
-/// per-session counters.
+/// Shared connection state: writer, runtime table, durable event spool, and
+/// per-session turn counters.
 struct Conn {
     writer: Mutex<BufWriter<BoxedWriter>>,
     table: Arc<RuntimeTable>,
-    seq: Mutex<HashMap<String, u64>>,
-    turn: Mutex<HashMap<String, u64>>,
+    spool: Arc<EventSpool>,
+    turn: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl Conn {
@@ -202,12 +206,8 @@ impl Conn {
     }
 
     /// Next per-session event seq (starts at 0).
-    async fn next_seq(&self, session_id: &str) -> u64 {
-        let mut m = self.seq.lock().await;
-        let v = m.entry(session_id.to_string()).or_insert(0);
-        let current = *v;
-        *v += 1;
-        current
+    fn next_seq(&self, session_id: &str) -> Result<u64> {
+        self.spool.next_seq(session_id)
     }
 
     /// Next per-session turn id (monotonic string).
@@ -253,6 +253,7 @@ async fn run_connection<R, W>(
     node_id: &str,
     hostname: &str,
     agents: Vec<discovery::AgentInfo>,
+    spool: Arc<EventSpool>,
 ) -> Result<()>
 where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -261,12 +262,22 @@ where
     let conn = Arc::new(Conn {
         writer: Mutex::new(BufWriter::new(Box::new(writer) as BoxedWriter)),
         table: table.clone(),
-        seq: Mutex::new(HashMap::new()),
-        turn: Mutex::new(HashMap::new()),
+        spool,
+        turn: Mutex::new(std::collections::HashMap::new()),
     });
 
     // Hello handshake.
     let agents_json = serde_json::to_value(&agents).unwrap_or_default();
+    let mut runtimes = Vec::new();
+    for session_id in conn.spool.sessions()? {
+        runtimes.push(olympus_proto::frames::RuntimeStatus {
+            last_seq: conn.spool.last_seq(&session_id)?.unwrap_or(0),
+            session_id,
+            hermes_id: None,
+            state: "spooled".into(),
+            resumable: false,
+        });
+    }
     let hello = EnvoyFrame::Hello {
         node_id: node_id.to_string(),
         hostname: hostname.to_string(),
@@ -274,7 +285,7 @@ where
         protocol_version: PROTOCOL_VERSION,
         version: BuildVersion::for_binary(env!("CARGO_PKG_VERSION")),
         agents: Some(agents_json),
-        runtimes: Vec::new(),
+        runtimes,
     };
     conn.send_frame(&hello).await?;
     tracing::info!("hello sent");
@@ -341,12 +352,18 @@ where
             }
         };
 
-        let conn2 = conn.clone();
-        tokio::spawn(async move {
-            if let Err(e) = dispatch_frame(conn2, frame).await {
+        if matches!(frame, HallFrame::Ack { .. } | HallFrame::ResumeFrom { .. }) {
+            if let Err(e) = dispatch_frame(conn.clone(), frame).await {
                 tracing::error!(error = %e, "frame dispatch error");
             }
-        });
+        } else {
+            let conn2 = conn.clone();
+            tokio::spawn(async move {
+                if let Err(e) = dispatch_frame(conn2, frame).await {
+                    tracing::error!(error = %e, "frame dispatch error");
+                }
+            });
+        }
     }
 
     // Read loop exited (Hall disconnected or error). Abort the heartbeat and
@@ -453,10 +470,17 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
             conn.send_resp_result(req_id, result).await;
         }
         HallFrame::Ack { session_id, seq } => {
-            tracing::debug!(session = %session_id, seq, "ack from Hall (spool truncation — S4)");
+            conn.spool.acknowledge(&session_id, seq)?;
+            tracing::debug!(session = %session_id, seq, "ack from Hall truncated spool");
         }
         HallFrame::ResumeFrom { session_id, seq } => {
-            tracing::debug!(session = %session_id, seq, "resume_from from Hall (replay — S4)");
+            // u64::MAX is the wire sentinel for "Hall has no watermark yet";
+            // seq 0 is a valid first event and must be replayed.
+            let after = (seq != u64::MAX).then_some(seq);
+            for frame in conn.spool.read(&session_id, after)? {
+                conn.send_frame(&frame).await?;
+            }
+            tracing::debug!(session = %session_id, seq, "replayed spool from Hall watermark");
         }
     }
     Ok(())
@@ -489,13 +513,14 @@ async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Re
     // loop hangs forever after the turn completes.
     while let Some(event) = events.next().await {
         let turn_id = conn.next_turn_id_for_event(session_id).await;
-        let seq = conn.next_seq(session_id).await;
+        let seq = conn.next_seq(session_id)?;
         let frame = EnvoyFrame::Event {
             session_id: session_id.to_string(),
             turn_id,
             seq,
             payload: event.clone(),
         };
+        conn.spool.append(&frame)?;
         if let Err(e) = conn.send_frame(&frame).await {
             tracing::error!(error = %e, "failed to send event frame");
             return Err(e);

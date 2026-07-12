@@ -10,4 +10,5 @@ pub mod bridge;
 pub mod discovery;
 pub mod mock_runtime;
 pub mod runtime_table;
+pub mod spool;
 pub mod transport;

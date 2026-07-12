@@ -117,6 +117,48 @@ impl Log {
         })? as usize)
     }
 
+    /// Durably advance the per-session Envoy transport watermark. Returns
+    /// false for a duplicate and fails closed if delivery has a gap.
+    pub fn accept_envoy_seq(&self, session_id: &str, seq: u64) -> Result<bool> {
+        let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+        let tx = conn.transaction()?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT seq FROM envoy_watermarks WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.is_some_and(|watermark| seq <= watermark as u64) {
+            return Ok(false);
+        }
+        let expected = current.map_or(0, |watermark| watermark as u64 + 1);
+        if seq != expected {
+            anyhow::bail!(
+                "envoy event sequence gap for {session_id}: expected {expected}, got {seq}"
+            );
+        }
+        tx.execute(
+            "INSERT INTO envoy_watermarks(session_id,seq) VALUES(?1,?2)
+             ON CONFLICT(session_id) DO UPDATE SET seq=excluded.seq",
+            params![session_id, seq as i64],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn envoy_watermark(&self, session_id: &str) -> Result<Option<u64>> {
+        let conn = self.conn.lock().expect("SQLite mutex poisoned");
+        conn.query_row(
+            "SELECT seq FROM envoy_watermarks WHERE session_id=?1",
+            [session_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.map(|seq| seq as u64))
+        .map_err(Into::into)
+    }
+
     /// Keep Olympus-native events only (setup declarations, cards, registry,
     /// olympus sessions + their messages). The state.db mirror is rebuilt on
     /// every boot so we must purge it between boots.
@@ -984,6 +1026,7 @@ CREATE TABLE IF NOT EXISTS registry(kind TEXT NOT NULL,slug TEXT NOT NULL,defini
 CREATE TABLE IF NOT EXISTS projects(project_id TEXT PRIMARY KEY,name TEXT NOT NULL,vaults TEXT NOT NULL DEFAULT '[]',repos TEXT NOT NULL DEFAULT '[]',boards TEXT NOT NULL DEFAULT '[]',created_at REAL NOT NULL,deleted_at REAL,org_id TEXT NOT NULL DEFAULT 'personal');
 CREATE TABLE IF NOT EXISTS repos(slug TEXT PRIMARY KEY,url TEXT NOT NULL,default_branch TEXT NOT NULL,registered_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS session_repos(session_id TEXT NOT NULL,slug TEXT NOT NULL,attached_at REAL NOT NULL,PRIMARY KEY(session_id,slug));
+CREATE TABLE IF NOT EXISTS envoy_watermarks(session_id TEXT PRIMARY KEY,seq INTEGER NOT NULL) WITHOUT ROWID;
 "#;
 
 #[cfg(test)]
