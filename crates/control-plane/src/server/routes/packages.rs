@@ -153,7 +153,7 @@ async fn install(
         installed_at: now_epoch(),
         bindings: body.bindings,
     };
-    if let Err(response) = append_apply_locked(&state, &mut views, &event) {
+    if let Some(response) = append_apply_locked(&state, &mut views, &event) {
         return response;
     }
     let package = views
@@ -205,8 +205,8 @@ async fn grant(
         granted_at: now_epoch(),
     };
     match append_apply_locked(&state, &mut views, &event) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(response) => response,
+        None => StatusCode::NO_CONTENT.into_response(),
+        Some(response) => response,
     }
 }
 
@@ -264,8 +264,8 @@ async fn activate(
         activated_at: now_epoch(),
     };
     match append_apply_locked(&state, &mut views, &event) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(response) => response,
+        None => StatusCode::NO_CONTENT.into_response(),
+        Some(response) => response,
     }
 }
 
@@ -338,7 +338,7 @@ async fn authorized(
 async fn mutate(state: &AppState, event: Event) -> Response {
     // Serialize every package lifecycle append with its projection update.
     let mut views = state.views.write().await;
-    if let Err(response) = append_apply_locked(state, &mut views, &event) {
+    if let Some(response) = append_apply_locked(state, &mut views, &event) {
         return response;
     }
     StatusCode::NO_CONTENT.into_response()
@@ -348,16 +348,18 @@ fn append_apply_locked(
     state: &AppState,
     views: &mut crate::views::ViewManager,
     event: &Event,
-) -> Result<(), Response> {
-    state.log.append(event).map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":"log_error","message":format!("{error:#}")})),
-        )
-            .into_response()
-    })?;
+) -> Option<Response> {
+    if let Err(error) = state.log.append(event) {
+        return Some(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"log_error","message":format!("{error:#}")})),
+            )
+                .into_response(),
+        );
+    }
     views.apply(event);
-    Ok(())
+    None
 }
 
 fn principal_id(principal: &Principal) -> String {
