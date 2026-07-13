@@ -97,6 +97,7 @@ fn package_manifest(id: &str, activity_id: Option<&str>) -> String {
                 r#"
 [[contributions.activity_provider]]
 id = "{activity_id}"
+provides = ["{activity_id}"]
 [contributions.activity_provider.definition]
 backend = "jobs"
 "#
