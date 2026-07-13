@@ -369,6 +369,47 @@ export interface PutRegistryBody {
   definition: string;
 }
 
+// ---- Packages (ADR 0012 registry v2) ----
+
+export interface PackageContribution {
+  id: string;
+  provides: string[];
+  state_namespaces: string[];
+  definition: Record<string, unknown>;
+}
+
+export interface PackageManifest {
+  package: { id: string; name: string; version: string; publisher: string; license: string };
+  compatibility: { olympus_api: string; platforms: string[] };
+  capabilities: { required: string[] };
+  contributions: {
+    activity_provider: PackageContribution[];
+    trigger_provider: PackageContribution[];
+    resource_provider: PackageContribution[];
+    session_tool_provider: PackageContribution[];
+    runtime_adapter: PackageContribution[];
+    embedded_app: PackageContribution[];
+    indexer_extractor: PackageContribution[];
+    policy_provider: PackageContribution[];
+    view_provider: PackageContribution[];
+    storage_provider: PackageContribution[];
+    skill: PackageContribution[];
+    workflow_template: PackageContribution[];
+  };
+}
+
+export interface OlympusPackage {
+  manifest: PackageManifest;
+  digest: string;
+  source: string;
+  installedBy: string;
+  installedAt: number;
+  grantedCapabilities: string[];
+  bindings: Record<string, string>;
+  active: boolean;
+  trust: "dev-unsigned" | string;
+}
+
 // ---- Vaults (ADR 0004 — markdown-first knowledge base) ----
 
 export interface VaultSummary {

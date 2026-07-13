@@ -871,6 +871,12 @@ fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             *reassigned_at,
             Some(previous_session_id),
         )?,
+        Event::PackageInstalled { .. }
+        | Event::PackageInstalledV2 { .. }
+        | Event::PackageGranted { .. }
+        | Event::PackageActivated { .. }
+        | Event::PackageDeactivated { .. }
+        | Event::PackageRemoved { .. } => {}
     }
     Ok(())
 }
@@ -949,6 +955,11 @@ fn event_type(event: &Event) -> &'static str {
         Event::SessionCapabilitiesAssigned { .. } => "session.capabilities_assigned",
         Event::ProjectOrganizationAssigned { .. } => "project.organization_assigned",
         Event::CardOrganizationAssigned { .. } => "card.organization_assigned",
+        Event::PackageInstalled { .. } | Event::PackageInstalledV2 { .. } => "package.installed",
+        Event::PackageGranted { .. } => "package.granted",
+        Event::PackageActivated { .. } => "package.activated",
+        Event::PackageDeactivated { .. } => "package.deactivated",
+        Event::PackageRemoved { .. } => "package.removed",
     }
 }
 fn event_time(event: &Event) -> f64 {
@@ -972,6 +983,12 @@ fn event_time(event: &Event) -> f64 {
         Event::ProjectCreated { created_at, .. } => *created_at,
         Event::ProjectDeleted { deleted_at, .. } => *deleted_at,
         Event::SessionProjectAttached { attached_at, .. } => *attached_at,
+        Event::PackageInstalled { installed_at, .. }
+        | Event::PackageInstalledV2 { installed_at, .. } => *installed_at,
+        Event::PackageGranted { granted_at, .. } => *granted_at,
+        Event::PackageActivated { activated_at, .. } => *activated_at,
+        Event::PackageDeactivated { deactivated_at, .. } => *deactivated_at,
+        Event::PackageRemoved { removed_at, .. } => *removed_at,
         _ => std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64()),

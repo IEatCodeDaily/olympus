@@ -90,6 +90,117 @@ fn test_state() -> (AppState, tempfile::TempDir) {
     (state, dir)
 }
 
+fn package_manifest(id: &str, activity_id: Option<&str>) -> String {
+    let contribution = activity_id
+        .map(|activity_id| {
+            format!(
+                r#"
+[[contributions.activity_provider]]
+id = "{activity_id}"
+[contributions.activity_provider.definition]
+backend = "jobs"
+"#
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"
+[package]
+id = "{id}"
+name = "{id}"
+version = "1.0.0"
+publisher = "test"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+{contribution}
+"#
+    )
+}
+
+#[tokio::test]
+async fn concurrent_package_installs_append_exactly_one_immutable_identity() {
+    let (state, _dir) = test_state();
+    let app = build_router(state.clone());
+    let body = serde_json::json!({
+        "manifest": package_manifest("test.concurrent", None),
+        "authoritySessionId": "s1"
+    })
+    .to_string();
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/packages")
+            .header("authorization", "Bearer testtoken")
+            .header("content-type", "application/json")
+            .body(Body::from(body.clone()))
+            .unwrap()
+    };
+
+    let (first, second) = tokio::join!(
+        app.clone().oneshot(request()),
+        app.clone().oneshot(request())
+    );
+    let mut statuses = [first.unwrap().status(), second.unwrap().status()];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::CREATED, StatusCode::CONFLICT]);
+    assert_eq!(
+        state
+            .log
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .filter(|(_, event)| matches!(event, Event::PackageInstalledV2 { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn concurrent_colliding_package_activations_append_exactly_one_success() {
+    let (state, _dir) = test_state();
+    for id in ["test.provider-a", "test.provider-b"] {
+        let event = Event::PackageInstalledV2 {
+            manifest: package_manifest(id, Some("shared.run")),
+            digest: format!("digest-{id}"),
+            source: "test".into(),
+            installed_by: "operator".into(),
+            installed_at: 1.0,
+            bindings: std::collections::BTreeMap::new(),
+        };
+        state.log.append(&event).unwrap();
+        state.views.write().await.apply(&event);
+    }
+    let app = build_router(state.clone());
+    let request = |id: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/packages/{id}/activate"))
+            .header("authorization", "Bearer testtoken")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"authoritySessionId":"s1"}"#))
+            .unwrap()
+    };
+
+    let (first, second) = tokio::join!(
+        app.clone().oneshot(request("test.provider-a")),
+        app.clone().oneshot(request("test.provider-b"))
+    );
+    let mut statuses = [first.unwrap().status(), second.unwrap().status()];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::NO_CONTENT, StatusCode::BAD_REQUEST]);
+    assert_eq!(
+        state
+            .log
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .filter(|(_, event)| matches!(event, Event::PackageActivated { .. }))
+            .count(),
+        1
+    );
+}
+
 #[tokio::test]
 async fn login_cookie_authenticates_session_and_organization_routes() {
     let (state, _dir) = test_state();

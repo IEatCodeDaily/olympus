@@ -28,6 +28,9 @@ pub struct JobRecord {
     pub job_id: String,
     pub node_id: String,
     pub argv: Vec<String>,
+    pub provider_package: String,
+    pub provider_version: String,
+    pub provider_digest: String,
     pub status: String,
     pub output: String,
     pub exit_code: Option<i32>,
@@ -70,6 +73,29 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
         )
             .into_response();
     }
+    let provider = {
+        let views = state.views.read().await;
+        views.registry.resolve_activity("job.run")
+    };
+    let Some(provider) = provider else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"no active provider for job.run"})),
+        )
+            .into_response();
+    };
+    if provider
+        .definition
+        .get("backend")
+        .and_then(toml::Value::as_str)
+        != Some("jobs")
+    {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({"error":"selected job.run provider is not JOBS-1-backed"})),
+        )
+            .into_response();
+    }
     if !state
         .nodes
         .has_role(&body.node_id, NodeRole::JobRunner)
@@ -97,6 +123,9 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
         job_id: job_id.clone(),
         node_id: body.node_id.clone(),
         argv: body.argv.clone(),
+        provider_package: provider.package_id,
+        provider_version: provider.package_version,
+        provider_digest: provider.package_digest,
         status: "running".into(),
         output: String::new(),
         exit_code: None,

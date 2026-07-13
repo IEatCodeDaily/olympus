@@ -339,3 +339,37 @@ one env flag (`VITE_USE_MOCKS=0`) — the types are identical, so no UI rewrite.
 - Search hit grouping/snippet length — tune after tantivy lands.
 - `message.delta` batching cadence (~100ms server-side per §10.3) — UI must not
   assume per-token frames.
+## Packages / registry v2 (ADR 0012)
+
+Package manifests are TOML and must declare `[package]`, `[compatibility]`,
+`[capabilities]`, and typed `[[contributions.<class>]]` tables. Installation is
+validation-only and never grants authority or activates code.
+
+- `POST /api/packages` — `{manifest?: string, path?: string,
+  authoritySessionId: string, bindings?: Record<capabilityId, packageId>}`;
+  exactly one source is required. Requires `package.install`. Returns `201`
+  with `{package, validation}`. Bindings are persisted with the package and
+  revalidated on activation/replay. Reinstalling an existing package id is
+  rejected with `409`; package version/digest identity is immutable. Local
+  packages are marked `dev-unsigned`.
+- `GET /api/packages` — `{packages: Package[]}`.
+- `GET /api/packages/:id` — one package or `404`.
+- `POST /api/packages/:id/grant` — `{authoritySessionId, capabilities}`;
+  requires `package.grant`. Grants must be a subset of requested capabilities.
+- `POST /api/packages/:id/activate` — `{authoritySessionId}`; requires
+  `package.activate`. Fails with `unsupported_yet` for extension classes not
+  executable in v1 and with `capabilities_not_granted` until review is granted.
+- `POST /api/packages/:id/deactivate` — `{authoritySessionId}`; requires
+  `package.activate`.
+- `DELETE /api/packages/:id` — `{authoritySessionId}`; requires
+  `package.install`.
+
+The v1 executable classes are `session_tool_provider` (MCP), `skill`, and
+`activity_provider`; `workflow_template` is stored/activated but inert pending
+WF-1. Registry-v1 `PUT /api/registry` remains available and writes an active
+synthetic package named `legacy.<kind>.<slug>`. Adapter slug resolution reads
+only active package contributions. `activity_provider` contributions must use
+`definition.backend = "jobs"` in v1. `job.run` resolves through registry v2 to
+the built-in `core.jobs` provider unless an activated package's durable binding
+selects another JOBS-1-backed provider; each job record pins package id, version,
+and digest.
