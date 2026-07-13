@@ -67,6 +67,14 @@ pub fn route_class(path: &str) -> RouteClass<'_> {
     if path == "/api/enroll" {
         return RouteClass::Admin;
     }
+    // Fleet READ surfaces: visible to organization owners as well as the
+    // operator (ADR 0010: Fleet is Hall-scoped; owners administer it from the
+    // browser). Mutations (drain, remove, refresh) keep the Operator default —
+    // their paths (`/api/nodes/{id}`, `.../drain`, `.../agents/refresh`) do
+    // not match these read shapes.
+    if path == "/api/nodes" || (path.starts_with("/api/nodes/") && path.ends_with("/agents")) {
+        return RouteClass::Admin;
+    }
     if path == "/ws"
         || path == "/api/auth/session"
         || path == "/api/auth/logout"
@@ -201,6 +209,33 @@ where
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    #[test]
+    fn fleet_read_routes_are_admin_class() {
+        assert!(matches!(route_class("/api/nodes"), RouteClass::Admin));
+        assert!(matches!(
+            route_class("/api/nodes/terminus/agents"),
+            RouteClass::Admin
+        ));
+        // Mutations stay operator-only.
+        assert!(matches!(
+            route_class("/api/nodes/terminus/drain"),
+            RouteClass::Operator
+        ));
+        assert!(matches!(
+            route_class("/api/nodes/terminus"),
+            RouteClass::Operator
+        ));
+        assert!(matches!(
+            route_class("/api/nodes/terminus/agents/refresh"),
+            RouteClass::Operator
+        ));
+        // Identity read stays user-visible.
+        assert!(matches!(
+            route_class("/api/nodes/hall-identity"),
+            RouteClass::User
+        ));
+    }
 
     #[test]
     fn authorization_matrix_fails_closed_at_one_seam() {
