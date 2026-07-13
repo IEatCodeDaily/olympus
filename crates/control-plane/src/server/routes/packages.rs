@@ -118,8 +118,11 @@ async fn install(
         Ok(manifest) => manifest,
         Err(error) => return bad_request("manifest_schema", &format!("{error:#}")),
     };
+    // Keep validation, durable append, and projection update in one critical
+    // section. Otherwise two concurrent installs can both pass the immutable
+    // identity check and append conflicting events before either is projected.
+    let mut views = state.views.write().await;
     let report = {
-        let views = state.views.read().await;
         if let Some(existing) = views.registry.package(&manifest.package.id) {
             return (
                 StatusCode::CONFLICT,
@@ -150,10 +153,9 @@ async fn install(
         installed_at: now_epoch(),
         bindings: body.bindings,
     };
-    if let Err(response) = append_apply(&state, &event).await {
+    if let Err(response) = append_apply_locked(&state, &mut views, &event) {
         return response;
     }
-    let views = state.views.read().await;
     let package = views
         .registry
         .package(&manifest.package.id)
@@ -181,8 +183,8 @@ async fn grant(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let mut views = state.views.write().await;
     {
-        let views = state.views.read().await;
         let Some(package) = views.registry.package(&id) else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -202,7 +204,10 @@ async fn grant(
         granted_by: principal_id(&principal),
         granted_at: now_epoch(),
     };
-    mutate(&state, event).await
+    match append_apply_locked(&state, &mut views, &event) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(response) => response,
+    }
 }
 
 async fn activate(
@@ -221,8 +226,10 @@ async fn activate(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    // Serialize validation with append+projection so colliding concurrent
+    // activations cannot both report success.
+    let mut views = state.views.write().await;
     {
-        let views = state.views.read().await;
         let Some(package) = views.registry.package(&id) else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -251,15 +258,15 @@ async fn activate(
             return bad_request("activation_validation", &format!("{error:#}"));
         }
     }
-    mutate(
-        &state,
-        Event::PackageActivated {
-            package_id: id,
-            activated_by: principal_id(&principal),
-            activated_at: now_epoch(),
-        },
-    )
-    .await
+    let event = Event::PackageActivated {
+        package_id: id,
+        activated_by: principal_id(&principal),
+        activated_at: now_epoch(),
+    };
+    match append_apply_locked(&state, &mut views, &event) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(response) => response,
+    }
 }
 
 async fn deactivate(
@@ -329,13 +336,19 @@ async fn authorized(
 }
 
 async fn mutate(state: &AppState, event: Event) -> Response {
-    if let Err(response) = append_apply(state, &event).await {
+    // Serialize every package lifecycle append with its projection update.
+    let mut views = state.views.write().await;
+    if let Err(response) = append_apply_locked(state, &mut views, &event) {
         return response;
     }
     StatusCode::NO_CONTENT.into_response()
 }
 
-async fn append_apply(state: &AppState, event: &Event) -> Result<(), Response> {
+fn append_apply_locked(
+    state: &AppState,
+    views: &mut crate::views::ViewManager,
+    event: &Event,
+) -> Result<(), Response> {
     state.log.append(event).map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -343,7 +356,7 @@ async fn append_apply(state: &AppState, event: &Event) -> Result<(), Response> {
         )
             .into_response()
     })?;
-    state.views.write().await.apply(event);
+    views.apply(event);
     Ok(())
 }
 

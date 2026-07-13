@@ -760,4 +760,90 @@ backend = "jobs""#,
             Some("jobs")
         );
     }
+
+    /// Full lifecycle replay: install → grant → activate → check visible →
+    /// deactivate → check invisible → remove → check gone.
+    /// Re-applying the same event sequence twice must produce the same result
+    /// (deterministic projection).
+    #[test]
+    fn full_lifecycle_replay_is_deterministic() {
+        let mcp_contribution = r#"[[contributions.session_tool_provider]]
+id = "my-mcp"
+[contributions.session_tool_provider.definition]
+command = "my-mcp-server""#;
+
+        let skill_contribution = r#"[[contributions.skill]]
+id = "my-skill"
+[contributions.skill.definition]
+dir = "skills/my-skill""#;
+
+        let contribution = format!("{mcp_contribution}\n{skill_contribution}");
+
+        let events = vec![
+            installed_v2("acme.pkg", "1.0.0", "d1", &contribution, BTreeMap::new()),
+            Event::PackageGranted {
+                package_id: "acme.pkg".into(),
+                capabilities: vec![],
+                granted_by: "operator".into(),
+                granted_at: 2.0,
+            },
+            Event::PackageActivated {
+                package_id: "acme.pkg".into(),
+                activated_by: "operator".into(),
+                activated_at: 3.0,
+            },
+        ];
+
+        let snapshot_active = {
+            let mut view = RegistryView::new();
+            for e in &events {
+                view.apply(e);
+            }
+            let pkg = view.package("acme.pkg").expect("package exists");
+            assert!(pkg.active, "package must be active after PackageActivated");
+            // contributions are visible in the adapter entries
+            assert!(
+                view.get("mcp", "my-mcp").is_some(),
+                "mcp contribution visible"
+            );
+            assert!(
+                view.get("skill", "my-skill").is_some(),
+                "skill contribution visible"
+            );
+            (pkg.active, pkg.digest.clone())
+        };
+
+        // Deactivate — contributions must disappear.
+        let mut view = RegistryView::new();
+        for e in &events {
+            view.apply(e);
+        }
+        view.apply(&Event::PackageDeactivated {
+            package_id: "acme.pkg".into(),
+            deactivated_by: "operator".into(),
+            deactivated_at: 4.0,
+        });
+        assert!(!view.package("acme.pkg").unwrap().active);
+        assert!(
+            view.get("mcp", "my-mcp").is_none(),
+            "mcp gone after deactivate"
+        );
+
+        // Remove — package disappears entirely.
+        view.apply(&Event::PackageRemoved {
+            package_id: "acme.pkg".into(),
+            removed_by: "operator".into(),
+            removed_at: 5.0,
+        });
+        assert!(view.package("acme.pkg").is_none(), "package removed");
+
+        // Re-replay the activate sequence and verify same projection as first time.
+        let mut view2 = RegistryView::new();
+        for e in &events {
+            view2.apply(e);
+        }
+        let pkg2 = view2.package("acme.pkg").unwrap();
+        assert_eq!(pkg2.active, snapshot_active.0);
+        assert_eq!(pkg2.digest, snapshot_active.1);
+    }
 }

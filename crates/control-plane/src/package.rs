@@ -419,4 +419,149 @@ id = "db"
         std::fs::write(dir.path().join("a"), "changed").unwrap();
         assert_ne!(first, digest_path(dir.path()).unwrap());
     }
+
+    /// Every extension class parses, round-trips through the Contributions::all()
+    /// iterator, and produces a valid manifest.
+    #[test]
+    fn all_ten_extension_classes_round_trip() {
+        let toml = r#"
+[package]
+id = "acme.full"
+name = "Acme full"
+version = "0.1.0"
+publisher = "acme"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+platforms = ["linux"]
+
+[[contributions.activity_provider]]
+id = "activity.a"
+[[contributions.trigger_provider]]
+id = "trigger.b"
+[[contributions.resource_provider]]
+id = "resource.c"
+[[contributions.session_tool_provider]]
+id = "mcp.d"
+[contributions.session_tool_provider.definition]
+command = "my-mcp"
+[[contributions.runtime_adapter]]
+id = "adapter.e"
+[[contributions.embedded_app]]
+id = "app.f"
+[[contributions.indexer_extractor]]
+id = "index.g"
+[[contributions.policy_provider]]
+id = "policy.h"
+[[contributions.view_provider]]
+id = "view.i"
+[[contributions.storage_provider]]
+id = "store.j"
+[[contributions.skill]]
+id = "skill.k"
+[[contributions.workflow_template]]
+id = "wf.l"
+"#;
+        let parsed = PackageManifest::parse_toml(toml).expect("parse all extension classes");
+        // All 12 items (10 ADR 0012 classes + skill + workflow_template) appear.
+        assert_eq!(parsed.contributions.all().len(), 12);
+
+        // validate_schema must accept each (only id format matters here; we
+        // use dot-separated slug ids to keep them valid).
+        parsed
+            .validate_schema()
+            .expect("schema valid for all classes");
+
+        // Re-serialise to JSON and back to Rust to confirm serde symmetry.
+        let json = serde_json::to_string(&parsed).expect("serialize");
+        let back: PackageManifest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, back);
+    }
+
+    /// Invalid contribution ids must produce an explicit validation error.
+    #[test]
+    fn invalid_contribution_id_rejected() {
+        let toml_bad_id = r#"
+[package]
+id = "acme.tools"
+name = "Acme tools"
+version = "1.0.0"
+publisher = "acme"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+
+[[contributions.activity_provider]]
+id = "bad id with spaces"
+"#;
+        let parsed = PackageManifest::parse_toml(toml_bad_id).expect("parse");
+        let err = parsed.validate_schema().unwrap_err().to_string();
+        assert!(err.contains("invalid contribution id"), "got: {err}");
+    }
+
+    /// Duplicate contribution ids across extension classes must be caught.
+    #[test]
+    fn duplicate_contribution_id_rejected() {
+        let toml_dup = r#"
+[package]
+id = "acme.tools"
+name = "Acme tools"
+version = "1.0.0"
+publisher = "acme"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+
+[[contributions.activity_provider]]
+id = "dup"
+[[contributions.skill]]
+id = "dup"
+"#;
+        let parsed = PackageManifest::parse_toml(toml_dup).expect("parse");
+        let err = parsed.validate_schema().unwrap_err().to_string();
+        assert!(err.contains("duplicate contribution id"), "got: {err}");
+    }
+
+    /// A manifest with an unknown field at the top-level must fail to parse
+    /// (deny_unknown_fields enforces the contract boundary).
+    #[test]
+    fn unknown_top_level_field_rejected() {
+        let toml_unknown = r#"
+[package]
+id = "acme.tools"
+name = "Acme"
+version = "1.0.0"
+publisher = "acme"
+license = "MIT"
+extra_field = "boom"
+[compatibility]
+olympus_api = "*"
+"#;
+        assert!(
+            PackageManifest::parse_toml(toml_unknown).is_err(),
+            "unknown field should fail to parse"
+        );
+    }
+
+    /// State namespace must start with plugin-state:// or be rejected.
+    #[test]
+    fn invalid_state_namespace_rejected() {
+        let toml = r#"
+[package]
+id = "acme.tools"
+name = "Acme"
+version = "1.0.0"
+publisher = "acme"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+
+[[contributions.activity_provider]]
+id = "runner"
+state_namespaces = ["bad://acme"]
+"#;
+        let parsed = PackageManifest::parse_toml(toml).expect("parse");
+        let err = parsed.validate_schema().unwrap_err().to_string();
+        assert!(err.contains("invalid plugin state namespace"), "got: {err}");
+    }
 }
