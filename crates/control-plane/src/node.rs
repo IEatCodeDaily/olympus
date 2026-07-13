@@ -795,16 +795,41 @@ async fn handle_envoy_frame(
         EnvoyFrame::Runtimes { runtimes: _ } => {
             tracing::debug!("runtimes table update received (S4 will process)");
         }
-        EnvoyFrame::JobOutput { job_id, seq, stream, data } => {
+        EnvoyFrame::JobOutput {
+            job_id,
+            seq,
+            stream,
+            data,
+        } => {
             if let Some(c) = conn {
                 crate::server::routes::jobs::apply_output(&job_id, stream, data).await;
-                let _ = c.send_request(olympus_proto::frames::HallFrame::Ack { session_id: job_id, seq }).await;
+                let _ = c
+                    .send_request(olympus_proto::frames::HallFrame::Ack {
+                        session_id: job_id,
+                        seq,
+                    })
+                    .await;
             }
         }
-        EnvoyFrame::JobResult { job_id, seq, exit_code, truncated, timed_out, cancelled } => {
+        EnvoyFrame::JobResult {
+            job_id,
+            seq,
+            exit_code,
+            truncated,
+            timed_out,
+            cancelled,
+        } => {
             if let Some(c) = conn {
-                crate::server::routes::jobs::apply_result(&job_id, exit_code, truncated, timed_out, cancelled).await;
-                let _ = c.send_request(olympus_proto::frames::HallFrame::Ack { session_id: job_id, seq }).await;
+                crate::server::routes::jobs::apply_result(
+                    &job_id, exit_code, truncated, timed_out, cancelled,
+                )
+                .await;
+                let _ = c
+                    .send_request(olympus_proto::frames::HallFrame::Ack {
+                        session_id: job_id,
+                        seq,
+                    })
+                    .await;
             }
         }
     }

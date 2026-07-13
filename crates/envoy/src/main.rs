@@ -535,7 +535,9 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
                         | EnvoyFrame::JobResult { job_id, .. } => job_id.clone(),
                         _ => continue,
                     };
-                    let Ok(seq) = output_conn.next_seq(&id) else { continue };
+                    let Ok(seq) = output_conn.next_seq(&id) else {
+                        continue;
+                    };
                     match &mut frame {
                         EnvoyFrame::JobOutput { seq: value, .. }
                         | EnvoyFrame::JobResult { seq: value, .. } => *value = seq,
@@ -546,18 +548,34 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
                     }
                 }
             });
-            let result = conn.jobs.spawn(
-                JobSpec { job_id, argv, env_allowlist, cwd, timeout_secs, max_output_bytes },
-                tx,
-            ).await;
+            let result = conn
+                .jobs
+                .spawn(
+                    JobSpec {
+                        job_id,
+                        argv,
+                        env_allowlist,
+                        cwd,
+                        timeout_secs,
+                        max_output_bytes,
+                    },
+                    tx,
+                )
+                .await;
             match result {
                 Ok(()) => conn.send_resp(req_id, true, None).await,
-                Err(error) => conn.send_resp(req_id, false, Some(&format!("{error:#}"))).await,
+                Err(error) => {
+                    conn.send_resp(req_id, false, Some(&format!("{error:#}")))
+                        .await
+                }
             }
         }
         HallFrame::CancelJob { req_id, job_id } => match conn.jobs.cancel(&job_id).await {
             Ok(()) => conn.send_resp(req_id, true, None).await,
-            Err(error) => conn.send_resp(req_id, false, Some(&format!("{error:#}"))).await,
+            Err(error) => {
+                conn.send_resp(req_id, false, Some(&format!("{error:#}")))
+                    .await
+            }
         },
         HallFrame::Ack { session_id, seq } => {
             conn.spool.acknowledge(&session_id, seq)?;
@@ -794,7 +812,11 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
     let raw = arg_value("--roles").or_else(|| std::env::var("OLYMPUS_ENVOY_ROLES").ok());
     let mut roles = vec![NodeRole::AgentRuntime];
     if let Some(raw) = raw {
-        for role in raw.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        for role in raw
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             match role {
                 "agent_runtime" | "agent-runtime" => {}
                 "job_runner" | "job-runner" => roles.push(NodeRole::JobRunner),

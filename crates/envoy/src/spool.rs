@@ -228,8 +228,9 @@ fn event_identity(frame: &EnvoyFrame) -> Option<(&str, u64)> {
         | EnvoyFrame::Observed {
             session_id, seq, ..
         } => Some((session_id, *seq)),
-        EnvoyFrame::JobOutput { job_id, seq, .. }
-        | EnvoyFrame::JobResult { job_id, seq, .. } => Some((job_id, *seq)),
+        EnvoyFrame::JobOutput { job_id, seq, .. } | EnvoyFrame::JobResult { job_id, seq, .. } => {
+            Some((job_id, *seq))
+        }
         _ => None,
     }
 }

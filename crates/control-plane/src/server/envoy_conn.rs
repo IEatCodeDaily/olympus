@@ -334,7 +334,23 @@ fn inject_req_id(frame: HallFrame, req_id: u64) -> HallFrame {
         },
         HallFrame::Drain { to_node, .. } => HallFrame::Drain { req_id, to_node },
         HallFrame::Probe { .. } => HallFrame::Probe { req_id },
-        HallFrame::DispatchJob { job_id, argv, env_allowlist, cwd, timeout_secs, max_output_bytes, .. } => HallFrame::DispatchJob { req_id, job_id, argv, env_allowlist, cwd, timeout_secs, max_output_bytes },
+        HallFrame::DispatchJob {
+            job_id,
+            argv,
+            env_allowlist,
+            cwd,
+            timeout_secs,
+            max_output_bytes,
+            ..
+        } => HallFrame::DispatchJob {
+            req_id,
+            job_id,
+            argv,
+            env_allowlist,
+            cwd,
+            timeout_secs,
+            max_output_bytes,
+        },
         HallFrame::CancelJob { job_id, .. } => HallFrame::CancelJob { req_id, job_id },
         // Fire-and-forget frames pass through unchanged.
         other => other,
