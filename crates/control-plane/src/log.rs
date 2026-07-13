@@ -545,8 +545,7 @@ fn migrate_event_payloads_to_json(conn: &mut Connection) -> Result<()> {
     // Marker absent — this is either a brand-new DB or a pre-ARCH-D snapshot
     // that was never migrated.  Fail hard if events exist so we don't
     // silently decode garbage; set the marker immediately for a fresh DB.
-    let event_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+    let event_count: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
     anyhow::ensure!(
         event_count == 0,
         "database has {event_count} event(s) but is missing the \
@@ -1147,7 +1146,9 @@ mod tests {
             .unwrap();
             // No INSERT INTO meta — marker intentionally absent.
         }
-        let err = Log::open(&path).err().expect("Log::open must fail for marker-less DB with events");
+        let err = Log::open(&path)
+            .err()
+            .expect("Log::open must fail for marker-less DB with events");
         assert!(
             err.to_string().contains("event_payload_codec"),
             "expected marker-missing error, got: {err}"
@@ -1287,7 +1288,12 @@ fn marker_present_second_open_does_not_mutate_payloads() {
             let payload = zstd::stream::encode_all(json.as_slice(), 3).unwrap();
             conn.execute(
                 "INSERT INTO events(event_type,payload,created_at,session_id) VALUES(?1,?2,?3,?4)",
-                params![event_type(ev), payload, event_time(ev), event_session_id(ev)],
+                params![
+                    event_type(ev),
+                    payload,
+                    event_time(ev),
+                    event_session_id(ev)
+                ],
             )
             .unwrap();
         }
