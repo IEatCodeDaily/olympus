@@ -522,9 +522,13 @@ fn decode_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(u64, Event)> {
     Ok((seq, event))
 }
 
-/// One-shot storage migration from the original positional postcard payloads
-/// to the self-describing JSON codec. This is encoding maintenance only: every
-/// decoded event is compared with its JSON round-trip before its row is updated.
+/// Enforces that the database has already been migrated to the JSON+zstd codec.
+///
+/// The one-shot postcard→JSON migrator ran at first boot after ARCH-D was
+/// deployed (confirmed 2026-07-13; live DB has marker + 2663 events in JSON).
+/// Any database opened without the marker and with existing events is corrupt
+/// or was never migrated — fail closed rather than silently misreading events.
+/// Fresh databases (zero events, no marker) receive the marker immediately.
 fn migrate_event_payloads_to_json(conn: &mut Connection) -> Result<()> {
     const CODEC_KEY: &str = "event_payload_codec";
     const JSON_CODEC: &str = "json+zstd-v1";
@@ -538,55 +542,23 @@ fn migrate_event_payloads_to_json(conn: &mut Connection) -> Result<()> {
         return Ok(());
     }
 
-    let tx = conn.transaction()?;
-    let count_before: i64 = tx.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
-    let mut last_seq = 0_i64;
-    loop {
-        let rows = {
-            let mut stmt =
-                tx.prepare("SELECT seq,payload FROM events WHERE seq>?1 ORDER BY seq LIMIT 512")?;
-            let mapped = stmt.query_map([last_seq], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?;
-            mapped.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        if rows.is_empty() {
-            break;
-        }
-        for (seq, payload) in rows {
-            let legacy = zstd::stream::decode_all(payload.as_slice())
-                .with_context(|| format!("decompressing legacy event {seq}"))?;
-            let event: Event = postcard::from_bytes(&legacy)
-                .with_context(|| format!("decoding legacy postcard event {seq}"))?;
-            let json = serde_json::to_vec(&event)
-                .with_context(|| format!("encoding migrated JSON event {seq}"))?;
-            let decoded: Event = serde_json::from_slice(&json)
-                .with_context(|| format!("verifying migrated JSON event {seq}"))?;
-            anyhow::ensure!(
-                event == decoded,
-                "event {seq} changed during codec migration"
-            );
-            let migrated = zstd::stream::encode_all(json.as_slice(), 3)
-                .with_context(|| format!("compressing migrated event {seq}"))?;
-            tx.execute(
-                "UPDATE events SET payload=?1 WHERE seq=?2",
-                params![migrated, seq],
-            )?;
-            last_seq = seq;
-        }
-    }
-
-    let count_after: i64 = tx.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+    // Marker absent — this is either a brand-new DB or a pre-ARCH-D snapshot
+    // that was never migrated.  Fail hard if events exist so we don't
+    // silently decode garbage; set the marker immediately for a fresh DB.
+    let event_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
     anyhow::ensure!(
-        count_before == count_after,
-        "event count changed during codec migration: {count_before} -> {count_after}"
+        event_count == 0,
+        "database has {event_count} event(s) but is missing the \
+         'event_payload_codec' marker — this database was never migrated \
+         from postcard to JSON+zstd and cannot be opened safely"
     );
-    tx.execute(
+
+    conn.execute(
         "INSERT INTO meta(key,value) VALUES(?1,?2)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         params![CODEC_KEY, JSON_CODEC],
     )?;
-    tx.commit().context("committing event payload migration")?;
     Ok(())
 }
 
@@ -1123,7 +1095,7 @@ mod tests {
             hermes_id: "fixture-hermes".into(),
             source: "olympus".into(),
             model: Some("fixture-model".into()),
-            title: Some("legacy postcard fixture".into()),
+            title: Some("fixture event".into()),
             started_at: 1.0,
             message_count: 0,
             input_tokens: 1,
@@ -1134,60 +1106,35 @@ mod tests {
     }
 
     #[test]
-    fn open_migrates_postcard_payloads_to_json_once() {
+    fn open_fails_if_events_exist_without_codec_marker() {
+        // Simulate a pre-ARCH-D snapshot that was never migrated: events exist
+        // but the codec marker row is absent.  Log::open must fail closed.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("olympus.db");
-        let connection = Connection::open(&path).unwrap();
-        connection.execute_batch(SCHEMA).unwrap();
-        let event = fixture_event();
-        let legacy = postcard::to_allocvec(&event).unwrap();
-        let legacy = zstd::stream::encode_all(legacy.as_slice(), 3).unwrap();
-        connection
-            .execute(
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            let event = fixture_event();
+            // Write a valid JSON+zstd payload but deliberately omit the codec marker.
+            let json = serde_json::to_vec(&event).unwrap();
+            let payload = zstd::stream::encode_all(json.as_slice(), 3).unwrap();
+            conn.execute(
                 "INSERT INTO events(event_type,payload,created_at,session_id) VALUES(?1,?2,?3,?4)",
                 params![
                     event_type(&event),
-                    legacy,
+                    payload,
                     event_time(&event),
                     event_session_id(&event)
                 ],
             )
             .unwrap();
-        let before: i64 = connection
-            .query_row("SELECT length(payload) FROM events", [], |row| row.get(0))
-            .unwrap();
-        drop(connection);
-
-        let log = Log::open(&path).unwrap();
-        assert_eq!(log.read_all().unwrap(), vec![(1, event.clone())]);
-        drop(log);
-
-        let connection = Connection::open(&path).unwrap();
-        let migrated: Vec<u8> = connection
-            .query_row("SELECT payload FROM events", [], |row| row.get(0))
-            .unwrap();
-        let json = zstd::stream::decode_all(migrated.as_slice()).unwrap();
-        assert_eq!(serde_json::from_slice::<Event>(&json).unwrap(), event);
-        assert_eq!(
-            connection
-                .query_row(
-                    "SELECT value FROM meta WHERE key='event_payload_codec'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "json+zstd-v1"
+            // No INSERT INTO meta — marker intentionally absent.
+        }
+        let err = Log::open(&path).err().expect("Log::open must fail for marker-less DB with events");
+        assert!(
+            err.to_string().contains("event_payload_codec"),
+            "expected marker-missing error, got: {err}"
         );
-        let after = migrated.len() as i64;
-        drop(connection);
-
-        drop(Log::open(&path).unwrap());
-        let connection = Connection::open(&path).unwrap();
-        let after_second_open: i64 = connection
-            .query_row("SELECT length(payload) FROM events", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(after, after_second_open);
-        eprintln!("fixture event payload bytes: postcard+zstd={before}, json+zstd={after}");
     }
 
     #[test]
@@ -1274,186 +1221,68 @@ mod tests {
     }
 }
 
-// ── migration fixture tests ──────────────────────────────────────────────────
+// ── codec-guard and marker fixture tests ─────────────────────────────────────
 //
 // These tests live outside the inner `mod tests` block so they can reference
 // the private module-level helpers (event_type, event_session_id, event_time,
-// SCHEMA) directly.  The postcard crate is a production dep (required by the
-// migration path) and is vendored here as a minimal `encode_legacy` helper
-// rather than being called inline — keeping the encode concern in one place.
-
-#[cfg(test)]
-fn encode_legacy_for_test(event: &Event) -> Vec<u8> {
-    let postcard_bytes = postcard::to_allocvec(event).expect("postcard encode failed");
-    zstd::stream::encode_all(postcard_bytes.as_slice(), 3).expect("zstd compress failed")
-}
-
-#[cfg(test)]
-fn insert_legacy(conn: &Connection, event: &Event) {
-    let payload = encode_legacy_for_test(event);
-    conn.execute(
-        "INSERT INTO events(event_type,payload,created_at,session_id) VALUES(?1,?2,?3,?4)",
-        params![
-            event_type(event),
-            payload,
-            event_time(event),
-            event_session_id(event),
-        ],
-    )
-    .expect("insert legacy event");
-}
-
-#[cfg(test)]
-fn representative_fixture_events() -> Vec<Event> {
-    vec![
+// SCHEMA) directly.
+#[test]
+fn marker_present_second_open_does_not_mutate_payloads() {
+    // Seed a fully-migrated JSON+zstd database with the codec marker already
+    // set, then verify that a second Log::open leaves all payloads byte-for-byte
+    // identical (the early-return path in migrate_event_payloads_to_json fires).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("olympus.db");
+    // Build a clean JSON+zstd database with the marker already set.
+    let events = vec![
         Event::SessionCreated {
-            session_id: "fix-sess".into(),
-            hermes_id: "fix-h".into(),
+            session_id: "idem-sess".into(),
+            hermes_id: "idem-h".into(),
             source: "olympus".into(),
-            model: Some("fix-model".into()),
-            title: Some("fixture session".into()),
+            model: Some("idem-model".into()),
+            title: Some("idempotency fixture".into()),
             started_at: 1_700_000_000.0,
             message_count: 0,
-            input_tokens: 10,
-            output_tokens: 20,
+            input_tokens: 5,
+            output_tokens: 10,
             agent: None,
             node: None,
         },
         Event::MessageAppended {
-            session_id: "fix-sess".into(),
-            hermes_session_id: "fix-h".into(),
+            session_id: "idem-sess".into(),
+            hermes_session_id: "idem-h".into(),
             message_id: 0,
             role: "user".into(),
-            content: Some("hello from fixture".into()),
+            content: Some("idempotency check message".into()),
             tool_name: None,
             tool_calls: None,
             reasoning: None,
             timestamp: 1_700_000_001.0,
-            token_count: Some(4),
+            token_count: Some(5),
             finish_reason: None,
         },
-        Event::CardCreated {
-            card_id: "fix-card".into(),
-            board_id: "fix-board".into(),
-            title: "Fixture card".into(),
-            created_at: 1_700_000_002.0,
-        },
-        Event::SetupDeclared {
-            scope: "org:fixture".into(),
-            skills: vec!["code-review".into()],
-            mcp: vec![],
-            plugins: vec![],
-            hooks: vec![],
-            declared_at: 1_700_000_003.0,
-        },
-        Event::EntryRegistered {
-            kind: "mcp".into(),
-            slug: "fix-mcp".into(),
-            definition: r#"{"command":"fix","args":[]}"#.into(),
-            registered_at: 1_700_000_004.0,
-        },
-        Event::RepoRegistered {
-            slug: "fix-repo".into(),
-            url: "https://github.com/fix/repo".into(),
-            default_branch: "main".into(),
-            registered_at: 1_700_000_005.0,
-        },
-    ]
-}
-
-#[test]
-fn migration_multi_event_fixture_roundtrip() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("olympus.db");
-
-    let expected_events = representative_fixture_events();
-    {
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
-        for ev in &expected_events {
-            insert_legacy(&conn, ev);
-        }
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, expected_events.len() as i64);
-        let marker: Option<String> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key='event_payload_codec'",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .unwrap();
-        assert!(marker.is_none(), "marker must not be set before migration");
-    }
-
-    let log = Log::open(&path).unwrap();
-
-    assert_eq!(log.event_count().unwrap(), expected_events.len());
-
-    let stored: Vec<(u64, Event)> = log.read_all().unwrap();
-    assert_eq!(stored.len(), expected_events.len());
-    for (i, ((seq, decoded), original)) in stored.iter().zip(expected_events.iter()).enumerate() {
-        assert!(*seq > 0, "seq must be positive at index {i}");
-        assert_eq!(
-            decoded, original,
-            "event at index {i} (seq {seq}) changed during migration"
-        );
-    }
-
-    drop(log);
-
-    let conn = Connection::open(&path).unwrap();
-    {
-        let mut stmt = conn
-            .prepare("SELECT seq, payload FROM events ORDER BY seq")
-            .unwrap();
-        let rows: Vec<(i64, Vec<u8>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        assert_eq!(rows.len(), expected_events.len());
-        for (i, (seq, payload)) in rows.iter().enumerate() {
-            let json = zstd::stream::decode_all(payload.as_slice())
-                .unwrap_or_else(|e| panic!("seq {seq}: zstd decompress failed: {e}"));
-            let _: Event = serde_json::from_slice(&json).unwrap_or_else(|e| {
-                panic!(
-                    "seq {seq} (index {i}): json decode failed: {e}\nraw: {}",
-                    String::from_utf8_lossy(&json)
-                )
-            });
-        }
-    }
-
-    let marker: String = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key='event_payload_codec'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(marker, "json+zstd-v1");
-}
-
-#[test]
-fn migration_is_idempotent_on_second_open() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("olympus.db");
-
-    let events = representative_fixture_events();
+    ];
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         for ev in &events {
-            insert_legacy(&conn, ev);
+            let json = serde_json::to_vec(ev).unwrap();
+            let payload = zstd::stream::encode_all(json.as_slice(), 3).unwrap();
+            conn.execute(
+                "INSERT INTO events(event_type,payload,created_at,session_id) VALUES(?1,?2,?3,?4)",
+                params![event_type(ev), payload, event_time(ev), event_session_id(ev)],
+            )
+            .unwrap();
         }
+        // Explicitly set the codec marker so Log::open takes the early-return path.
+        conn.execute(
+            "INSERT INTO meta(key,value) VALUES('event_payload_codec','json+zstd-v1')",
+            [],
+        )
+        .unwrap();
     }
-
     let log = Log::open(&path).unwrap();
     drop(log);
-
     let payloads_after_first: Vec<Vec<u8>> = {
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn
@@ -1464,11 +1293,9 @@ fn migration_is_idempotent_on_second_open() {
             .collect::<rusqlite::Result<_>>()
             .unwrap()
     };
-
     let log2 = Log::open(&path).unwrap();
     assert_eq!(log2.event_count().unwrap(), events.len());
     drop(log2);
-
     let payloads_after_second: Vec<Vec<u8>> = {
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn
@@ -1479,10 +1306,9 @@ fn migration_is_idempotent_on_second_open() {
             .collect::<rusqlite::Result<_>>()
             .unwrap()
     };
-
     assert_eq!(
         payloads_after_first, payloads_after_second,
-        "payload bytes changed on second open — migration is not idempotent"
+        "payload bytes changed on second open — marker early-return path did not fire"
     );
 }
 
@@ -1510,73 +1336,6 @@ fn fresh_database_migration_is_no_op_and_sets_marker() {
     assert_eq!(
         marker, "json+zstd-v1",
         "fresh DB must have json+zstd-v1 marker set"
-    );
-}
-
-// ── size + throughput measurement fixtures ────────────────────────────────────
-//
-// These tests produce human-readable output (--nocapture) and the results are
-// recorded in docs/codec-size-and-batch-throughput-measurement.md.
-
-/// Measures total payload bytes immediately before and after the one-shot
-/// postcard+zstd → json+zstd migration using the representative fixture set.
-/// Prints a structured report to stderr and flags if the ratio exceeds 1.5x.
-/// Hard-asserts ratio < 3.0 to catch catastrophic regressions.
-#[test]
-fn codec_size_ratio_fixture() {
-    let events = representative_fixture_events();
-    let n = events.len();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("olympus.db");
-
-    // Phase 1 — build legacy postcard+zstd database.
-    let before_bytes: i64 = {
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
-        for ev in &events {
-            insert_legacy(&conn, ev);
-        }
-        conn.query_row(
-            "SELECT COALESCE(SUM(length(payload)), 0) FROM events",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap()
-    };
-
-    // Phase 2 — open Log to trigger migration, then measure again.
-    let log = Log::open(&path).unwrap();
-    drop(log);
-
-    let after_bytes: i64 = {
-        let conn = Connection::open(&path).unwrap();
-        conn.query_row(
-            "SELECT COALESCE(SUM(length(payload)), 0) FROM events",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap()
-    };
-
-    let ratio = after_bytes as f64 / before_bytes.max(1) as f64;
-    let flag = if ratio > 1.5 {
-        "  *** EXCEEDS 1.5x ***"
-    } else {
-        ""
-    };
-    eprintln!(
-        "\n=== codec_size_ratio_fixture ===\n\
-         events       : {n}\n\
-         postcard+zstd: {before_bytes} B  ({per_before} B/event)\n\
-         json+zstd    : {after_bytes} B  ({per_after} B/event)\n\
-         ratio        : {ratio:.3}{flag}\n",
-        per_before = before_bytes / n.max(1) as i64,
-        per_after = after_bytes / n.max(1) as i64,
-    );
-
-    assert!(
-        ratio < 3.0,
-        "json+zstd payload exceeds 3x postcard+zstd for fixture events (ratio={ratio:.2})"
     );
 }
 
