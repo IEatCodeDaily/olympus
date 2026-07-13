@@ -373,6 +373,7 @@ pub struct PackageDto {
     pub installed_by: String,
     pub installed_at: f64,
     pub granted_capabilities: std::collections::BTreeSet<String>,
+    pub bindings: std::collections::BTreeMap<String, String>,
     pub active: bool,
     pub trust: String,
 }
@@ -386,6 +387,7 @@ impl PackageDto {
             installed_by: record.installed_by.clone(),
             installed_at: record.installed_at,
             granted_capabilities: record.granted_capabilities.clone(),
+            bindings: record.bindings.clone(),
             active: record.active,
             trust: record.trust.clone(),
         }

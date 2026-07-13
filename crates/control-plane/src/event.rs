@@ -295,6 +295,17 @@ pub enum Event {
         removed_by: String,
         removed_at: f64,
     },
+    /// Binding-aware package installation. V1 is retained for durable replay;
+    /// all new installs use this append-only variant.
+    PackageInstalledV2 {
+        manifest: String,
+        digest: String,
+        source: String,
+        installed_by: String,
+        installed_at: f64,
+        /// Semantic capability → selected provider package id.
+        bindings: std::collections::BTreeMap<String, String>,
+    },
 }
 
 #[cfg(test)]
@@ -796,6 +807,17 @@ mod tests {
                 installed_by: "operator".into(),
                 installed_at: 40.0,
             },
+            Event::PackageInstalledV2 {
+                manifest: "[package]".into(),
+                digest: "def".into(),
+                source: "inline".into(),
+                installed_by: "operator".into(),
+                installed_at: 40.5,
+                bindings: std::collections::BTreeMap::from([(
+                    "job.run".into(),
+                    "core.jobs".into(),
+                )]),
+            },
             Event::PackageGranted {
                 package_id: "pkg".into(),
                 capabilities: vec!["job.run".into()],
@@ -858,6 +880,7 @@ mod tests {
             Event::PackageActivated { .. } => {}
             Event::PackageDeactivated { .. } => {}
             Event::PackageRemoved { .. } => {}
+            Event::PackageInstalledV2 { .. } => {}
         }
     }
 

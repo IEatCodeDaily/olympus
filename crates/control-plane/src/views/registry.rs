@@ -11,6 +11,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use anyhow::{anyhow, ensure, Result};
+
 use crate::event::Event;
 use crate::package::{Contribution, Contributions, PackageManifest};
 
@@ -23,8 +25,19 @@ pub struct PackageRecord {
     pub installed_by: String,
     pub installed_at: f64,
     pub granted_capabilities: BTreeSet<String>,
+    pub bindings: BTreeMap<String, String>,
     pub active: bool,
+    pub activated_at: Option<f64>,
     pub trust: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActivityProviderRecord {
+    pub package_id: String,
+    pub package_version: String,
+    pub package_digest: String,
+    pub contribution_id: String,
+    pub definition: toml::Table,
 }
 
 // RegistryEntry moved to `olympus-envoy` (ADR 0008 S2) — the adapter consumes
@@ -73,9 +86,9 @@ impl RegistryView {
                     },
                 );
                 self.entry_owners.insert(key, package_id.clone());
-                self.packages
-                    .entry(package_id)
-                    .or_insert_with(|| PackageRecord {
+                self.packages.insert(
+                    package_id,
+                    PackageRecord {
                         manifest: legacy_manifest(kind, slug, definition),
                         manifest_toml: legacy_manifest_toml(kind, slug, definition),
                         digest: blake3::hash(definition.as_bytes()).to_hex().to_string(),
@@ -83,9 +96,12 @@ impl RegistryView {
                         installed_by: "legacy".into(),
                         installed_at: *registered_at,
                         granted_capabilities: BTreeSet::new(),
+                        bindings: BTreeMap::new(),
                         active: true,
+                        activated_at: Some(*registered_at),
                         trust: crate::package::DEV_UNSIGNED.into(),
-                    });
+                    },
+                );
             }
             Event::PackageInstalled {
                 manifest,
@@ -93,26 +109,29 @@ impl RegistryView {
                 source,
                 installed_by,
                 installed_at,
-            } => {
-                if let Ok(parsed) = PackageManifest::parse_toml(manifest) {
-                    let id = parsed.package.id.clone();
-                    self.remove_package_entries(&id);
-                    self.packages.insert(
-                        id,
-                        PackageRecord {
-                            manifest: parsed,
-                            manifest_toml: manifest.clone(),
-                            digest: digest.clone(),
-                            source: source.clone(),
-                            installed_by: installed_by.clone(),
-                            installed_at: *installed_at,
-                            granted_capabilities: BTreeSet::new(),
-                            active: false,
-                            trust: crate::package::DEV_UNSIGNED.into(),
-                        },
-                    );
-                }
-            }
+            } => self.install_package(
+                manifest,
+                digest,
+                source,
+                installed_by,
+                *installed_at,
+                BTreeMap::new(),
+            ),
+            Event::PackageInstalledV2 {
+                manifest,
+                digest,
+                source,
+                installed_by,
+                installed_at,
+                bindings,
+            } => self.install_package(
+                manifest,
+                digest,
+                source,
+                installed_by,
+                *installed_at,
+                bindings.clone(),
+            ),
             Event::PackageGranted {
                 package_id,
                 capabilities,
@@ -127,53 +146,112 @@ impl RegistryView {
                 activated_at,
                 ..
             } => {
-                if let Some(package) = self.packages.get_mut(package_id) {
+                if self.validate_activation(package_id).is_ok() {
+                    let package = self
+                        .packages
+                        .get_mut(package_id)
+                        .expect("validated package exists");
                     package.active = true;
-                    let manifest = package.manifest.clone();
-                    self.add_package_entries(package_id, &manifest, *activated_at);
+                    package.activated_at = Some(*activated_at);
+                    self.rebuild_entries();
                 }
             }
             Event::PackageDeactivated { package_id, .. } => {
-                self.remove_package_entries(package_id);
                 if let Some(package) = self.packages.get_mut(package_id) {
                     package.active = false;
+                    package.activated_at = None;
                 }
+                self.rebuild_entries();
             }
             Event::PackageRemoved { package_id, .. } => {
-                self.remove_package_entries(package_id);
                 self.packages.remove(package_id);
+                self.rebuild_entries();
             }
             _ => {}
         }
     }
 
-    fn add_package_entries(&mut self, package_id: &str, manifest: &PackageManifest, at: f64) {
-        for (kind, contribution) in adapter_contributions(&manifest.contributions) {
-            let definition =
-                serde_json::to_string(&contribution.definition).unwrap_or_else(|_| "{}".into());
-            let key = Self::key(kind, &contribution.id);
-            self.entries.insert(
-                key.clone(),
-                RegistryEntry {
-                    kind: kind.into(),
-                    slug: contribution.id.clone(),
-                    definition,
-                    registered_at: at,
-                },
-            );
-            self.entry_owners.insert(key, package_id.into());
+    fn install_package(
+        &mut self,
+        manifest: &str,
+        digest: &str,
+        source: &str,
+        installed_by: &str,
+        installed_at: f64,
+        bindings: BTreeMap<String, String>,
+    ) {
+        let Ok(parsed) = PackageManifest::parse_toml(manifest) else {
+            return;
+        };
+        let id = parsed.package.id.clone();
+        let record = PackageRecord {
+            manifest: parsed,
+            manifest_toml: manifest.into(),
+            digest: digest.into(),
+            source: source.into(),
+            installed_by: installed_by.into(),
+            installed_at,
+            granted_capabilities: BTreeSet::new(),
+            bindings,
+            active: false,
+            activated_at: None,
+            trust: crate::package::DEV_UNSIGNED.into(),
+        };
+        if record.manifest.package.publisher == "legacy"
+            && self
+                .packages
+                .get(&id)
+                .is_some_and(|existing| existing.manifest.package.publisher == "legacy")
+        {
+            self.packages.insert(id, record);
+        } else {
+            self.packages.entry(id).or_insert(record);
         }
     }
 
-    fn remove_package_entries(&mut self, package_id: &str) {
-        let keys: Vec<_> = self
-            .entry_owners
+    fn rebuild_entries(&mut self) {
+        self.entries.clear();
+        self.entry_owners.clear();
+        let owners = self.active_capabilities();
+        let mut active: Vec<_> = self
+            .packages
             .iter()
-            .filter_map(|(key, owner)| (owner == package_id).then_some(key.clone()))
+            .filter(|(_, package)| package.active)
             .collect();
-        for key in keys {
-            self.entries.remove(&key);
-            self.entry_owners.remove(&key);
+        active.sort_by(|(id_a, a), (id_b, b)| {
+            a.activated_at
+                .partial_cmp(&b.activated_at)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(id_a.cmp(id_b))
+        });
+        for (package_id, package) in active {
+            let at = package.activated_at.unwrap_or(package.installed_at);
+            for (kind, contribution) in adapter_contributions(&package.manifest.contributions) {
+                if !contribution.provides.is_empty()
+                    && !contribution
+                        .provides
+                        .iter()
+                        .all(|capability| owners.get(capability) == Some(package_id))
+                {
+                    continue;
+                }
+                let definition =
+                    serde_json::to_string(&contribution.definition).unwrap_or_else(|_| "{}".into());
+                let key = Self::key(kind, &contribution.id);
+                if contribution.provides.is_empty() && self.entries.contains_key(&key) {
+                    continue;
+                }
+                self.entries.insert(
+                    key.clone(),
+                    RegistryEntry {
+                        kind: kind.into(),
+                        slug: contribution.id.clone(),
+                        definition,
+                        registered_at: at,
+                    },
+                );
+                self.entry_owners.insert(key, package_id.clone());
+            }
         }
     }
 
@@ -188,17 +266,94 @@ impl RegistryView {
     }
 
     pub fn active_capabilities(&self) -> BTreeMap<String, String> {
-        self.packages
+        let mut owners = BTreeMap::from([("job.run".into(), "core.jobs".into())]);
+        let mut active: Vec<_> = self
+            .packages
             .values()
             .filter(|package| package.active)
-            .flat_map(|package| {
-                package
-                    .manifest
-                    .provided_capabilities()
-                    .into_iter()
-                    .map(move |capability| (capability, package.manifest.package.id.clone()))
-            })
-            .collect()
+            .collect();
+        active.sort_by(|a, b| {
+            a.activated_at
+                .partial_cmp(&b.activated_at)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.manifest.package.id.cmp(&b.manifest.package.id))
+        });
+        for package in active {
+            for capability in package.manifest.provided_capabilities() {
+                match package.bindings.get(&capability) {
+                    Some(selected) if selected == &package.manifest.package.id => {
+                        owners.insert(capability, selected.clone());
+                    }
+                    Some(_) => {}
+                    None if !owners.contains_key(&capability) => {
+                        owners.insert(capability, package.manifest.package.id.clone());
+                    }
+                    None => {}
+                }
+            }
+        }
+        owners
+    }
+
+    pub fn validate_activation(&self, id: &str) -> Result<()> {
+        let package = self
+            .packages
+            .get(id)
+            .ok_or_else(|| anyhow!("package not found"))?;
+        for contribution in &package.manifest.contributions.activity_provider {
+            ensure!(
+                contribution
+                    .definition
+                    .get("backend")
+                    .and_then(toml::Value::as_str)
+                    == Some("jobs"),
+                "activity provider {} has unsupported backend; v1 requires backend=jobs",
+                contribution.id
+            );
+        }
+        let active = self.active_capabilities();
+        for capability in package.manifest.provided_capabilities() {
+            if let Some(owner) = active.get(&capability) {
+                if owner != id {
+                    let selected = package.bindings.get(&capability);
+                    ensure!(
+                        selected == Some(owner) || selected.is_some_and(|value| value == id),
+                        "capability collision: {capability} is provided by {owner}; persist a binding selecting {owner} or {id}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn resolve_activity(&self, capability: &str) -> Option<ActivityProviderRecord> {
+        let owner = self.active_capabilities().get(capability)?.clone();
+        if owner == "core.jobs" && capability == "job.run" {
+            return Some(ActivityProviderRecord {
+                package_id: owner,
+                package_version: crate::package::OLYMPUS_API_VERSION.into(),
+                package_digest: "builtin:jobs-v1".into(),
+                contribution_id: "job-runner".into(),
+                definition: toml::Table::from_iter([(
+                    "backend".into(),
+                    toml::Value::String("jobs".into()),
+                )]),
+            });
+        }
+        let package = self.packages.get(&owner)?;
+        let contribution = package
+            .manifest
+            .contributions
+            .activity_provider
+            .iter()
+            .find(|item| item.provides.contains(capability))?;
+        Some(ActivityProviderRecord {
+            package_id: owner,
+            package_version: package.manifest.package.version.clone(),
+            package_digest: package.digest.clone(),
+            contribution_id: contribution.id.clone(),
+            definition: contribution.definition.clone(),
+        })
     }
 
     /// Resolve a (kind, slug) pair to its definition, if registered.
@@ -358,6 +513,41 @@ impl olympus_envoy::adapter::SlugResolver for RegistryView {
 mod tests {
     use super::*;
 
+    fn package_manifest(id: &str, version: &str, contribution: &str) -> String {
+        format!(
+            r#"[package]
+id = "{id}"
+name = "Test package"
+version = "{version}"
+publisher = "test"
+license = "MIT"
+
+[compatibility]
+olympus_api = "*"
+platforms = ["*"]
+
+{contribution}
+"#
+        )
+    }
+
+    fn installed_v2(
+        id: &str,
+        version: &str,
+        digest: &str,
+        contribution: &str,
+        bindings: BTreeMap<String, String>,
+    ) -> Event {
+        Event::PackageInstalledV2 {
+            manifest: package_manifest(id, version, contribution),
+            digest: digest.into(),
+            source: "inline".into(),
+            installed_by: "operator".into(),
+            installed_at: 1.0,
+            bindings,
+        }
+    }
+
     fn registered(kind: &str, slug: &str, def: &str, at: f64) -> Event {
         Event::EntryRegistered {
             kind: kind.into(),
@@ -481,5 +671,93 @@ mod tests {
         let package = views.registry.package("legacy.mcp.gitnexus").unwrap();
         assert!(package.active);
         assert_eq!(views.registry.list_kind("mcp").len(), 1);
+    }
+
+    #[test]
+    fn package_identity_is_first_write_immutable() {
+        let mut view = RegistryView::new();
+        view.apply(&installed_v2(
+            "acme.runner",
+            "1.0.0",
+            "digest-v1",
+            "",
+            BTreeMap::new(),
+        ));
+        view.apply(&installed_v2(
+            "acme.runner",
+            "2.0.0",
+            "digest-v2",
+            "",
+            BTreeMap::new(),
+        ));
+
+        let package = view.package("acme.runner").unwrap();
+        assert_eq!(package.manifest.package.version, "1.0.0");
+        assert_eq!(package.digest, "digest-v1");
+    }
+
+    #[test]
+    fn activation_fails_closed_on_unbound_provider_collision() {
+        let mut view = RegistryView::new();
+        view.apply(&installed_v2(
+            "acme.runner",
+            "1.0.0",
+            "digest",
+            r#"[[contributions.activity_provider]]
+id = "runner"
+provides = ["job.run"]
+[contributions.activity_provider.definition]
+backend = "jobs""#,
+            BTreeMap::new(),
+        ));
+
+        assert!(view.validate_activation("acme.runner").is_err());
+        view.apply(&Event::PackageActivated {
+            package_id: "acme.runner".into(),
+            activated_by: "operator".into(),
+            activated_at: 2.0,
+        });
+        assert!(!view.package("acme.runner").unwrap().active);
+        assert_eq!(
+            view.resolve_activity("job.run").unwrap().package_id,
+            "core.jobs"
+        );
+    }
+
+    #[test]
+    fn durable_binding_selects_and_pins_jobs_activity_provider() {
+        let mut view = RegistryView::new();
+        let mut bindings = BTreeMap::new();
+        bindings.insert("job.run".into(), "acme.runner".into());
+        view.apply(&installed_v2(
+            "acme.runner",
+            "1.2.3",
+            "digest-123",
+            r#"[[contributions.activity_provider]]
+id = "runner"
+provides = ["job.run"]
+[contributions.activity_provider.definition]
+backend = "jobs""#,
+            bindings,
+        ));
+
+        assert!(view.validate_activation("acme.runner").is_ok());
+        view.apply(&Event::PackageActivated {
+            package_id: "acme.runner".into(),
+            activated_by: "operator".into(),
+            activated_at: 2.0,
+        });
+
+        let provider = view.resolve_activity("job.run").unwrap();
+        assert_eq!(provider.package_id, "acme.runner");
+        assert_eq!(provider.package_version, "1.2.3");
+        assert_eq!(provider.package_digest, "digest-123");
+        assert_eq!(
+            provider
+                .definition
+                .get("backend")
+                .and_then(toml::Value::as_str),
+            Some("jobs")
+        );
     }
 }

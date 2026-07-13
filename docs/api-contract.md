@@ -348,7 +348,10 @@ validation-only and never grants authority or activates code.
 - `POST /api/packages` — `{manifest?: string, path?: string,
   authoritySessionId: string, bindings?: Record<capabilityId, packageId>}`;
   exactly one source is required. Requires `package.install`. Returns `201`
-  with `{package, validation}`. Local packages are marked `dev-unsigned`.
+  with `{package, validation}`. Bindings are persisted with the package and
+  revalidated on activation/replay. Reinstalling an existing package id is
+  rejected with `409`; package version/digest identity is immutable. Local
+  packages are marked `dev-unsigned`.
 - `GET /api/packages` — `{packages: Package[]}`.
 - `GET /api/packages/:id` — one package or `404`.
 - `POST /api/packages/:id/grant` — `{authoritySessionId, capabilities}`;
@@ -365,4 +368,8 @@ The v1 executable classes are `session_tool_provider` (MCP), `skill`, and
 `activity_provider`; `workflow_template` is stored/activated but inert pending
 WF-1. Registry-v1 `PUT /api/registry` remains available and writes an active
 synthetic package named `legacy.<kind>.<slug>`. Adapter slug resolution reads
-only active package contributions.
+only active package contributions. `activity_provider` contributions must use
+`definition.backend = "jobs"` in v1. `job.run` resolves through registry v2 to
+the built-in `core.jobs` provider unless an activated package's durable binding
+selects another JOBS-1-backed provider; each job record pins package id, version,
+and digest.

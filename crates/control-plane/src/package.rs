@@ -233,7 +233,19 @@ pub fn validate_install(
     manifest.validate_schema()?;
     manifest.validate_compatibility(OLYMPUS_API_VERSION, std::env::consts::OS)?;
     let requested_capabilities = manifest.capabilities.required.clone();
-    for capability in manifest.provided_capabilities() {
+    let provided_capabilities = manifest.provided_capabilities();
+    for (capability, provider) in bindings {
+        anyhow::ensure!(
+            provided_capabilities.contains(capability),
+            "binding {capability} does not name a capability provided by this package"
+        );
+        anyhow::ensure!(
+            provider == &manifest.package.id
+                || active_capabilities.get(capability) == Some(provider),
+            "binding {capability} selects unknown provider {provider}"
+        );
+    }
+    for capability in provided_capabilities {
         if let Some(owner) = active_capabilities.get(&capability) {
             anyhow::ensure!(
                 owner == &manifest.package.id
@@ -388,6 +400,14 @@ id = "db"
                 .trust,
             DEV_UNSIGNED
         );
+
+        let unique =
+            manifest("[[contributions.activity_provider]]\nid='runner'\nprovides=['ci.run']");
+        let invalid_binding = BTreeMap::from([("ci.run".into(), "ghost.provider".into())]);
+        assert!(validate_install(&unique, &active, &invalid_binding)
+            .unwrap_err()
+            .to_string()
+            .contains("binding"));
     }
 
     #[test]

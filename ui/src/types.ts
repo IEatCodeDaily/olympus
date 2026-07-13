@@ -405,6 +405,7 @@ export interface OlympusPackage {
   installedBy: string;
   installedAt: number;
   grantedCapabilities: string[];
+  bindings: Record<string, string>;
   active: boolean;
   trust: "dev-unsigned" | string;
 }

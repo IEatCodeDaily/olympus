@@ -120,6 +120,19 @@ async fn install(
     };
     let report = {
         let views = state.views.read().await;
+        if let Some(existing) = views.registry.package(&manifest.package.id) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error":"immutable_package_identity",
+                    "message":format!(
+                        "package {} is already installed at version {} with digest {}; package ids are immutable",
+                        manifest.package.id, existing.manifest.package.version, existing.digest
+                    )
+                })),
+            )
+                .into_response();
+        }
         match validate_install(
             &manifest,
             &views.registry.active_capabilities(),
@@ -129,12 +142,13 @@ async fn install(
             Err(error) => return bad_request("install_validation", &format!("{error:#}")),
         }
     };
-    let event = Event::PackageInstalled {
+    let event = Event::PackageInstalledV2 {
         manifest: manifest_toml,
         digest,
         source,
         installed_by: principal_id(&principal),
         installed_at: now_epoch(),
+        bindings: body.bindings,
     };
     if let Err(response) = append_apply(&state, &event).await {
         return response;
@@ -232,6 +246,9 @@ async fn activate(
                 "capabilities_not_granted",
                 "grant every requested capability before activation",
             );
+        }
+        if let Err(error) = views.registry.validate_activation(&id) {
+            return bad_request("activation_validation", &format!("{error:#}"));
         }
     }
     mutate(
