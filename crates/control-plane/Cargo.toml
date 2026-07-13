@@ -12,7 +12,6 @@ path = "src/main.rs"
 olympus-proto = { path = "../proto" }
 olympus-envoy = { path = "../envoy" }
 serde.workspace = true
-postcard = { version = "1", features = ["alloc"] }
 zstd.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
