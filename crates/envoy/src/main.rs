@@ -265,6 +265,7 @@ impl Conn {
 }
 
 /// Run the full connection lifecycle: hello → heartbeat loop + read loop.
+#[allow(clippy::too_many_arguments)] // connection wiring: every arg is a distinct owned subsystem
 async fn run_connection<R, W>(
     reader: R,
     writer: W,
