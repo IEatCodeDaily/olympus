@@ -264,6 +264,37 @@ pub enum Event {
         card_id: String,
         organization_id: String,
     },
+    // ---- Package registry v2 events (ADR 0012; append-only) ----
+    PackageInstalled {
+        /// Canonical TOML manifest. Keeping the public schema in TOML avoids
+        /// coupling durable events to Rust's in-memory manifest layout.
+        manifest: String,
+        digest: String,
+        source: String,
+        installed_by: String,
+        installed_at: f64,
+    },
+    PackageGranted {
+        package_id: String,
+        capabilities: Vec<String>,
+        granted_by: String,
+        granted_at: f64,
+    },
+    PackageActivated {
+        package_id: String,
+        activated_by: String,
+        activated_at: f64,
+    },
+    PackageDeactivated {
+        package_id: String,
+        deactivated_by: String,
+        deactivated_at: f64,
+    },
+    PackageRemoved {
+        package_id: String,
+        removed_by: String,
+        removed_at: f64,
+    },
 }
 
 #[cfg(test)]
@@ -758,6 +789,34 @@ mod tests {
                 card_id: "card-1".into(),
                 organization_id: "org-acme".into(),
             },
+            Event::PackageInstalled {
+                manifest: "[package]".into(),
+                digest: "abc".into(),
+                source: "inline".into(),
+                installed_by: "operator".into(),
+                installed_at: 40.0,
+            },
+            Event::PackageGranted {
+                package_id: "pkg".into(),
+                capabilities: vec!["job.run".into()],
+                granted_by: "operator".into(),
+                granted_at: 41.0,
+            },
+            Event::PackageActivated {
+                package_id: "pkg".into(),
+                activated_by: "operator".into(),
+                activated_at: 42.0,
+            },
+            Event::PackageDeactivated {
+                package_id: "pkg".into(),
+                deactivated_by: "operator".into(),
+                deactivated_at: 43.0,
+            },
+            Event::PackageRemoved {
+                package_id: "pkg".into(),
+                removed_by: "operator".into(),
+                removed_at: 44.0,
+            },
         ]
     }
 
@@ -794,6 +853,11 @@ mod tests {
             Event::SessionCapabilitiesAssigned { .. } => {}
             Event::ProjectOrganizationAssigned { .. } => {}
             Event::CardOrganizationAssigned { .. } => {}
+            Event::PackageInstalled { .. } => {}
+            Event::PackageGranted { .. } => {}
+            Event::PackageActivated { .. } => {}
+            Event::PackageDeactivated { .. } => {}
+            Event::PackageRemoved { .. } => {}
         }
     }
 

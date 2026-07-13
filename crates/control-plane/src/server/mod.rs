@@ -153,6 +153,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::projects::router())
         .merge(routes::repos::router())
         .merge(routes::organizations::router())
+        .merge(routes::packages::router())
         .merge(routes::edge::router())
         .route("/api/enroll", post(routes::enroll::mint_enroll))
         .route(

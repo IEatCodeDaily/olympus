@@ -75,13 +75,26 @@ pub(crate) async fn put_registry_entry(
             .into_response();
     }
 
-    let event = crate::event::Event::EntryRegistered {
-        kind: kind.clone(),
-        slug: slug.clone(),
-        definition: body.definition,
-        registered_at: now_epoch(),
-    };
-    if let Err(e) = state.log.append(&event) {
+    let registered_at = now_epoch();
+    let manifest = crate::views::registry::legacy_manifest_toml(&kind, &slug, &body.definition);
+    let package_id = format!("legacy.{kind}.{slug}");
+    let events = [
+        crate::event::Event::PackageInstalled {
+            digest: blake3::hash(body.definition.as_bytes())
+                .to_hex()
+                .to_string(),
+            manifest,
+            source: "legacy-api".into(),
+            installed_by: "operator".into(),
+            installed_at: registered_at,
+        },
+        crate::event::Event::PackageActivated {
+            package_id,
+            activated_by: "operator".into(),
+            activated_at: registered_at,
+        },
+    ];
+    if let Err(e) = state.log.append_batch(&events) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "log_error", "message": format!("{e:#}") })),
@@ -90,7 +103,9 @@ pub(crate) async fn put_registry_entry(
     }
     let dto = {
         let mut views = state.views.write().await;
-        views.apply(&event);
+        for event in &events {
+            views.apply(event);
+        }
         views
             .registry
             .get(&kind, &slug)

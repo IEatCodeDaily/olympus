@@ -9,9 +9,23 @@
 //! replace). Drift detection compares the registry against a node's discovered
 //! configs and surfaces entries that exist on the node but NOT in the registry.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::event::Event;
+use crate::package::{Contribution, Contributions, PackageManifest};
+
+#[derive(Debug, Clone)]
+pub struct PackageRecord {
+    pub manifest: PackageManifest,
+    pub manifest_toml: String,
+    pub digest: String,
+    pub source: String,
+    pub installed_by: String,
+    pub installed_at: f64,
+    pub granted_capabilities: BTreeSet<String>,
+    pub active: bool,
+    pub trust: String,
+}
 
 // RegistryEntry moved to `olympus-envoy` (ADR 0008 S2) — the adapter consumes
 // resolved entries envoy-side. Re-exported so existing call sites keep working.
@@ -19,14 +33,18 @@ pub use olympus_envoy::adapter::RegistryEntry;
 
 /// In-memory projection of the registry from the event log (ADR 0006 §9.4).
 pub struct RegistryView {
-    /// (kind, slug) → entry. Key is `(kind, slug)` as a composite string.
+    /// (kind, slug) → active adapter entry.
     entries: HashMap<String, RegistryEntry>,
+    entry_owners: HashMap<String, String>,
+    packages: HashMap<String, PackageRecord>,
 }
 
 impl RegistryView {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            entry_owners: HashMap::new(),
+            packages: HashMap::new(),
         }
     }
 
@@ -34,26 +52,153 @@ impl RegistryView {
         format!("{kind}/{slug}")
     }
 
-    /// Apply an event. Only `EntryRegistered` mutates this view; all others
-    /// are ignored.
+    /// Apply registry-v1 and package-v2 events deterministically.
     pub fn apply(&mut self, event: &Event) {
-        if let Event::EntryRegistered {
-            kind,
-            slug,
-            definition,
-            registered_at,
-        } = event
-        {
+        match event {
+            Event::EntryRegistered {
+                kind,
+                slug,
+                definition,
+                registered_at,
+            } => {
+                let package_id = format!("legacy.{kind}.{slug}");
+                let key = Self::key(kind, slug);
+                self.entries.insert(
+                    key.clone(),
+                    RegistryEntry {
+                        kind: kind.clone(),
+                        slug: slug.clone(),
+                        definition: definition.clone(),
+                        registered_at: *registered_at,
+                    },
+                );
+                self.entry_owners.insert(key, package_id.clone());
+                self.packages
+                    .entry(package_id)
+                    .or_insert_with(|| PackageRecord {
+                        manifest: legacy_manifest(kind, slug, definition),
+                        manifest_toml: legacy_manifest_toml(kind, slug, definition),
+                        digest: blake3::hash(definition.as_bytes()).to_hex().to_string(),
+                        source: "legacy-registry".into(),
+                        installed_by: "legacy".into(),
+                        installed_at: *registered_at,
+                        granted_capabilities: BTreeSet::new(),
+                        active: true,
+                        trust: crate::package::DEV_UNSIGNED.into(),
+                    });
+            }
+            Event::PackageInstalled {
+                manifest,
+                digest,
+                source,
+                installed_by,
+                installed_at,
+            } => {
+                if let Ok(parsed) = PackageManifest::parse_toml(manifest) {
+                    let id = parsed.package.id.clone();
+                    self.remove_package_entries(&id);
+                    self.packages.insert(
+                        id,
+                        PackageRecord {
+                            manifest: parsed,
+                            manifest_toml: manifest.clone(),
+                            digest: digest.clone(),
+                            source: source.clone(),
+                            installed_by: installed_by.clone(),
+                            installed_at: *installed_at,
+                            granted_capabilities: BTreeSet::new(),
+                            active: false,
+                            trust: crate::package::DEV_UNSIGNED.into(),
+                        },
+                    );
+                }
+            }
+            Event::PackageGranted {
+                package_id,
+                capabilities,
+                ..
+            } => {
+                if let Some(package) = self.packages.get_mut(package_id) {
+                    package.granted_capabilities = capabilities.iter().cloned().collect();
+                }
+            }
+            Event::PackageActivated {
+                package_id,
+                activated_at,
+                ..
+            } => {
+                if let Some(package) = self.packages.get_mut(package_id) {
+                    package.active = true;
+                    let manifest = package.manifest.clone();
+                    self.add_package_entries(package_id, &manifest, *activated_at);
+                }
+            }
+            Event::PackageDeactivated { package_id, .. } => {
+                self.remove_package_entries(package_id);
+                if let Some(package) = self.packages.get_mut(package_id) {
+                    package.active = false;
+                }
+            }
+            Event::PackageRemoved { package_id, .. } => {
+                self.remove_package_entries(package_id);
+                self.packages.remove(package_id);
+            }
+            _ => {}
+        }
+    }
+
+    fn add_package_entries(&mut self, package_id: &str, manifest: &PackageManifest, at: f64) {
+        for (kind, contribution) in adapter_contributions(&manifest.contributions) {
+            let definition =
+                serde_json::to_string(&contribution.definition).unwrap_or_else(|_| "{}".into());
+            let key = Self::key(kind, &contribution.id);
             self.entries.insert(
-                Self::key(kind, slug),
+                key.clone(),
                 RegistryEntry {
-                    kind: kind.clone(),
-                    slug: slug.clone(),
-                    definition: definition.clone(),
-                    registered_at: *registered_at,
+                    kind: kind.into(),
+                    slug: contribution.id.clone(),
+                    definition,
+                    registered_at: at,
                 },
             );
+            self.entry_owners.insert(key, package_id.into());
         }
+    }
+
+    fn remove_package_entries(&mut self, package_id: &str) {
+        let keys: Vec<_> = self
+            .entry_owners
+            .iter()
+            .filter_map(|(key, owner)| (owner == package_id).then_some(key.clone()))
+            .collect();
+        for key in keys {
+            self.entries.remove(&key);
+            self.entry_owners.remove(&key);
+        }
+    }
+
+    pub fn package(&self, id: &str) -> Option<&PackageRecord> {
+        self.packages.get(id)
+    }
+
+    pub fn packages(&self) -> Vec<&PackageRecord> {
+        let mut values: Vec<_> = self.packages.values().collect();
+        values.sort_by(|a, b| a.manifest.package.id.cmp(&b.manifest.package.id));
+        values
+    }
+
+    pub fn active_capabilities(&self) -> BTreeMap<String, String> {
+        self.packages
+            .values()
+            .filter(|package| package.active)
+            .flat_map(|package| {
+                package
+                    .manifest
+                    .provided_capabilities()
+                    .into_iter()
+                    .map(move |capability| (capability, package.manifest.package.id.clone()))
+            })
+            .collect()
     }
 
     /// Resolve a (kind, slug) pair to its definition, if registered.
@@ -140,6 +285,53 @@ pub struct DriftReport {
     pub orphaned: Vec<(String, String)>,
     /// (kind, slug) registered but NOT on the node → can't materialize yet.
     pub missing: Vec<(String, String)>,
+}
+
+fn adapter_contributions(contributions: &Contributions) -> Vec<(&'static str, &Contribution)> {
+    contributions
+        .session_tool_provider
+        .iter()
+        .map(|item| ("mcp", item))
+        .chain(contributions.skill.iter().map(|item| ("skill", item)))
+        .chain(
+            contributions
+                .runtime_adapter
+                .iter()
+                .map(|item| ("plugin", item)),
+        )
+        .chain(
+            contributions
+                .policy_provider
+                .iter()
+                .map(|item| ("hook", item)),
+        )
+        .collect()
+}
+
+fn legacy_manifest(kind: &str, slug: &str, definition: &str) -> PackageManifest {
+    PackageManifest::parse_toml(&legacy_manifest_toml(kind, slug, definition))
+        .expect("generated legacy package manifest is valid")
+}
+
+pub fn legacy_manifest_toml(kind: &str, slug: &str, definition: &str) -> String {
+    let class = match kind {
+        "mcp" => "session_tool_provider",
+        "skill" => "skill",
+        "plugin" => "runtime_adapter",
+        "hook" => "policy_provider",
+        _ => "resource_provider",
+    };
+    let table: toml::Table = serde_json::from_str::<serde_json::Value>(definition)
+        .ok()
+        .and_then(|value| toml::Value::try_from(value).ok())
+        .and_then(|value| value.as_table().cloned())
+        .unwrap_or_default();
+    let definition_toml = toml::to_string(&table).unwrap_or_default();
+    format!(
+        "[package]\nid = {id:?}\nname = {name:?}\nversion = \"0.0.0\"\npublisher = \"legacy\"\nlicense = \"unknown\"\n\n[compatibility]\nolympus_api = \"*\"\nplatforms = [\"*\"]\n\n[[contributions.{class}]]\nid = {slug:?}\n\n[contributions.{class}.definition]\n{definition_toml}",
+        id = format!("legacy.{kind}.{slug}"),
+        name = format!("Legacy {kind} {slug}"),
+    )
 }
 
 impl Default for RegistryView {
@@ -269,5 +461,25 @@ mod tests {
         assert_eq!(report.matched, 1);
         assert!(report.orphaned.is_empty());
         assert!(report.missing.is_empty());
+    }
+
+    #[test]
+    fn legacy_migration_is_idempotent_across_double_replay() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let log = crate::log::Log::open(file.path()).unwrap();
+        log.append(&registered(
+            "mcp",
+            "gitnexus",
+            r#"{"command":"gitnexus"}"#,
+            1.0,
+        ))
+        .unwrap();
+        let mut views = crate::views::ViewManager::new();
+        views.replay(&log).unwrap();
+        views.replay(&log).unwrap();
+        assert_eq!(views.registry.packages().len(), 1);
+        let package = views.registry.package("legacy.mcp.gitnexus").unwrap();
+        assert!(package.active);
+        assert_eq!(views.registry.list_kind("mcp").len(), 1);
     }
 }

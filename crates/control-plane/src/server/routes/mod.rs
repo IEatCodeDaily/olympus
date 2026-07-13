@@ -14,6 +14,7 @@ pub(crate) mod irc;
 pub(crate) mod jobs;
 pub(crate) mod nodes;
 pub(crate) mod organizations;
+pub(crate) mod packages;
 pub(crate) mod projects;
 pub(crate) mod registry;
 pub(crate) mod repos;

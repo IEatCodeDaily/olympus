@@ -14,6 +14,7 @@ pub mod import;
 pub mod irc;
 pub mod log;
 pub mod node;
+pub mod package;
 pub mod projects;
 pub mod proxy;
 pub mod repos;

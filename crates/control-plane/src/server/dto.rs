@@ -364,6 +364,34 @@ impl RegistryEntryDto {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageDto {
+    pub manifest: crate::package::PackageManifest,
+    pub digest: String,
+    pub source: String,
+    pub installed_by: String,
+    pub installed_at: f64,
+    pub granted_capabilities: std::collections::BTreeSet<String>,
+    pub active: bool,
+    pub trust: String,
+}
+
+impl PackageDto {
+    pub fn from_record(record: &crate::views::registry::PackageRecord) -> Self {
+        Self {
+            manifest: record.manifest.clone(),
+            digest: record.digest.clone(),
+            source: record.source.clone(),
+            installed_by: record.installed_by.clone(),
+            installed_at: record.installed_at,
+            granted_capabilities: record.granted_capabilities.clone(),
+            active: record.active,
+            trust: record.trust.clone(),
+        }
+    }
+}
+
 /// `Vault` summary as the UI consumes it (api-contract.md §Vaults).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
