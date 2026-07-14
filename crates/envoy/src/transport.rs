@@ -13,11 +13,32 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use iroh::endpoint::presets;
+use iroh::address_lookup::PkarrResolver;
+use iroh::endpoint::{presets, Builder};
 use iroh::{Endpoint, EndpointAddr, PublicKey, SecretKey};
 
 /// ALPN for the Olympus Hall↔Envoy protocol.
 pub const OLYMPUS_ALPN: &[u8] = b"olympus/envoy/1";
+
+/// Add HTTPS PKARR resolution alongside the N0 preset's DNS resolver.
+///
+/// DNS resolvers can negatively cache the brief NXDOMAIN window between an
+/// endpoint starting and publishing its relay address. The HTTPS resolver
+/// reads the same signed PKARR record directly and avoids that stale-cache
+/// failure mode.
+trait ResilientLookupBuilder: Sized {
+    fn with_pkarr_https_resolver(self) -> Self;
+}
+
+impl ResilientLookupBuilder for Builder {
+    fn with_pkarr_https_resolver(self) -> Self {
+        self.address_lookup(PkarrResolver::n0_dns())
+    }
+}
+
+fn configure_resilient_lookup<B: ResilientLookupBuilder>(builder: B) -> B {
+    builder.with_pkarr_https_resolver()
+}
 
 /// Load the persisted iroh secret key from `dir/iroh.key`, generating and
 /// persisting a fresh one on first run (0600 perms).
@@ -48,12 +69,14 @@ pub fn load_or_create_secret(dir: &Path) -> Result<SecretKey> {
 /// Bind an iroh endpoint with the given secret key using the public n0 relay
 /// preset, accepting the Olympus ALPN.
 pub async fn bind_endpoint(secret: SecretKey) -> Result<Endpoint> {
-    let ep = Endpoint::builder(presets::N0)
-        .secret_key(secret)
-        .alpns(vec![OLYMPUS_ALPN.to_vec()])
-        .bind()
-        .await
-        .context("binding iroh endpoint")?;
+    let ep = configure_resilient_lookup(
+        Endpoint::builder(presets::N0)
+            .secret_key(secret)
+            .alpns(vec![OLYMPUS_ALPN.to_vec()]),
+    )
+    .bind()
+    .await
+    .context("binding iroh endpoint")?;
     Ok(ep)
 }
 
@@ -116,5 +139,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("iroh.key"), b"short").unwrap();
         assert!(load_or_create_secret(dir.path()).is_err());
+    }
+
+    #[derive(Default)]
+    struct RecordingLookupBuilder {
+        pkarr_https_resolver: bool,
+    }
+
+    impl ResilientLookupBuilder for RecordingLookupBuilder {
+        fn with_pkarr_https_resolver(mut self) -> Self {
+            self.pkarr_https_resolver = true;
+            self
+        }
+    }
+
+    #[test]
+    fn resilient_lookup_adds_pkarr_https_fallback() {
+        let configured = configure_resilient_lookup(RecordingLookupBuilder::default());
+        assert!(configured.pkarr_https_resolver);
     }
 }

@@ -5,6 +5,16 @@ Source: operator + Zephyr session decisions, relayed to Terminus 2026-07-11.
 Relates to: ADR 0002 (layer boundary), ADR 0008 (Hall/Envoy split, wire
 protocol), ADR 0010 (Hall auth), ADR 0006 (setup adapter).
 
+## Implementation status
+
+Phase 1 is operational. `fxcompute-01` runs a dedicated `job_runner` Envoy over
+iroh, Hall exposes authenticated REST dispatch/result routes, and Terminus uses
+`scripts/olympus_job.py` for source sync and execution. See
+`docs/fxbuilder-job-runner.md` for the production topology and runbook.
+
+The node remains deliberately outside K3s; it is a host-level build executor,
+not part of the later ephemeral cluster-compute plan.
+
 ## Decisions
 
 ### 1. JobRunner is a role of olympus-envoy, not a separate binary

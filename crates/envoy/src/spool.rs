@@ -21,6 +21,10 @@ pub struct EventSpool {
     dir: PathBuf,
     cap: u64,
     next_seq: Mutex<HashMap<String, u64>>,
+    /// Serializes JSONL append/read/ACK-rewrite operations. Without this lock,
+    /// an ACK rename can replace a file after a concurrent append and silently
+    /// discard the newly appended frame.
+    io: Mutex<()>,
 }
 
 impl EventSpool {
@@ -35,6 +39,7 @@ impl EventSpool {
             dir,
             cap,
             next_seq: Mutex::new(HashMap::new()),
+            io: Mutex::new(()),
         };
         spool.recover_all()?;
         Ok(spool)
@@ -64,6 +69,7 @@ impl EventSpool {
 
     /// Append and fsync an event before the caller sends it.
     pub fn append(&self, frame: &EnvoyFrame) -> Result<()> {
+        let _io = self.io.lock().expect("spool I/O mutex poisoned");
         let (session_id, seq) = event_identity(frame).context("only event frames are spoolable")?;
         let bytes = serde_json::to_vec(frame).context("serializing spooled event")?;
         let path = self.path(session_id);
@@ -94,6 +100,11 @@ impl EventSpool {
 
     /// Return ordered records, optionally restricted to seq > watermark.
     pub fn read(&self, session_id: &str, after: Option<u64>) -> Result<Vec<EnvoyFrame>> {
+        let _io = self.io.lock().expect("spool I/O mutex poisoned");
+        self.read_unlocked(session_id, after)
+    }
+
+    fn read_unlocked(&self, session_id: &str, after: Option<u64>) -> Result<Vec<EnvoyFrame>> {
         let path = self.path(session_id);
         if !path.exists() {
             return Ok(Vec::new());
@@ -118,7 +129,8 @@ impl EventSpool {
 
     /// Atomically retain only records above Hall's acknowledged watermark.
     pub fn acknowledge(&self, session_id: &str, watermark: u64) -> Result<()> {
-        let retained = self.read(session_id, Some(watermark))?;
+        let _io = self.io.lock().expect("spool I/O mutex poisoned");
+        let retained = self.read_unlocked(session_id, Some(watermark))?;
         let path = self.path(session_id);
         if retained.is_empty() {
             match fs::remove_file(&path) {

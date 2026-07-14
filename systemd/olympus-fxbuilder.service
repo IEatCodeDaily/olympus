@@ -1,0 +1,40 @@
+[Unit]
+Description=Olympus FxBuilder — dedicated JobRunner Envoy
+Documentation=https://github.com/IEatCodeDaily/olympus/blob/main/docs/adrs/0011-jobs-mcp-capabilities-sandboxing.md
+Wants=network-online.target
+After=network-online.target fxbuilder-tunnel.service
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/olympus
+Environment="HOME=/home/rpw"
+Environment="PATH=/var/lib/olympus/cargo-home/bin:/home/rpw/.cargo/bin:/home/rpw/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="CARGO_HOME=/var/lib/olympus/cargo-home"
+Environment="CARGO_TARGET_DIR=/var/lib/olympus/cargo-target"
+Environment="RUSTUP_HOME=/home/rpw/.rustup"
+Environment="BUN_INSTALL=/home/rpw/.bun"
+Environment="OLYMPUS_ENVOY_ROLES=job_runner"
+Environment="OLYMPUS_JOB_ROOT=/srv/olympus/jobs"
+ExecStart=/home/rpw/.olympus/bin/olympus-envoy \
+  --hall iroh:0f7a3ec309a713fe38b7df56d5a0e5fefc4cbcb6a5d10c71bc6ac7b9d7791ea7 \
+  --node-id fxbuilder \
+  --roles job_runner \
+  --job-root /srv/olympus/jobs
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/olympus/jobs /var/lib/olympus /home/rpw/.olympus
+UMask=0077
+MemoryHigh=9G
+MemoryMax=10G
+TasksMax=4096
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

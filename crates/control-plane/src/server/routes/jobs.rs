@@ -1,7 +1,6 @@
 //! Remote job dispatch REST surface (ADR 0011 phase 1).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use axum::extract::{Path, State};
@@ -17,7 +16,6 @@ use tokio::sync::RwLock;
 use crate::server::AppState;
 
 static JOBS: OnceLock<RwLock<HashMap<String, JobRecord>>> = OnceLock::new();
-static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 fn jobs() -> &'static RwLock<HashMap<String, JobRecord>> {
     JOBS.get_or_init(Default::default)
 }
@@ -57,6 +55,12 @@ fn default_timeout() -> u64 {
 }
 fn default_output() -> u64 {
     16 * 1024 * 1024
+}
+
+fn next_job_id() -> String {
+    // Envoy sequence watermarks survive Hall restarts, so job identifiers must
+    // never repeat across process lifetimes.
+    format!("job-{}", uuid::Uuid::new_v4())
 }
 
 pub fn router() -> Router<AppState> {
@@ -114,11 +118,7 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
         )
             .into_response();
     };
-    let job_id = format!(
-        "job-{}-{}",
-        std::process::id(),
-        NEXT_JOB.fetch_add(1, Ordering::Relaxed)
-    );
+    let job_id = next_job_id();
     let record = JobRecord {
         job_id: job_id.clone(),
         node_id: body.node_id.clone(),
@@ -222,5 +222,51 @@ pub async fn apply_result(
         job.truncated = truncated;
         job.timed_out = timed_out;
         job.cancelled = cancelled;
+    }
+}
+
+#[cfg(test)]
+pub async fn seed_test_job(job_id: &str) {
+    jobs().write().await.insert(
+        job_id.to_owned(),
+        JobRecord {
+            job_id: job_id.to_owned(),
+            node_id: "test-node".into(),
+            argv: vec!["test".into()],
+            provider_package: "test.jobs".into(),
+            provider_version: "0".into(),
+            provider_digest: "test".into(),
+            status: "running".into(),
+            output: String::new(),
+            exit_code: None,
+            truncated: false,
+            timed_out: false,
+            cancelled: false,
+        },
+    );
+}
+
+#[cfg(test)]
+pub async fn test_job_output(job_id: &str) -> Option<String> {
+    jobs()
+        .read()
+        .await
+        .get(job_id)
+        .map(|job| job.output.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::next_job_id;
+
+    #[test]
+    fn generated_job_ids_are_unique_uuid_values() {
+        let ids = (0..256).map(|_| next_job_id()).collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 256);
+        for id in ids {
+            uuid::Uuid::parse_str(id.strip_prefix("job-").unwrap()).unwrap();
+        }
     }
 }

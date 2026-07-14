@@ -513,7 +513,7 @@ pub async fn handle_envoy_conn<R, W>(
                     continue;
                 }
             }
-            let outcome = handle_envoy_frame(frame, &registry, &envoy_conns, &mut conn).await;
+            let outcome = handle_envoy_frame(frame, &registry, &mut conn).await;
             if outcome == FrameOutcome::Disconnect {
                 break;
             }
@@ -595,13 +595,27 @@ pub async fn handle_envoy_conn<R, W>(
         }
     }
 
-    // Connection closed — deregister the node if it was registered.
+    // Connection closed. Only the connection generation currently stored for
+    // this node may deregister it; a superseded connection can finish draining
+    // after its replacement has already registered.
     if let Some(node_id) = connected_node {
-        tracing::info!(node = %node_id, "node disconnected, deregistering");
-        registry.deregister(&node_id).await;
-        // Fail all pending requests on this envoy's connection and remove it.
-        if let Some(conn) = envoy_conns.remove(&node_id).await {
-            conn.fail_all().await;
+        if let Some(closing_conn) = conn {
+            let removed = envoy_conns
+                .remove_if_current(&node_id, &closing_conn)
+                .await
+                .is_some();
+            closing_conn.fail_all().await;
+            if removed {
+                tracing::info!(node = %node_id, "current node connection disconnected, deregistering");
+                registry.deregister(&node_id).await;
+            } else {
+                tracing::info!(node = %node_id, "superseded node connection disconnected; replacement preserved");
+            }
+        } else if !envoy_conns.is_remote_node(&node_id).await {
+            // Legacy v1 connections are not stored in EnvoyConnections. Avoid
+            // deregistering a v2 replacement that has claimed the same node id.
+            tracing::info!(node = %node_id, "legacy node disconnected, deregistering");
+            registry.deregister(&node_id).await;
         }
     }
 }
@@ -729,7 +743,6 @@ async fn handle_envoy_hello(
 async fn handle_envoy_frame(
     frame: olympus_proto::frames::EnvoyFrame,
     registry: &NodeRegistry,
-    envoy_conns: &crate::server::envoy_conn::EnvoyConnections,
     conn: &mut Option<Arc<crate::server::envoy_conn::EnvoyConnection>>,
 ) -> FrameOutcome {
     use olympus_proto::frames::EnvoyFrame;
@@ -748,11 +761,8 @@ async fn handle_envoy_frame(
             }
         }
         EnvoyFrame::Bye { node_id } => {
-            tracing::info!(node = %node_id, "envoy deregistered (bye)");
-            registry.deregister(&node_id).await;
-            if let Some(conn) = envoy_conns.remove(&node_id).await {
-                conn.fail_all().await;
-            }
+            tracing::info!(node = %node_id, "envoy sent bye");
+            // The outer connection cleanup performs generation-aware removal.
             return FrameOutcome::Disconnect;
         }
         EnvoyFrame::Resp {
@@ -802,13 +812,9 @@ async fn handle_envoy_frame(
             data,
         } => {
             if let Some(c) = conn {
-                crate::server::routes::jobs::apply_output(&job_id, stream, data).await;
-                let _ = c
-                    .send_request(olympus_proto::frames::HallFrame::Ack {
-                        session_id: job_id,
-                        seq,
-                    })
-                    .await;
+                if let Err(error) = c.apply_job_output(&job_id, seq, stream, data).await {
+                    tracing::warn!(job = %job_id, seq, error = %error, "job output rejected; leaving unacked");
+                }
             }
         }
         EnvoyFrame::JobResult {
@@ -820,16 +826,12 @@ async fn handle_envoy_frame(
             cancelled,
         } => {
             if let Some(c) = conn {
-                crate::server::routes::jobs::apply_result(
-                    &job_id, exit_code, truncated, timed_out, cancelled,
-                )
-                .await;
-                let _ = c
-                    .send_request(olympus_proto::frames::HallFrame::Ack {
-                        session_id: job_id,
-                        seq,
-                    })
-                    .await;
+                if let Err(error) = c
+                    .apply_job_result(&job_id, seq, exit_code, truncated, timed_out, cancelled)
+                    .await
+                {
+                    tracing::warn!(job = %job_id, seq, error = %error, "job result rejected; leaving unacked");
+                }
             }
         }
     }

@@ -811,7 +811,15 @@ fn arg_value(key: &str) -> Option<String> {
 
 fn configured_roles() -> Result<Vec<NodeRole>> {
     let raw = arg_value("--roles").or_else(|| std::env::var("OLYMPUS_ENVOY_ROLES").ok());
-    let mut roles = vec![NodeRole::AgentRuntime];
+    parse_roles(raw.as_deref())
+}
+
+fn parse_roles(raw: Option<&str>) -> Result<Vec<NodeRole>> {
+    let mut roles = if raw.is_some() {
+        Vec::new()
+    } else {
+        vec![NodeRole::AgentRuntime]
+    };
     if let Some(raw) = raw {
         for role in raw
             .split(',')
@@ -819,7 +827,7 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
             .filter(|value| !value.is_empty())
         {
             match role {
-                "agent_runtime" | "agent-runtime" => {}
+                "agent_runtime" | "agent-runtime" => roles.push(NodeRole::AgentRuntime),
                 "job_runner" | "job-runner" => roles.push(NodeRole::JobRunner),
                 other => anyhow::bail!("unknown envoy role: {other}"),
             }
@@ -831,4 +839,22 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
     });
     roles.dedup();
     Ok(roles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_job_runner_role_does_not_imply_agent_runtime() {
+        assert_eq!(
+            parse_roles(Some("job_runner")).unwrap(),
+            vec![NodeRole::JobRunner]
+        );
+    }
+
+    #[test]
+    fn absent_role_configuration_preserves_agent_runtime_default() {
+        assert_eq!(parse_roles(None).unwrap(), vec![NodeRole::AgentRuntime]);
+    }
 }

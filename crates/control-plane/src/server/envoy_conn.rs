@@ -173,6 +173,55 @@ impl EnvoyConnection {
         Ok(is_new)
     }
 
+    pub async fn apply_job_output(
+        &self,
+        job_id: &str,
+        seq: u64,
+        stream: olympus_proto::frames::JobStream,
+        data: String,
+    ) -> Result<bool> {
+        let is_new = match &self.log {
+            Some(log) => log.accept_envoy_seq(job_id, seq)?,
+            None => true,
+        };
+        if is_new {
+            crate::server::routes::jobs::apply_output(job_id, stream, data).await;
+        }
+        self.send_request(HallFrame::Ack {
+            session_id: job_id.to_owned(),
+            seq,
+        })
+        .await?;
+        Ok(is_new)
+    }
+
+    pub async fn apply_job_result(
+        &self,
+        job_id: &str,
+        seq: u64,
+        exit_code: Option<i32>,
+        truncated: bool,
+        timed_out: bool,
+        cancelled: bool,
+    ) -> Result<bool> {
+        let is_new = match &self.log {
+            Some(log) => log.accept_envoy_seq(job_id, seq)?,
+            None => true,
+        };
+        if is_new {
+            crate::server::routes::jobs::apply_result(
+                job_id, exit_code, truncated, timed_out, cancelled,
+            )
+            .await;
+        }
+        self.send_request(HallFrame::Ack {
+            session_id: job_id.to_owned(),
+            seq,
+        })
+        .await?;
+        Ok(is_new)
+    }
+
     pub async fn apply_observed(
         &self,
         transport_session_id: &str,
@@ -385,6 +434,25 @@ impl EnvoyConnections {
             .await
             .insert(node_id.to_string(), conn.clone());
         conn
+    }
+
+    /// Remove a connection only if it is still the current generation for the node.
+    /// A superseded connection may finish draining after its replacement has already
+    /// registered; in that case it must not remove the replacement.
+    pub async fn remove_if_current(
+        &self,
+        node_id: &str,
+        expected: &Arc<EnvoyConnection>,
+    ) -> Option<Arc<EnvoyConnection>> {
+        let mut inner = self.inner.write().await;
+        let is_current = inner
+            .get(node_id)
+            .is_some_and(|current| Arc::ptr_eq(current, expected));
+        if is_current {
+            inner.remove(node_id)
+        } else {
+            None
+        }
     }
 
     /// Remove a connection (returns it so the caller can fail its pending reqs).
@@ -641,6 +709,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn superseded_connection_cannot_remove_its_replacement() {
+        use std::sync::Arc;
+        use tokio::io::duplex;
+
+        let conns = EnvoyConnections::new();
+        let (old_writer, _old_peer) = duplex(256);
+        let old = conns.insert("n1", Box::new(old_writer)).await;
+        let (new_writer, _new_peer) = duplex(256);
+        let new = conns.insert("n1", Box::new(new_writer)).await;
+
+        assert!(conns.remove_if_current("n1", &old).await.is_none());
+        let current = conns.get("n1").await.unwrap();
+        assert!(Arc::ptr_eq(&current, &new));
+        assert!(conns.remove_if_current("n1", &new).await.is_some());
+        assert!(conns.get("n1").await.is_none());
+    }
+
+    #[tokio::test]
     async fn event_channel_forwards_events() {
         let conn = test_conn();
         let mut rx = conn.subscribe_events("s1");
@@ -751,6 +837,51 @@ mod tests {
         assert_eq!(events.recv().await.unwrap(), AgentEvent::Text("two".into()));
         assert!(events.try_recv().is_err());
         assert_eq!(reopened.envoy_watermark("s1").unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn duplicate_job_output_is_applied_once_and_acked_twice() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let log = Arc::new(crate::log::Log::open(file.path()).unwrap());
+        let (writer, mut peer) = tokio::io::duplex(4096);
+        let conn = EnvoyConnection::new(Box::new(writer), Some(log.clone()));
+        let job_id = "job-output-dedup";
+        crate::server::routes::jobs::seed_test_job(job_id).await;
+
+        assert!(conn
+            .apply_job_output(
+                job_id,
+                0,
+                olympus_proto::frames::JobStream::Stdout,
+                "once\n".into()
+            )
+            .await
+            .unwrap());
+        assert!(!conn
+            .apply_job_output(
+                job_id,
+                0,
+                olympus_proto::frames::JobStream::Stdout,
+                "duplicate\n".into()
+            )
+            .await
+            .unwrap());
+
+        assert_eq!(
+            crate::server::routes::jobs::test_job_output(job_id).await,
+            Some("once\n".into())
+        );
+        assert_eq!(log.envoy_watermark(job_id).unwrap(), Some(0));
+
+        use tokio::io::AsyncReadExt as _;
+        let mut ack_bytes = vec![0; 512];
+        let count = peer.read(&mut ack_bytes).await.unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&ack_bytes[..count])
+                .matches("\"kind\":\"ack\"")
+                .count(),
+            2
+        );
     }
 
     #[tokio::test]
