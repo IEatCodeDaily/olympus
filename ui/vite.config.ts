@@ -8,6 +8,10 @@ export default defineConfig(({ mode, command }) => {
 
   // Backend target for the dev proxy. Always a real URL, never empty.
   const proxyTarget = pick("VITE_PROXY_TARGET", "http://127.0.0.1:8799");
+  const allowedHosts = pick("VITE_ALLOWED_HOSTS", "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter(Boolean);
   const servingDevelopment = command === "serve";
 
   return {
@@ -15,6 +19,7 @@ export default defineConfig(({ mode, command }) => {
     server: {
       port: 5177,
       host: "127.0.0.1",
+      allowedHosts,
       proxy: {
         "/api": { target: proxyTarget, changeOrigin: true },
         "/ws": { target: proxyTarget, changeOrigin: true, ws: true },
