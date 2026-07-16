@@ -91,6 +91,34 @@ fn test_state() -> (AppState, tempfile::TempDir) {
     (state, dir)
 }
 
+#[tokio::test]
+async fn enrolled_node_survives_restart_and_appears_offline_in_nodes_api() {
+    let (mut state, dir) = test_state();
+    let registry = crate::node::NodeRegistry::with_inventory(dir.path()).unwrap();
+    registry.enroll("durable", "iroh-key").await.unwrap();
+    drop(registry);
+    state.nodes = crate::node::NodeRegistry::with_inventory(dir.path()).unwrap();
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/nodes")
+                .header("authorization", "Bearer testtoken")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let nodes: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(nodes.as_array().unwrap().len(), 1);
+    assert_eq!(nodes[0]["nodeId"], "durable");
+    assert_eq!(nodes[0]["status"], "offline");
+}
+
 fn package_manifest(id: &str, activity_id: Option<&str>) -> String {
     let contribution = activity_id
         .map(|activity_id| {
