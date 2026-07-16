@@ -16,6 +16,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bridge::child::command_for_agent;
+
 const CLAUDE_CODE_AGENT_ID: &str = "claude-code";
 const CODEX_AGENT_ID: &str = "codex";
 
@@ -282,9 +284,9 @@ fn command_version_with_timeout(binary: &Path, timeout: Duration) -> Option<Stri
     }
 }
 
-fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
+fn discover_cli_harnesses(path_env: &str, claude_adapter: &Path) -> Vec<AgentInfo> {
     let mut out = Vec::new();
-    if let Some(claude) = which_in_path("claude", path_env) {
+    if is_executable(claude_adapter) {
         out.push(AgentInfo {
             id: CLAUDE_CODE_AGENT_ID.to_string(),
             provider: Some(CLAUDE_CODE_AGENT_ID.to_string()),
@@ -292,7 +294,7 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
             // version string goes in `version`, NOT `model` (it used to leak
             // into the model picker as "codex-cli 0.133.0").
             model: CLAUDE_CODE_MODELS.first().map(|s| s.to_string()),
-            version: command_version_with_timeout(&claude, Duration::from_secs(2)),
+            version: command_version_with_timeout(claude_adapter, Duration::from_secs(2)),
             kind: CLAUDE_CODE_AGENT_ID.to_string(),
             is_default: false,
             ready: probe_cli_auth(CLAUDE_CODE_AGENT_ID),
@@ -316,10 +318,40 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
 /// call. This is the local envoy's job — no process-lifetime cache, so a manual
 /// "detect agents" refresh picks up newly-installed CLIs.
 fn discover_cli_harnesses_now() -> Vec<AgentInfo> {
+    let claude_adapter = command_for_agent(Some(CLAUDE_CODE_AGENT_ID))
+        .into_iter()
+        .next()
+        .map(PathBuf::from);
     std::env::var_os("PATH")
         .and_then(|p| p.into_string().ok())
-        .map(|path| discover_cli_harnesses(&path))
+        .zip(claude_adapter)
+        .map(|(path, adapter)| discover_cli_harnesses(&path, &adapter))
         .unwrap_or_default()
+}
+
+fn discover_hermes_profiles(home: &Path, path_env: &str) -> Vec<AgentInfo> {
+    if which_in_path("hermes", path_env).is_none() {
+        return Vec::new();
+    }
+    let mut out = vec![agent_from_config(
+        "default",
+        &home.join("config.yaml"),
+        true,
+    )];
+    if let Ok(entries) = std::fs::read_dir(home.join("profiles")) {
+        let mut profiles: Vec<AgentInfo> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let cfg = e.path().join("config.yaml");
+                cfg.exists().then(|| agent_from_config(&name, &cfg, false))
+            })
+            .collect();
+        profiles.sort_by(|a, b| a.id.cmp(&b.id));
+        out.extend(profiles);
+    }
+    out
 }
 
 /// Discover every agent available on THIS host — the local node's envoy view:
@@ -328,32 +360,10 @@ fn discover_cli_harnesses_now() -> Vec<AgentInfo> {
 /// a manual refresh reflects installs/uninstalls. This is what the local node
 /// reports; a remote envoy runs the equivalent on its own host.
 pub fn discover_local_agents() -> Vec<AgentInfo> {
-    let Some(home) = hermes_home() else {
-        return discover_cli_harnesses_now();
-    };
-    let mut out = vec![agent_from_config(
-        "default",
-        &home.join("config.yaml"),
-        true,
-    )];
-
-    if let Ok(entries) = std::fs::read_dir(home.join("profiles")) {
-        let mut profiles: Vec<AgentInfo> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                let cfg = e.path().join("config.yaml");
-                if cfg.exists() {
-                    Some(agent_from_config(&name, &cfg, false))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        profiles.sort_by(|a, b| a.id.cmp(&b.id));
-        out.extend(profiles);
-    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut out = hermes_home()
+        .map(|home| discover_hermes_profiles(&home, &path))
+        .unwrap_or_default();
     out.extend(discover_cli_harnesses_now());
     out
 }
@@ -535,16 +545,36 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn discover_cli_harnesses_finds_stubbed_claude_and_codex() {
+    fn hermes_profiles_require_a_runnable_hermes_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".hermes");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("config.yaml"), "model:\n  default: test\n").unwrap();
+
+        assert!(discover_hermes_profiles(&home, tmp.path().to_str().unwrap()).is_empty());
+
+        write_stub(tmp.path(), "hermes", "#!/bin/sh\nexit 0\n");
+        assert_eq!(
+            discover_hermes_profiles(&home, tmp.path().to_str().unwrap())[0].id,
+            "default"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_cli_harnesses_finds_runtime_adapter_and_codex() {
         let tmp = tempfile::tempdir().unwrap();
         write_stub(
             tmp.path(),
-            "claude",
+            "claude-agent-acp",
             "#!/bin/sh\necho '2.1.195 (Claude Code)'\n",
         );
         write_stub(tmp.path(), "codex", "#!/bin/sh\necho 'codex-cli 0.133.0'\n");
 
-        let agents = discover_cli_harnesses(tmp.path().to_str().unwrap());
+        let agents = discover_cli_harnesses(
+            tmp.path().to_str().unwrap(),
+            &tmp.path().join("claude-agent-acp"),
+        );
 
         assert!(agents.iter().any(|a| {
             a.id == "claude-code"
@@ -570,7 +600,8 @@ mod tests {
     #[test]
     fn discover_cli_harnesses_ignores_non_executable_files() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("claude"), "#!/bin/sh\necho nope\n").unwrap();
-        assert!(discover_cli_harnesses(tmp.path().to_str().unwrap()).is_empty());
+        let adapter = tmp.path().join("claude-agent-acp");
+        std::fs::write(&adapter, "#!/bin/sh\necho nope\n").unwrap();
+        assert!(discover_cli_harnesses(tmp.path().to_str().unwrap(), &adapter).is_empty());
     }
 }
