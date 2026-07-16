@@ -22,8 +22,7 @@ use tokio::sync::Mutex;
 /// A base64 alphabet encode/decode without pulling a crate — PTY payloads are
 /// small and this keeps the dependency surface minimal.
 mod b64 {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     pub fn encode(input: &[u8]) -> String {
         let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
@@ -194,14 +193,25 @@ impl PtyManager {
         // SAFETY: forkpty is the canonical PTY-spawn primitive; we immediately
         // branch on the returned pid and only touch async-signal-safe libc
         // calls in the child before exec.
-        let pid = unsafe { libc::forkpty(&mut master_fd, std::ptr::null_mut(), std::ptr::null(), &winsize) };
+        let pid = unsafe {
+            libc::forkpty(
+                &mut master_fd,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &winsize,
+            )
+        };
         if pid < 0 {
-            return Err(anyhow::anyhow!("forkpty failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow::anyhow!(
+                "forkpty failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         if pid == 0 {
             // ── Child ── (async-signal-safe only until exec)
             // New session/process group already established by forkpty.
-            let cwd_c = std::ffi::CString::new(workdir).unwrap_or_else(|_| std::ffi::CString::new("/").unwrap());
+            let cwd_c = std::ffi::CString::new(workdir)
+                .unwrap_or_else(|_| std::ffi::CString::new("/").unwrap());
             unsafe {
                 libc::chdir(cwd_c.as_ptr());
             }
@@ -251,7 +261,7 @@ impl PtyManager {
             let mut buf = vec![0u8; 8192];
             loop {
                 match read_async.read(&mut buf).await {
-                    Ok(0) => break,      // EOF: shell closed the pty
+                    Ok(0) => break, // EOF: shell closed the pty
                     Ok(n) => sink.output(tid.clone(), b64_encode(&buf[..n])),
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         tokio::time::sleep(std::time::Duration::from_millis(10)).await;

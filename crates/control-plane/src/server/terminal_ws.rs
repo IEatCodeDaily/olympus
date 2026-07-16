@@ -96,7 +96,10 @@ impl HallTerminals {
         });
     }
 
-    fn subscribe(self: &Arc<Self>, terminal_id: &str) -> tokio::sync::broadcast::Receiver<TerminalFrame> {
+    fn subscribe(
+        self: &Arc<Self>,
+        terminal_id: &str,
+    ) -> tokio::sync::broadcast::Receiver<TerminalFrame> {
         self.ensure_fan();
         let mut channels = self.channels.lock().unwrap();
         channels
@@ -133,8 +136,13 @@ pub struct TerminalQuery {
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum ClientTerm {
     #[serde(rename_all = "camelCase")]
-    Input { data_b64: String },
-    Resize { cols: u16, rows: u16 },
+    Input {
+        data_b64: String,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// `GET /ws/operator/terminals/:terminalId`.
@@ -279,7 +287,11 @@ async fn send_input(state: &AppState, node: &str, terminal_id: &str, data_b64: &
 
 async fn send_resize(state: &AppState, node: &str, terminal_id: &str, cols: u16, rows: u16) {
     if node == "hall" {
-        let _ = state.hall_pty.manager().resize(terminal_id, cols, rows).await;
+        let _ = state
+            .hall_pty
+            .manager()
+            .resize(terminal_id, cols, rows)
+            .await;
     } else if let Some(conn) = state.envoy_conns.get(node).await {
         let _ = conn
             .send_request(olympus_proto::frames::HallFrame::TerminalResize {
