@@ -468,10 +468,7 @@ impl EnvoyConnections {
         writer: BoxedWriter,
         epoch: u64,
         shutdown: tokio::sync::watch::Sender<bool>,
-    ) -> Result<
-        (Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>),
-        Arc<EnvoyConnection>,
-    > {
+    ) -> Result<(Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>), Arc<EnvoyConnection>> {
         let conn = EnvoyConnection::new_with_epoch(writer, self.log.clone(), epoch, shutdown);
         let mut inner = self.inner.write().await;
         if inner.get(node_id).is_some_and(|old| old.epoch > epoch) {

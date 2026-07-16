@@ -1349,16 +1349,43 @@ mod tests {
     async fn stale_connection_death_does_not_deregister_newer_epoch() {
         let reg = NodeRegistry::new();
         assert!(
-            reg.register_connection("node", "old", 4, "v1", NodeTransport::Iroh, Some("key".into()), vec![], 1)
-                .await
+            reg.register_connection(
+                "node",
+                "old",
+                4,
+                "v1",
+                NodeTransport::Iroh,
+                Some("key".into()),
+                vec![],
+                1
+            )
+            .await
         );
         assert!(
-            reg.register_connection("node", "new", 4, "v2", NodeTransport::Iroh, Some("key".into()), vec![], 2)
-                .await
+            reg.register_connection(
+                "node",
+                "new",
+                4,
+                "v2",
+                NodeTransport::Iroh,
+                Some("key".into()),
+                vec![],
+                2
+            )
+            .await
         );
         assert!(
-            !reg.register_connection("renamed", "old", 4, "v1", NodeTransport::Iroh, Some("key".into()), vec![], 1)
-                .await
+            !reg.register_connection(
+                "renamed",
+                "old",
+                4,
+                "v1",
+                NodeTransport::Iroh,
+                Some("key".into()),
+                vec![],
+                1
+            )
+            .await
         );
 
         assert!(!reg.deregister_connection("node", 1).await);
