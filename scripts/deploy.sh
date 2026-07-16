@@ -18,7 +18,8 @@
 # for the full choreography (symlink flip + systemd restart + health gate).
 set -euo pipefail
 
-BIN_DIR="${HOME}/.olympus/bin"
+OLYMPUS_HOME="${OLYMPUS_HOME:-${HOME}/.olympus}"
+BIN_DIR="${OLYMPUS_HOME}/bin"
 WHAT="${1:-both}"
 
 cd "$(dirname "$0")/.."
@@ -45,7 +46,30 @@ build_hall() {
     echo "  ${BIN_DIR}/olympus-hall → olympus-hall-${GIT_HASH}"
 }
 
+provision_claude_adapter() {
+    command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
+        || { echo "ERROR: Node.js >=22 and npm are required for Claude ACP" >&2; exit 2; }
+    local node_major target installed
+    node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+    [ "$node_major" -ge 22 ] \
+        || { echo "ERROR: Node.js >=22 is required (found $(node --version))" >&2; exit 2; }
+    [ -f adapters/claude-agent-acp/package.json ] \
+        && [ -f adapters/claude-agent-acp/package-lock.json ] \
+        || { echo "ERROR: locked Claude ACP adapter manifest is missing" >&2; exit 2; }
+    target="${OLYMPUS_HOME}/adapters/claude-agent-acp"
+    echo "→ Provisioning locked Claude ACP adapter…"
+    mkdir -p "$target"
+    cp -f adapters/claude-agent-acp/package.json adapters/claude-agent-acp/package-lock.json "$target/"
+    npm ci --ignore-scripts --omit=dev --no-audit --no-fund --prefix "$target"
+    installed="$(node -p "require('$target/node_modules/@agentclientprotocol/claude-agent-acp/package.json').version")"
+    [ "$installed" = "0.58.1" ] \
+        || { echo "ERROR: Claude ACP adapter version mismatch: $installed" >&2; exit 2; }
+    [ -x "$target/node_modules/.bin/claude-agent-acp" ] \
+        || { echo "ERROR: Claude ACP adapter executable missing" >&2; exit 2; }
+}
+
 build_envoy() {
+    provision_claude_adapter
     echo "→ Building olympus-envoy (release)…"
     cargo build --release -p olympus-envoy
     echo "→ Installing olympus-envoy-${GIT_HASH}…"

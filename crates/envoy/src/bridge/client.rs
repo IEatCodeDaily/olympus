@@ -8,13 +8,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::debug;
 
 use super::acp::{AcpId, AcpMessage, AcpNotification, AcpRequest, AcpResponse, AgentEventAcpExt};
 use super::framing::{ContentLength, Framing, NewlineJson};
 use super::{AgentCommand, AgentEvent};
-use olympus_proto::AcpFraming;
+use olympus_proto::{AcpFraming, ModelSetStyle};
 
 pub type ClientWriter = Pin<Box<dyn AsyncWrite + Send>>;
 
@@ -27,6 +27,7 @@ enum PendingKind {
 
 struct ClientState {
     pending: HashMap<String, PendingKind>,
+    completions: HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>,
     session_id: Option<String>,
     resumable: bool,
 }
@@ -35,6 +36,7 @@ struct ClientState {
 pub struct AcpClient {
     writer: Mutex<ClientWriter>,
     framing: AcpFraming,
+    model_set_style: ModelSetStyle,
     next_id: AtomicI64,
     state: Arc<Mutex<ClientState>>,
     events: tokio::sync::broadcast::Sender<AgentEvent>,
@@ -51,12 +53,26 @@ impl AcpClient {
         framing: AcpFraming,
         events: tokio::sync::broadcast::Sender<AgentEvent>,
     ) -> Arc<Self> {
+        // Default to the Hermes-native set_model style; harness-specific
+        // callers use `with_events_and_model_style` to select the ACP
+        // config-option surface (Claude Code / Codex).
+        Self::with_events_and_model_style(writer, framing, ModelSetStyle::SetModel, events)
+    }
+
+    pub fn with_events_and_model_style(
+        writer: ClientWriter,
+        framing: AcpFraming,
+        model_set_style: ModelSetStyle,
+        events: tokio::sync::broadcast::Sender<AgentEvent>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             writer: Mutex::new(writer),
             framing,
+            model_set_style,
             next_id: AtomicI64::new(1),
             state: Arc::new(Mutex::new(ClientState {
                 pending: HashMap::new(),
+                completions: HashMap::new(),
                 session_id: None,
                 resumable: false,
             })),
@@ -87,10 +103,14 @@ impl AcpClient {
             let mut chunk = [0_u8; 4096];
             loop {
                 match reader.read(&mut chunk).await {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        fail_pending(&state, "ACP reader EOF").await;
+                        break;
+                    }
                     Ok(read) => buffer.extend_from_slice(&chunk[..read]),
                     Err(error) => {
                         debug!(target: "olympus.bridge.client", %error, "ACP read failed");
+                        fail_pending(&state, &format!("ACP read failed: {error}")).await;
                         break;
                     }
                 }
@@ -100,6 +120,8 @@ impl AcpClient {
                         Ok(None) => break,
                         Err(error) => {
                             debug!(target: "olympus.bridge.client", %error, "ACP frame decode failed");
+                            fail_pending(&state, &format!("ACP frame decode failed: {error}"))
+                                .await;
                             return;
                         }
                     }
@@ -129,40 +151,87 @@ impl AcpClient {
         Ok(())
     }
 
+    async fn request_and_wait(&self, request: AcpRequest, kind: PendingKind) -> Result<Value> {
+        let key = id_key(&request.id);
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut state = self.state.lock().await;
+            state.pending.insert(key.clone(), kind);
+            state.completions.insert(key.clone(), tx);
+        }
+        if let Err(error) = self.write(&AcpMessage::Request(request)).await {
+            let mut state = self.state.lock().await;
+            state.pending.remove(&key);
+            state.completions.remove(&key);
+            return Err(error);
+        }
+        rx.await
+            .context("ACP response completion channel closed")?
+            .map_err(anyhow::Error::msg)
+    }
+
     pub async fn initialize(&self) -> Result<()> {
-        self.request(
+        self.request_and_wait(
             build_initialize_request(self.alloc_id()),
             PendingKind::Initialize,
         )
-        .await
+        .await?;
+        Ok(())
     }
 
     pub async fn session_new(&self, cwd: &str, mcp_servers: &[Value]) -> Result<()> {
-        self.request(
-            build_session_new_request(cwd, mcp_servers, self.alloc_id()),
-            PendingKind::Handshake,
-        )
-        .await
+        let result = self
+            .request_and_wait(
+                build_session_new_request(cwd, mcp_servers, self.alloc_id()),
+                PendingKind::Handshake,
+            )
+            .await?;
+        let session_id = result
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .context("ACP session/new response omitted sessionId")?;
+        self.state.lock().await.session_id = Some(session_id.to_owned());
+        Ok(())
     }
 
-    pub async fn session_resume(&self, session_id: &str, cwd: &str) -> Result<()> {
-        // ACP resume responses are not required to echo the already-known id.
-        // Seed it before sending, but still wait for request correlation to
-        // lift the replay gate before the runtime reports ready.
-        self.state.lock().await.session_id = Some(session_id.to_string());
-        self.request(
-            build_session_resume_request(session_id, cwd, self.alloc_id()),
-            PendingKind::Handshake,
-        )
-        .await
+    pub async fn session_resume(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        mcp_servers: &[Value],
+    ) -> Result<()> {
+        let result = self
+            .request_and_wait(
+                build_session_resume_request(session_id, cwd, mcp_servers, self.alloc_id()),
+                PendingKind::Handshake,
+            )
+            .await?;
+        let resumed_id = result
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or(session_id);
+        self.state.lock().await.session_id = Some(resumed_id.to_owned());
+        Ok(())
     }
 
-    pub async fn session_fork(&self, session_id: &str, cwd: &str) -> Result<()> {
-        self.request(
-            build_session_fork_request(session_id, cwd, self.alloc_id()),
-            PendingKind::Handshake,
-        )
-        .await
+    pub async fn session_fork(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        mcp_servers: &[Value],
+    ) -> Result<()> {
+        let result = self
+            .request_and_wait(
+                build_session_fork_request(session_id, cwd, mcp_servers, self.alloc_id()),
+                PendingKind::Handshake,
+            )
+            .await?;
+        let forked_id = result
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .context("ACP session/fork response omitted sessionId")?;
+        self.state.lock().await.session_id = Some(forked_id.to_owned());
+        Ok(())
     }
 
     pub async fn send_command(&self, command: &AgentCommand) -> Result<()> {
@@ -178,10 +247,12 @@ impl AcpClient {
             AgentCommand::Prompt {
                 model: Some(model), ..
             } => {
-                let switch = AgentCommand::SwitchModel {
-                    model: model.clone(),
-                };
-                let request = AcpRequest::from_command(&switch, &session_id, self.alloc_id())?;
+                let request = AcpRequest::set_model(
+                    &session_id,
+                    model,
+                    self.model_set_style,
+                    self.alloc_id(),
+                );
                 self.request(request, PendingKind::Command).await?;
                 let request = AcpRequest::from_command(command, &session_id, self.alloc_id())?;
                 self.request(request, PendingKind::Command).await
@@ -246,13 +317,25 @@ async fn handle_message(
     events: &tokio::sync::broadcast::Sender<AgentEvent>,
 ) {
     let mut state = state.lock().await;
+    let mut completion = None;
     if let AcpMessage::Response(response) = &message {
-        let pending = state.pending.remove(&id_key(&response.id));
-        if pending == Some(PendingKind::Initialize) {
-            state.resumable = parse_resumable_capability(&response.result);
+        let key = id_key(&response.id);
+        let pending = state.pending.remove(&key);
+        let sender = state.completions.remove(&key);
+        if response.error.is_none() {
+            if pending == Some(PendingKind::Initialize) {
+                state.resumable = parse_resumable_capability(&response.result);
+            }
+            if let Some(session_id) = response.result.get("sessionId").and_then(Value::as_str) {
+                state.session_id = Some(session_id.to_string());
+            }
         }
-        if let Some(session_id) = response.result.get("sessionId").and_then(Value::as_str) {
-            state.session_id = Some(session_id.to_string());
+        if let Some(sender) = sender {
+            let result = match &response.error {
+                Some(error) => Err(format!("ACP JSON-RPC error: {error}")),
+                None => Ok(response.result.clone()),
+            };
+            completion = Some((sender, result));
         }
     }
     let replaying = state
@@ -260,6 +343,9 @@ async fn handle_message(
         .values()
         .any(|kind| *kind == PendingKind::Handshake);
     drop(state);
+    if let Some((sender, result)) = completion {
+        let _ = sender.send(result);
+    }
 
     // Resuming adapters can replay the entire persisted transcript before the
     // correlated handshake response. It is already in Olympus's event log.
@@ -273,6 +359,16 @@ async fn handle_message(
     };
     if let Some(event) = event {
         let _ = events.send(event);
+    }
+}
+
+async fn fail_pending(state: &Arc<Mutex<ClientState>>, reason: &str) {
+    let mut state = state.lock().await;
+    state.pending.clear();
+    let completions = std::mem::take(&mut state.completions);
+    drop(state);
+    for (_, sender) in completions {
+        let _ = sender.send(Err(reason.to_owned()));
     }
 }
 
@@ -298,20 +394,36 @@ pub fn build_session_new_request(cwd: &str, mcp_servers: &[Value], id: AcpId) ->
     }
 }
 
-pub fn build_session_resume_request(session_id: &str, cwd: &str, id: AcpId) -> AcpRequest {
-    session_request("session/resume", session_id, cwd, id)
+pub fn build_session_resume_request(
+    session_id: &str,
+    cwd: &str,
+    mcp_servers: &[Value],
+    id: AcpId,
+) -> AcpRequest {
+    session_request("session/resume", session_id, cwd, mcp_servers, id)
 }
 
-pub fn build_session_fork_request(session_id: &str, cwd: &str, id: AcpId) -> AcpRequest {
-    session_request("session/fork", session_id, cwd, id)
+pub fn build_session_fork_request(
+    session_id: &str,
+    cwd: &str,
+    mcp_servers: &[Value],
+    id: AcpId,
+) -> AcpRequest {
+    session_request("session/fork", session_id, cwd, mcp_servers, id)
 }
 
-fn session_request(method: &str, session_id: &str, cwd: &str, id: AcpId) -> AcpRequest {
+fn session_request(
+    method: &str,
+    session_id: &str,
+    cwd: &str,
+    mcp_servers: &[Value],
+    id: AcpId,
+) -> AcpRequest {
     AcpRequest {
         jsonrpc: "2.0".into(),
         id,
         method: method.into(),
-        params: json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] }),
+        params: json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers }),
     }
 }
 
@@ -342,23 +454,35 @@ mod tests {
         let (reader, writer) = tokio::io::split(client_io);
         let client = AcpClient::new(Box::pin(writer), AcpFraming::NewlineJson, 8);
         client.start_reader(reader);
-        client.initialize().await.unwrap();
-        client.session_new("/tmp/work", &[]).await.unwrap();
-
         let mut peer_io = BufReader::new(peer_io);
-        let mut initialize_line = String::new();
-        let mut session_line = String::new();
-        peer_io.read_line(&mut initialize_line).await.unwrap();
-        peer_io.read_line(&mut session_line).await.unwrap();
-        assert!(initialize_line.contains("\"method\":\"initialize\""));
-        assert!(session_line.contains("\"method\":\"session/new\""));
 
+        let initialize = {
+            let client = client.clone();
+            tokio::spawn(async move { client.initialize().await })
+        };
+        let mut initialize_line = String::new();
+        peer_io.read_line(&mut initialize_line).await.unwrap();
+        assert!(initialize_line.contains("\"method\":\"initialize\""));
         let init = AcpMessage::Response(AcpResponse {
             jsonrpc: "2.0".into(),
             id: 1.into(),
             result: json!({"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"resume":{}}}}),
             error: None,
         });
+        peer_io
+            .get_mut()
+            .write_all(&NewlineJson.encode(&init).unwrap())
+            .await
+            .unwrap();
+        initialize.await.unwrap().unwrap();
+
+        let session_new = {
+            let client = client.clone();
+            tokio::spawn(async move { client.session_new("/tmp/work", &[]).await })
+        };
+        let mut session_line = String::new();
+        peer_io.read_line(&mut session_line).await.unwrap();
+        assert!(session_line.contains("\"method\":\"session/new\""));
         let session = AcpMessage::Response(AcpResponse {
             jsonrpc: "2.0".into(),
             id: 2.into(),
@@ -367,21 +491,10 @@ mod tests {
         });
         peer_io
             .get_mut()
-            .write_all(&NewlineJson.encode(&init).unwrap())
-            .await
-            .unwrap();
-        peer_io
-            .get_mut()
             .write_all(&NewlineJson.encode(&session).unwrap())
             .await
             .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while client.session_id().await.is_none() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        session_new.await.unwrap().unwrap();
         assert_eq!(client.session_id().await.as_deref(), Some("s-1"));
         assert!(client.resumable().await);
         assert!(!client.handshake_pending().await);
@@ -394,7 +507,10 @@ mod tests {
         let client = AcpClient::new(Box::pin(writer), AcpFraming::NewlineJson, 8);
         let mut events = client.subscribe();
         client.start_reader(reader);
-        client.session_resume("s-1", "/tmp").await.unwrap();
+        let resume = {
+            let client = client.clone();
+            tokio::spawn(async move { client.session_resume("s-1", "/tmp", &[]).await })
+        };
         let mut discard = vec![0_u8; 1024];
         let _ = peer_io.read(&mut discard).await.unwrap();
 
@@ -412,5 +528,112 @@ mod tests {
                 .await
                 .is_err()
         );
+
+        let response = AcpMessage::Response(AcpResponse {
+            jsonrpc: "2.0".into(),
+            id: 1.into(),
+            result: json!({}),
+            error: None,
+        });
+        peer_io
+            .write_all(&NewlineJson.encode(&response).unwrap())
+            .await
+            .unwrap();
+        resume.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_new_surfaces_the_correlated_json_rpc_error() {
+        let (client_io, mut peer_io) = duplex(4096);
+        let (reader, writer) = tokio::io::split(client_io);
+        let client = AcpClient::new(Box::pin(writer), AcpFraming::NewlineJson, 8);
+        client.start_reader(reader);
+
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.session_new("/tmp", &[]).await })
+        };
+        let mut request = String::new();
+        BufReader::new(&mut peer_io)
+            .read_line(&mut request)
+            .await
+            .unwrap();
+        let request: Value = serde_json::from_str(&request).unwrap();
+        let error = AcpMessage::Response(AcpResponse {
+            jsonrpc: "2.0".into(),
+            id: AcpId(request["id"].clone()),
+            result: Value::Null,
+            error: Some(json!({"code":-32000,"message":"session rejected"})),
+        });
+        peer_io
+            .write_all(&NewlineJson.encode(&error).unwrap())
+            .await
+            .unwrap();
+
+        let error = task.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("session rejected"));
+        assert!(client.session_id().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_resume_never_preseeds_a_session_id() {
+        let (client_io, mut peer_io) = duplex(4096);
+        let (reader, writer) = tokio::io::split(client_io);
+        let client = AcpClient::new(Box::pin(writer), AcpFraming::NewlineJson, 8);
+        client.start_reader(reader);
+
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move {
+                client
+                    .session_resume("old-session", "/tmp", &[json!({"name":"persisted-mcp"})])
+                    .await
+            })
+        };
+        let mut request = String::new();
+        BufReader::new(&mut peer_io)
+            .read_line(&mut request)
+            .await
+            .unwrap();
+        let request: Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(
+            request["params"]["mcpServers"],
+            json!([{"name":"persisted-mcp"}])
+        );
+        let error = AcpMessage::Response(AcpResponse {
+            jsonrpc: "2.0".into(),
+            id: AcpId(request["id"].clone()),
+            result: Value::Null,
+            error: Some(json!({"code":-32001,"message":"resume rejected"})),
+        });
+        peer_io
+            .write_all(&NewlineJson.encode(&error).unwrap())
+            .await
+            .unwrap();
+
+        assert!(task.await.unwrap().is_err());
+        assert!(client.session_id().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn reader_eof_fails_a_pending_handshake_immediately() {
+        let (client_io, mut peer_io) = duplex(4096);
+        let (reader, writer) = tokio::io::split(client_io);
+        let client = AcpClient::new(Box::pin(writer), AcpFraming::NewlineJson, 8);
+        client.start_reader(reader);
+        let task = {
+            let client = client.clone();
+            tokio::spawn(async move { client.session_new("/tmp", &[]).await })
+        };
+        let mut request = vec![0_u8; 1024];
+        let _ = peer_io.read(&mut request).await.unwrap();
+        drop(peer_io);
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("EOF should not degrade to the outer startup timeout")
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("EOF"));
     }
 }

@@ -249,6 +249,35 @@ fn authorize_ws(
     })
 }
 
+/// Operator authorization for the dedicated terminal WebSocket (ADR 0021).
+/// Accepts the installation token (legacy operator) or a valid Hall session
+/// cookie. Returns true if the caller is an authenticated operator. (A finer
+/// operator-only RBAC is future hardening per the terminal review; today any
+/// authenticated Hall principal is an operator.)
+pub(crate) fn authorize_operator(
+    state: &AppState,
+    query_token: Option<&str>,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    let legacy_ok = state.allow_installation_token
+        && query_token
+            .map(|t| t == state.token.as_str())
+            .unwrap_or(false);
+    if legacy_ok {
+        return true;
+    }
+    super::identity::session_token(headers)
+        .as_deref()
+        .and_then(|token| {
+            state
+                .auth_store
+                .resolve_session(token, super::identity::unix_timestamp())
+                .ok()
+                .flatten()
+        })
+        .is_some()
+}
+
 fn websocket_authorization_is_current(state: &AppState, authorization: &WsAuthorization) -> bool {
     match (
         authorization.session_token.as_deref(),
@@ -1009,6 +1038,7 @@ mod tests {
             irc: IrcBus::new(),
             nodes: NodeRegistry::new(),
             envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+            hall_pty: crate::server::terminal_ws::HallTerminals::new(),
             hall_iroh_id: None,
             proxy: ProxyTable::new(),
             edge: crate::edge::EdgeManager::new(crate::edge::MemoryDriver::available()),

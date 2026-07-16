@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Olympus Client State Projection — ADR 0020</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#131824; --panel2:#0f1420; --edge:#232a3a;
+    --ink:#e6edf7; --muted:#8b97ad; --accent:#5db0ff; --good:#4bd08b;
+    --warn:#f2c14e; --bad:#ff6b6b; --wire:#3a465e; --hall:#7aa2ff; --envoy:#c792ea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 70% -10%,#16203a 0%,var(--bg) 60%);
+    color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,sans-serif;padding:32px}
+  h1{font-size:20px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;align-items:stretch}
+  .lane{background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:14px 14px 16px}
+  .lane h2{font-size:12px;text-transform:uppercase;letter-spacing:1.4px;margin:0 0 12px;color:var(--muted)}
+  .node{background:var(--panel2);border:1px solid var(--wire);border-radius:11px;padding:11px 12px;margin:0 0 11px}
+  .node .t{font-weight:650;font-size:13px;margin-bottom:3px}
+  .node .d{color:var(--muted);font-size:12px}
+  .tag{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:999px;margin-top:8px;
+    border:1px solid var(--wire);color:var(--muted)}
+  .hall{border-color:#2b3a63}.hall .t{color:var(--hall)}
+  .envoy .t{color:var(--envoy)}.envoy{border-color:#3a2b52}
+  .seq{color:var(--good);font-weight:650}
+  .bad{color:var(--bad)}.warn{color:var(--warn)}.acc{color:var(--accent)}
+  .flow{margin-top:22px;background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:16px 18px}
+  .flow h2{font-size:12px;text-transform:uppercase;letter-spacing:1.4px;margin:0 0 14px;color:var(--muted)}
+  .steps{display:flex;gap:12px;flex-wrap:wrap}
+  .step{flex:1 1 220px;background:var(--panel2);border:1px solid var(--wire);border-radius:11px;padding:11px 12px}
+  .step .n{font-size:10.5px;color:var(--accent);font-weight:700;letter-spacing:1px}
+  .step .b{font-size:12.5px;margin-top:4px}
+  .step code{background:#0a0f1a;border:1px solid var(--wire);border-radius:6px;padding:1px 5px;color:#cfe3ff;font-size:11.5px}
+  .arrow{color:var(--muted);font-size:12px;margin:0 4px}
+  .legend{margin-top:18px;color:var(--muted);font-size:11.5px;display:flex;gap:20px;flex-wrap:wrap}
+  .legend b{color:var(--ink);font-weight:600}
+  .kill{text-decoration:line-through;color:var(--bad);opacity:.85}
+</style>
+</head>
+<body>
+  <h1>Olympus — Client State Projection &amp; Stream Correctness (ADR 0020)</h1>
+  <p class="sub">One ordered log → sequenced frames → client watermark reconcile. WebSocket retained; WebRTC parked as a future transport. No new durable store.</p>
+
+  <div class="grid">
+    <div class="lane">
+      <h2>Hall — durable truth</h2>
+      <div class="node hall">
+        <div class="t">Event log · log.rs</div>
+        <div class="d">Append-only, monotonic <span class="seq">seq</span>. Single replication spine.</div>
+        <span class="tag">GET /api/events?since=&lt;seq&gt;</span>
+      </div>
+      <div class="node hall">
+        <div class="t">Projections</div>
+        <div class="d">SessionView · MessageView — replay of the log.</div>
+        <span class="tag">REST snapshot + <span class="seq">seq</span></span>
+      </div>
+      <div class="node hall">
+        <div class="t">Stream projector <span class="acc">(new)</span></div>
+        <div class="d">Stamps live frames with <span class="seq">{streamEpoch, streamId, seq}</span> off the same event application that writes the log.</div>
+        <span class="tag">contiguous per stream</span>
+      </div>
+    </div>
+
+    <div class="lane">
+      <h2>Transport — /ws (kept)</h2>
+      <div class="node">
+        <div class="t">ServerFrame envelope <span class="acc">(new fields)</span></div>
+        <div class="d"><span class="seq">streamEpoch</span> · <span class="seq">streamId</span> (session:&lt;id&gt; | global) · <span class="seq">seq</span></div>
+        <span class="tag">additive · old clients ignore</span>
+      </div>
+      <div class="node">
+        <div class="t">Deliver-on-(re)subscribe <span class="acc">(new)</span></div>
+        <div class="d">Subscribing returns a snapshot+seq to reconcile.</div>
+        <span class="tag kill">subscription silently drops frames</span>
+      </div>
+      <div class="node">
+        <div class="t">user.typing</div>
+        <div class="d">Presence only — unsequenced, never logged.</div>
+        <span class="tag">ephemeral</span>
+      </div>
+      <div class="node envoy">
+        <div class="t">Envoy op-logs → same envelope <span class="acc">(new)</span></div>
+        <div class="d">spawn/reap/spool/ACP lifecycle as sequenced operational events. Full OTel stays ADR 0018.</div>
+        <span class="tag">honest, bounded</span>
+      </div>
+    </div>
+
+    <div class="lane">
+      <h2>Client — projection</h2>
+      <div class="node">
+        <div class="t">Stream reducer <span class="acc">(new)</span></div>
+        <div class="d">Per-stream <span class="seq">watermark</span>. Single source of truth for the transcript.</div>
+        <span class="tag">seed = snapshot.seq</span>
+      </div>
+      <div class="node">
+        <div class="t">apply(frame)</div>
+        <div class="d">
+          seq == wm+1 → <span class="good acc">fold</span>, wm++<br/>
+          seq ≤ wm → <span class="warn">drop</span> (idempotent replay)<br/>
+          seq &gt; wm+1 → <span class="bad">GAP</span> → catch-up
+        </div>
+        <span class="tag">GET /api/events?since=wm</span>
+      </div>
+      <div class="node">
+        <div class="t kill">staleTime: Infinity · local streamParts</div>
+        <div class="d">Component-local transcript truth removed; render is a view of reducer state.</div>
+        <span class="tag">deterministic clear on done.seq</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <h2>Turn lifecycle — durable-first, order by server seq</h2>
+    <div class="steps">
+      <div class="step"><div class="n">1 · SEND</div><div class="b">Client appends optimistic row with <code>clientMsgId</code>.</div></div>
+      <div class="step"><div class="n">2 · COMMIT</div><div class="b">Hall logs user msg → <code>message.appended</code> echoes <code>clientMsgId</code>, carries <span class="seq">seq</span>. Reducer replaces optimistic in place.</div></div>
+      <div class="step"><div class="n">3 · STREAM</div><div class="b"><code>message.delta</code> frames folded by <span class="seq">seq</span>; gaps trigger catch-up.</div></div>
+      <div class="step"><div class="n">4 · DURABLE</div><div class="b">Assistant row + <span class="seq">seq</span> committed to log <em>before</em> completion is signalled.</div></div>
+      <div class="step"><div class="n">5 · DONE</div><div class="b"><code>message.done</code> references the assistant <span class="seq">seq</span>; turn complete only once folded.</div></div>
+      <div class="step"><div class="n">A→B→A</div><div class="b">Navigate away/back = snapshot re-seed + catch-up → response present, in correct order.</div></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><b class="acc">new</b> introduced by ADR 0020</span>
+    <span><b class="kill" style="text-decoration:line-through">struck</b> removed (dev-phase, no quarantine flag)</span>
+    <span><b class="seq">seq</b> monotonic log position</span>
+    <span><b class="bad">GAP</b> forces snapshot/events catch-up before resuming live</span>
+    <span><b>message_count</b> collapsed to one event-derived increment (both projections agree)</span>
+  </div>
+</body>
+</html>

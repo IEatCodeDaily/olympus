@@ -19,8 +19,9 @@ trait) must NOT change.
 Branch from main after ARCH-E merges.
 
 ## Deliverables
-1. `bridge/framing.rs`: a `Framing` trait with the two existing adapters
-   (newline-JSON for hermes, Content-Length per ACP spec for claude/codex).
+1. `bridge/framing.rs`: a `Framing` trait with explicit codecs. The currently
+   pinned Hermes, Claude, and Codex adapters use newline JSON; Content-Length is
+   available only for a future adapter that explicitly declares it.
    Unit-tested with byte fixtures both directions, including split-buffer /
    partial-frame cases.
 2. `bridge/client.rs`: harness-agnostic ACP client — method map

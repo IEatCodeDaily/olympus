@@ -19,20 +19,33 @@ pub use super::client::{
     build_initialize_request, build_session_fork_request, build_session_new_request,
     build_session_resume_request, parse_resumable_capability,
 };
-pub use olympus_proto::AcpFraming;
+pub use olympus_proto::{AcpFraming, ModelSetStyle};
 
 /// Backward-compatible command-table entry point used by the runtime factory.
 pub fn acp_command_for_agent(agent: Option<&str>) -> Vec<String> {
     command_for_agent(agent)
 }
 
-/// Hermes uses its newline protocol; spec-compliant Claude/Codex peers use ACP
-/// Content-Length framing. Selection remains at composition time, not in the
-/// protocol client.
+/// ACP stdio is newline-delimited JSON for every supported adapter. Keep the
+/// selection seam explicit so a future adapter with a different transport does
+/// not silently change the protocol client.
 pub fn acp_framing_for_agent(agent: Option<&str>) -> AcpFraming {
     match AgentKind::from_agent_str(agent.unwrap_or_default()) {
         AgentKind::Hermes => AcpFraming::NewlineJson,
-        AgentKind::ClaudeCode | AgentKind::Codex => AcpFraming::ContentLength,
+        AgentKind::ClaudeCode | AgentKind::Codex => AcpFraming::NewlineJson,
+    }
+}
+
+/// How the harness accepts a mid-session model switch. `hermes acp` implements
+/// the Hermes-native `session/set_model`; the Zed Claude Code and Codex adapters
+/// only implement the ACP-standard `session/set_config_option { configId:
+/// "model" }` and return `-32601 Method not found` for `session/set_model`.
+/// Keep this explicit next to framing so the client never assumes one uniform
+/// ACP surface across harnesses.
+pub fn model_set_style_for_agent(agent: Option<&str>) -> ModelSetStyle {
+    match AgentKind::from_agent_str(agent.unwrap_or_default()) {
+        AgentKind::Hermes => ModelSetStyle::SetModel,
+        AgentKind::ClaudeCode | AgentKind::Codex => ModelSetStyle::ConfigOption,
     }
 }
 
@@ -48,6 +61,7 @@ pub struct HermesRuntimeConfig {
     pub mcp_servers: Vec<Value>,
     pub env: Vec<(String, String)>,
     pub framing: AcpFraming,
+    pub model_set_style: ModelSetStyle,
 }
 
 impl Default for HermesRuntimeConfig {
@@ -63,6 +77,7 @@ impl Default for HermesRuntimeConfig {
             mcp_servers: Vec::new(),
             env: Vec::new(),
             framing: AcpFraming::NewlineJson,
+            model_set_style: ModelSetStyle::SetModel,
         }
     }
 }
@@ -113,41 +128,16 @@ impl HermesAgentRuntime {
         let mut child = ChildHandle::spawn(&spec)?;
         let reader = child.take_reader()?;
         let writer = child.take_writer()?;
-        let client = AcpClient::with_events(writer, self.config.framing, self.event_tx.clone());
+        let client = AcpClient::with_events_and_model_style(
+            writer,
+            self.config.framing,
+            self.config.model_set_style,
+            self.event_tx.clone(),
+        );
         client.start_reader(reader);
         state.child = Some(child);
         state.client = Some(Arc::clone(&client));
         Ok(client)
-    }
-
-    async fn wait_for_handshake(&self, label: &str, client: &AcpClient) -> Result<()> {
-        let deadline =
-            std::time::Instant::now() + Duration::from_secs(self.config.start_timeout_secs);
-        loop {
-            if !client.handshake_pending().await && client.session_id().await.is_some() {
-                return Ok(());
-            }
-            let early_exit = {
-                let mut state = self.state.lock().await;
-                state.child.as_mut().and_then(ChildHandle::early_exit)
-            };
-            if let Some(exit) = early_exit {
-                let tail = self.stderr_tail().await;
-                anyhow::bail!(
-                    "ACP {label} handshake failed — {exit}\n{}",
-                    diagnostic_tail(&tail)
-                );
-            }
-            if std::time::Instant::now() >= deadline {
-                let tail = self.stderr_tail().await;
-                anyhow::bail!(
-                    "timed out after {}s waiting for ACP {label} response\n{}",
-                    self.config.start_timeout_secs,
-                    diagnostic_tail(&tail)
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
     }
 
     async fn stderr_tail(&self) -> String {
@@ -173,6 +163,28 @@ impl HermesAgentRuntime {
             .clone()
             .context("runtime not started")
     }
+
+    async fn cleanup_runtime(&self) -> Result<()> {
+        let (client, child) = {
+            let mut state = self.state.lock().await;
+            (state.client.take(), state.child.take())
+        };
+        drop(client);
+        if let Some(mut child) = child {
+            child.reap().await?;
+        }
+        Ok(())
+    }
+
+    async fn fail_start(&self, error: anyhow::Error) -> anyhow::Error {
+        let tail = self.stderr_tail().await;
+        let cleanup_error = self.cleanup_runtime().await.err();
+        let mut message = format!("{error:#}\n{}", diagnostic_tail(&tail));
+        if let Some(cleanup_error) = cleanup_error {
+            message.push_str(&format!("\ncleanup failed: {cleanup_error:#}"));
+        }
+        anyhow::anyhow!(message)
+    }
 }
 
 fn diagnostic_tail(tail: &str) -> String {
@@ -186,24 +198,65 @@ fn diagnostic_tail(tail: &str) -> String {
 #[async_trait::async_trait]
 impl AgentRuntime for HermesAgentRuntime {
     async fn start(&self, session_id: Option<&str>) -> Result<()> {
-        let client = self.spawn_client().await?;
-        client.initialize().await?;
-        match session_id {
-            Some(session_id) => client.session_resume(session_id, &self.config.cwd).await?,
-            None => {
-                client
-                    .session_new(&self.config.cwd, &self.config.mcp_servers)
-                    .await?
+        let handshake = async {
+            let client = self.spawn_client().await?;
+            client.initialize().await?;
+            match session_id {
+                Some(session_id) => {
+                    client
+                        .session_resume(session_id, &self.config.cwd, &self.config.mcp_servers)
+                        .await?
+                }
+                None => {
+                    client
+                        .session_new(&self.config.cwd, &self.config.mcp_servers)
+                        .await?
+                }
+            }
+            Ok(())
+        };
+        match tokio::time::timeout(
+            Duration::from_secs(self.config.start_timeout_secs),
+            handshake,
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(self.fail_start(error).await),
+            Err(_) => {
+                let error = anyhow::anyhow!(
+                    "timed out after {}s waiting for ACP initialize/session response",
+                    self.config.start_timeout_secs
+                );
+                Err(self.fail_start(error).await)
             }
         }
-        self.wait_for_handshake("session/new|resume", &client).await
     }
 
     async fn fork_session(&self, session_id: &str) -> Result<()> {
-        let client = self.spawn_client().await?;
-        client.initialize().await?;
-        client.session_fork(session_id, &self.config.cwd).await?;
-        self.wait_for_handshake("session/fork", &client).await
+        let handshake = async {
+            let client = self.spawn_client().await?;
+            client.initialize().await?;
+            client
+                .session_fork(session_id, &self.config.cwd, &self.config.mcp_servers)
+                .await
+        };
+        match tokio::time::timeout(
+            Duration::from_secs(self.config.start_timeout_secs),
+            handshake,
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(self.fail_start(error).await),
+            Err(_) => {
+                let error = anyhow::anyhow!(
+                    "timed out after {}s waiting for ACP initialize/session/fork response",
+                    self.config.start_timeout_secs
+                );
+                Err(self.fail_start(error).await)
+            }
+        }
     }
 
     async fn send(&self, command: AgentCommand) -> Result<()> {
@@ -229,12 +282,7 @@ impl AgentRuntime for HermesAgentRuntime {
     }
 
     async fn stop(&self) -> Result<()> {
-        let mut state = self.state.lock().await;
-        state.client.take();
-        if let Some(mut child) = state.child.take() {
-            child.reap().await?;
-        }
-        Ok(())
+        self.cleanup_runtime().await
     }
 
     async fn hermes_session_id(&self) -> Option<String> {
@@ -270,11 +318,11 @@ mod tests {
         );
         assert_eq!(
             acp_framing_for_agent(Some("claude-code")),
-            AcpFraming::ContentLength
+            AcpFraming::NewlineJson
         );
         assert_eq!(
             acp_framing_for_agent(Some("codex")),
-            AcpFraming::ContentLength
+            AcpFraming::NewlineJson
         );
     }
 
@@ -291,5 +339,62 @@ mod tests {
     fn diagnostic_tail_surfaces_child_failure_context() {
         assert_eq!(diagnostic_tail(""), "(no stderr captured)");
         assert_eq!(diagnostic_tail("missing dep"), "stderr:\nmissing dep");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_timeout_reaps_the_adapter_process_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-acp.sh");
+        let pidfile = dir.path().join("pids");
+        std::fs::write(
+            &script,
+            "#!/usr/bin/env bash\necho $$ > \"$1\"\nsleep 300 &\necho $! >> \"$1\"\nwait\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = HermesAgentRuntime::new_arc(HermesRuntimeConfig {
+            command: vec![
+                script.to_string_lossy().into_owned(),
+                pidfile.to_string_lossy().into_owned(),
+            ],
+            cwd: dir.path().to_string_lossy().into_owned(),
+            session_source: None,
+            event_buffer: 8,
+            start_timeout_secs: 1,
+            mcp_servers: Vec::new(),
+            env: Vec::new(),
+            framing: AcpFraming::NewlineJson,
+            ..Default::default()
+        });
+
+        let outcome = tokio::time::timeout(Duration::from_secs(3), runtime.start(None)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let pids = std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.parse::<u32>().ok())
+            .collect::<Vec<_>>();
+        let alive = pids
+            .iter()
+            .copied()
+            .filter(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+            .collect::<Vec<_>>();
+
+        // Always clean up a red-test process before asserting.
+        let _ = runtime.stop().await;
+        for pid in &pids {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+
+        assert!(
+            outcome.is_ok(),
+            "runtime did not enforce its own startup deadline"
+        );
+        assert!(alive.is_empty(), "startup leaked process ids: {alive:?}");
     }
 }

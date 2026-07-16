@@ -44,6 +44,24 @@ pub enum AcpFraming {
     ContentLength,
 }
 
+/// How an ACP adapter accepts a mid-session model switch.
+///
+/// Not every harness exposes the same method. `hermes acp` implements the
+/// Hermes-native `session/set_model`; the Zed Claude Code and Codex adapters
+/// implement the ACP-standard `session/set_config_option` with
+/// `configId: "model"` instead and return JSON-RPC `-32601 Method not found`
+/// for `session/set_model`. Keep the selection seam explicit (like
+/// [`AcpFraming`]) so the protocol client never guesses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSetStyle {
+    /// `session/set_model { sessionId, modelId }` — Hermes ACP.
+    SetModel,
+    /// `session/set_config_option { sessionId, configId: "model", value }` —
+    /// the ACP-standard config surface used by Claude Code and Codex adapters.
+    ConfigOption,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

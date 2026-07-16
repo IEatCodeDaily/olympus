@@ -42,23 +42,25 @@ impl EventSpool {
 
     pub fn next_seq(&self, session_id: &str) -> Result<u64> {
         let mut next = self.next_seq.lock().expect("spool sequence mutex poisoned");
-        let value = match next.get(session_id).copied() {
-            Some(value) => value,
-            None => {
-                let from_spool = self
-                    .read(session_id, None)?
-                    .last()
-                    .and_then(event_seq)
-                    .map_or(0, |seq| seq.saturating_add(1));
-                let from_counter = fs::read_to_string(self.counter_path(session_id))
-                    .ok()
-                    .and_then(|raw| raw.trim().parse::<u64>().ok())
-                    .unwrap_or(0);
-                from_spool.max(from_counter)
-            }
-        };
+        let value = self.next_value(session_id, &next)?;
         let following = value.checked_add(1).context("event sequence exhausted")?;
         next.insert(session_id.to_owned(), following);
+        Ok(value)
+    }
+
+    /// Allocate a sequence and durably append one frame as one operation.
+    /// Failed appends leave the in-memory allocator unchanged so a transient
+    /// filesystem failure cannot create a permanent hole in Hall's stream.
+    pub fn append_next(&self, frame: &mut EnvoyFrame) -> Result<u64> {
+        let session_id = event_identity(frame)
+            .map(|(session_id, _)| session_id.to_owned())
+            .context("only event frames are spoolable")?;
+        let mut next = self.next_seq.lock().expect("spool sequence mutex poisoned");
+        let value = self.next_value(&session_id, &next)?;
+        let following = value.checked_add(1).context("event sequence exhausted")?;
+        set_event_seq(frame, value).context("only event frames are spoolable")?;
+        self.append(frame)?;
+        next.insert(session_id, following);
         Ok(value)
     }
 
@@ -218,6 +220,22 @@ impl EventSpool {
         fs::rename(tmp, path)?;
         sync_parent(&self.dir)
     }
+
+    fn next_value(&self, session_id: &str, next: &HashMap<String, u64>) -> Result<u64> {
+        if let Some(value) = next.get(session_id).copied() {
+            return Ok(value);
+        }
+        let from_spool = self
+            .read(session_id, None)?
+            .last()
+            .and_then(event_seq)
+            .map_or(0, |seq| seq.saturating_add(1));
+        let from_counter = fs::read_to_string(self.counter_path(session_id))
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        Ok(from_spool.max(from_counter))
+    }
 }
 
 fn event_identity(frame: &EnvoyFrame) -> Option<(&str, u64)> {
@@ -237,6 +255,19 @@ fn event_identity(frame: &EnvoyFrame) -> Option<(&str, u64)> {
 
 fn event_seq(frame: &EnvoyFrame) -> Option<u64> {
     event_identity(frame).map(|(_, seq)| seq)
+}
+
+fn set_event_seq(frame: &mut EnvoyFrame, seq: u64) -> Option<()> {
+    match frame {
+        EnvoyFrame::Event { seq: value, .. }
+        | EnvoyFrame::Observed { seq: value, .. }
+        | EnvoyFrame::JobOutput { seq: value, .. }
+        | EnvoyFrame::JobResult { seq: value, .. } => {
+            *value = seq;
+            Some(())
+        }
+        _ => None,
+    }
 }
 
 fn encode_name(value: &str) -> String {
@@ -344,6 +375,21 @@ mod tests {
         let spool = EventSpool::with_cap(dir.path(), 1).unwrap();
         let error = spool.append(&event("s", 0)).unwrap_err();
         assert!(error.to_string().contains("SPOOL_OVERFLOW"));
+        assert!(spool.read("s", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_atomic_append_does_not_consume_a_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = EventSpool::with_cap(dir.path(), 1).unwrap();
+        let mut first = event("s", u64::MAX);
+        let mut second = event("s", u64::MAX);
+
+        assert!(spool.append_next(&mut first).is_err());
+        assert!(spool.append_next(&mut second).is_err());
+        assert_eq!(event_seq(&first), Some(0));
+        assert_eq!(event_seq(&second), Some(0));
+        assert!(!spool.counter_path("s").exists());
         assert!(spool.read("s", None).unwrap().is_empty());
     }
 }

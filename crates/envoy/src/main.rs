@@ -24,6 +24,7 @@ use olympus_envoy::{
     discovery,
     job_table::{JobSpec, JobTable},
     mock_runtime::MockAgentRuntime,
+    pty,
     runtime_table::RuntimeTable,
     spool::EventSpool,
 };
@@ -212,6 +213,9 @@ struct Conn {
     spool: Arc<EventSpool>,
     jobs: Arc<JobTable>,
     turn: Mutex<std::collections::HashMap<String, u64>>,
+    /// Operator terminal (PTY) manager (ADR 0021 cockpit). Operator-only;
+    /// driven solely by HallFrame::Terminal* frames.
+    pty: Arc<crate::pty::PtyManager>,
 }
 
 impl Conn {
@@ -222,11 +226,6 @@ impl Conn {
         w.write_all(b"\n").await?;
         w.flush().await?;
         Ok(())
-    }
-
-    /// Next per-session event seq (starts at 0).
-    fn next_seq(&self, session_id: &str) -> Result<u64> {
-        self.spool.next_seq(session_id)
     }
 
     /// Next per-session turn id (monotonic string).
@@ -281,13 +280,47 @@ where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
 {
+    // Operator terminal (PTY) manager (ADR 0021). The sink pushes output/exit
+    // into an mpsc that a forwarder task drains into the Hall connection.
+    let (pty_sink, mut pty_rx) = pty::ChannelSink::new();
+    let pty_mgr = pty::PtyManager::new(pty_sink);
+
     let conn = Arc::new(Conn {
         writer: Mutex::new(BufWriter::new(Box::new(writer) as BoxedWriter)),
         table: table.clone(),
         spool,
         jobs,
         turn: Mutex::new(std::collections::HashMap::new()),
+        pty: pty_mgr,
     });
+
+    // Forward PTY output/exit frames to Hall over this connection.
+    let pty_fwd_handle = {
+        let fwd_conn = conn.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = pty_rx.recv().await {
+                let frame = match msg {
+                    pty::TerminalMsg::Output {
+                        terminal_id,
+                        data_b64,
+                    } => EnvoyFrame::TerminalOutput {
+                        terminal_id,
+                        data_b64,
+                    },
+                    pty::TerminalMsg::Exited {
+                        terminal_id,
+                        exit_code,
+                    } => EnvoyFrame::TerminalExited {
+                        terminal_id,
+                        exit_code,
+                    },
+                };
+                if fwd_conn.send_frame(&frame).await.is_err() {
+                    break;
+                }
+            }
+        })
+    };
 
     // Hello handshake.
     let agents_json = serde_json::to_value(&agents).unwrap_or_default();
@@ -335,6 +368,10 @@ where
     let replay_handle = {
         let replay_conn = conn.clone();
         tokio::spawn(async move {
+            // Send each frame at most once per live connection unless Hall
+            // explicitly requests replay with ResumeFrom. Blindly re-reading
+            // the full spool every second turns one gap into a log/CPU storm.
+            let mut sent_through = std::collections::HashMap::<String, u64>::new();
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let sessions = match replay_conn.spool.sessions() {
@@ -342,7 +379,10 @@ where
                     Err(_) => break,
                 };
                 for session_id in sessions {
-                    let frames = match replay_conn.spool.read(&session_id, None) {
+                    let frames = match replay_conn.spool.read(
+                        &session_id,
+                        periodic_replay_after(&sent_through, &session_id),
+                    ) {
                         Ok(frames) => frames,
                         Err(_) => continue,
                     };
@@ -350,6 +390,7 @@ where
                         if replay_conn.send_frame(&frame).await.is_err() {
                             return;
                         }
+                        mark_periodic_replay_sent(&mut sent_through, &session_id, &frame);
                     }
                 }
             }
@@ -400,7 +441,12 @@ where
             }
         };
 
-        if matches!(frame, HallFrame::Ack { .. } | HallFrame::ResumeFrom { .. }) {
+        // ACK truncation is ordered and cheap enough to keep inline. A
+        // ResumeFrom may replay hundreds of frames and must not monopolize the
+        // socket read loop: Hall sends ACKs on that same full-duplex stream.
+        // Replaying inline can fill both socket buffers (Envoy waits to write
+        // replay, Hall waits to write ACK) and starve heartbeats indefinitely.
+        if dispatch_inline(&frame) {
             if let Err(e) = dispatch_frame(conn.clone(), frame).await {
                 tracing::error!(error = %e, "frame dispatch error");
             }
@@ -419,8 +465,40 @@ where
     hb_handle.abort();
     replay_handle.abort();
     reaper_handle.abort();
+    pty_fwd_handle.abort();
 
     Ok(())
+}
+
+fn frame_sequence(frame: &EnvoyFrame) -> Option<u64> {
+    match frame {
+        EnvoyFrame::Event { seq, .. }
+        | EnvoyFrame::Observed { seq, .. }
+        | EnvoyFrame::JobOutput { seq, .. }
+        | EnvoyFrame::JobResult { seq, .. } => Some(*seq),
+        _ => None,
+    }
+}
+
+fn periodic_replay_after(
+    sent_through: &std::collections::HashMap<String, u64>,
+    session_id: &str,
+) -> Option<u64> {
+    sent_through.get(session_id).copied()
+}
+
+fn mark_periodic_replay_sent(
+    sent_through: &mut std::collections::HashMap<String, u64>,
+    session_id: &str,
+    frame: &EnvoyFrame,
+) {
+    if let Some(seq) = frame_sequence(frame) {
+        sent_through.insert(session_id.to_owned(), seq);
+    }
+}
+
+fn dispatch_inline(frame: &HallFrame) -> bool {
+    matches!(frame, HallFrame::Ack { .. })
 }
 
 /// Dispatch a single HallFrame.
@@ -531,20 +609,7 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
             let output_conn = conn.clone();
             tokio::spawn(async move {
                 while let Some(mut frame) = rx.recv().await {
-                    let id = match &frame {
-                        EnvoyFrame::JobOutput { job_id, .. }
-                        | EnvoyFrame::JobResult { job_id, .. } => job_id.clone(),
-                        _ => continue,
-                    };
-                    let Ok(seq) = output_conn.next_seq(&id) else {
-                        continue;
-                    };
-                    match &mut frame {
-                        EnvoyFrame::JobOutput { seq: value, .. }
-                        | EnvoyFrame::JobResult { seq: value, .. } => *value = seq,
-                        _ => {}
-                    }
-                    if output_conn.spool.append(&frame).is_ok() {
+                    if output_conn.spool.append_next(&mut frame).is_ok() {
                         let _ = output_conn.send_frame(&frame).await;
                     }
                 }
@@ -591,6 +656,40 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
             }
             tracing::debug!(session = %session_id, seq, "replayed spool from Hall watermark");
         }
+        HallFrame::TerminalOpen {
+            req_id,
+            terminal_id,
+            cols,
+            rows,
+            cwd,
+        } => {
+            let outcome = conn
+                .pty
+                .open(&terminal_id, cols, rows, cwd.as_deref())
+                .await;
+            match outcome {
+                Ok(()) => conn.send_resp(req_id, true, None).await,
+                Err(e) => conn.send_resp(req_id, false, Some(&format!("{e:#}"))).await,
+            }
+        }
+        HallFrame::TerminalInput {
+            terminal_id,
+            data_b64,
+        } => {
+            if let Err(e) = conn.pty.input(&terminal_id, &data_b64).await {
+                tracing::debug!(terminal = %terminal_id, error = %e, "terminal input dropped");
+            }
+        }
+        HallFrame::TerminalResize {
+            terminal_id,
+            cols,
+            rows,
+        } => {
+            let _ = conn.pty.resize(&terminal_id, cols, rows).await;
+        }
+        HallFrame::TerminalClose { terminal_id } => {
+            let _ = conn.pty.close(&terminal_id).await;
+        }
     }
     Ok(())
 }
@@ -622,14 +721,13 @@ async fn send_and_stream(conn: &Conn, session_id: &str, cmd: AgentCommand) -> Re
     // loop hangs forever after the turn completes.
     while let Some(event) = events.next().await {
         let turn_id = conn.next_turn_id_for_event(session_id).await;
-        let seq = conn.next_seq(session_id)?;
-        let frame = EnvoyFrame::Event {
+        let mut frame = EnvoyFrame::Event {
             session_id: session_id.to_string(),
             turn_id,
-            seq,
+            seq: 0,
             payload: event.clone(),
         };
-        conn.spool.append(&frame)?;
+        conn.spool.append_next(&mut frame)?;
         if let Err(e) = conn.send_frame(&frame).await {
             tracing::error!(error = %e, "failed to send event frame");
             return Err(e);
@@ -677,18 +775,12 @@ fn run_observer(path: PathBuf, spool: Arc<EventSpool>) {
                         }
                     };
                     let session_id = format!("observed:{hermes_id}");
-                    let frame = EnvoyFrame::Observed {
-                        seq: match spool.next_seq(&session_id) {
-                            Ok(seq) => seq,
-                            Err(error) => {
-                                tracing::error!(error = %error, "allocating observation sequence");
-                                continue;
-                            }
-                        },
+                    let mut frame = EnvoyFrame::Observed {
+                        seq: 0,
                         session_id,
                         payload,
                     };
-                    if let Err(error) = spool.append(&frame) {
+                    if let Err(error) = spool.append_next(&mut frame) {
                         tracing::error!(error = %error, "spooling state.db observation");
                     }
                 }
@@ -779,6 +871,8 @@ fn production_factory() -> RuntimeTable {
         let env = spec.env.clone();
         let command = acp_command_for_agent(spec.agent.as_deref());
         let framing = acp_framing_for_agent(spec.agent.as_deref());
+        let model_set_style =
+            olympus_envoy::bridge::hermes::model_set_style_for_agent(spec.agent.as_deref());
         let config = HermesRuntimeConfig {
             command,
             cwd,
@@ -788,6 +882,7 @@ fn production_factory() -> RuntimeTable {
             mcp_servers: spec.mcp_servers.clone(),
             env,
             framing,
+            model_set_style,
         };
         HermesAgentRuntime::new_arc(config) as Arc<dyn AgentRuntime>
     }))
@@ -811,7 +906,10 @@ fn arg_value(key: &str) -> Option<String> {
 
 fn configured_roles() -> Result<Vec<NodeRole>> {
     let raw = arg_value("--roles").or_else(|| std::env::var("OLYMPUS_ENVOY_ROLES").ok());
-    let mut roles = vec![NodeRole::AgentRuntime];
+    // Every envoy hosts operator terminals by default (ADR 0021 cockpit) — the
+    // cockpit's node picker spawns a shell on any node. TerminalHost is an
+    // operator-only capability; agents never reach the PTY manager.
+    let mut roles = vec![NodeRole::AgentRuntime, NodeRole::TerminalHost];
     if let Some(raw) = raw {
         for role in raw
             .split(',')
@@ -821,6 +919,7 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
             match role {
                 "agent_runtime" | "agent-runtime" => {}
                 "job_runner" | "job-runner" => roles.push(NodeRole::JobRunner),
+                "terminal_host" | "terminal-host" => roles.push(NodeRole::TerminalHost),
                 other => anyhow::bail!("unknown envoy role: {other}"),
             }
         }
@@ -828,7 +927,47 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
     roles.sort_by_key(|role| match role {
         NodeRole::AgentRuntime => 0,
         NodeRole::JobRunner => 1,
+        NodeRole::TerminalHost => 2,
     });
     roles.dedup();
     Ok(roles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_replay_never_blocks_the_socket_read_loop() {
+        assert!(!dispatch_inline(&HallFrame::ResumeFrom {
+            session_id: "session".into(),
+            seq: u64::MAX,
+        }));
+        assert!(dispatch_inline(&HallFrame::Ack {
+            session_id: "session".into(),
+            seq: 42,
+        }));
+    }
+
+    #[test]
+    fn periodic_replay_advances_once_per_connection() {
+        let mut cursor = std::collections::HashMap::new();
+        let frame = EnvoyFrame::Event {
+            session_id: "session".into(),
+            turn_id: "turn".into(),
+            seq: 7,
+            payload: AgentEvent::Done {
+                finish_reason: Some("end_turn".into()),
+            },
+        };
+
+        assert_eq!(periodic_replay_after(&cursor, "session"), None);
+        mark_periodic_replay_sent(&mut cursor, "session", &frame);
+        assert_eq!(periodic_replay_after(&cursor, "session"), Some(7));
+
+        // Reconnection creates a fresh cursor and permits one durable replay.
+        // Explicit Hall ResumeFrom bypasses this periodic cursor entirely.
+        let reconnected = std::collections::HashMap::new();
+        assert_eq!(periodic_replay_after(&reconnected, "session"), None);
+    }
 }

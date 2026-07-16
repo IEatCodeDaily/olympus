@@ -1356,6 +1356,14 @@ tiered.** Sessions stay forever searchable without staying forever resident.
 
 ## 10B. Observability — tracing instrumentation + admin surface
 
+> **Superseded in detail by accepted ADR 0018.** The separate operator surface and
+> `tracing` instrumentation remain, but the in-memory ring becomes only a live
+> cache. Restart-surviving spans and session diagnostics move to disposable
+> `telemetry.db` with TTL + physical quotas/reserves; OpenTelemetry is the model
+> and optional export seam. Product/audit truth remains in `olympus.db`.
+> Architecture review is GO; implementation remains blocked on ADR 0017 Tasks
+> 1.1–1.4 and the permanent session/job durability prerequisites.
+
 Olympus needs operator-grade backend observability — a Convex-dashboard-equivalent
 that surfaces what the control plane is doing in real time. Two surfaces, never
 mixed: the **user-facing React app** (`:8787`) for sessions/chat/search, and the
@@ -1385,7 +1393,9 @@ Olympus control plane (single Rust binary)
 │
 └── OTLP export (optional, opt-in)
     export to external collector (Grafana/Jaeger/Honeycomb) via
-    OTEL_EXPORTER_OTLP_ENDPOINT — off by default; the ring buffer is primary
+    OTEL_EXPORTER_OTLP_ENDPOINT — off by default; ADR 0018's disposable
+    `telemetry.db` is primary diagnostic retention, while the ring
+    buffer is only a live broadcast cache
 ```
 
 ### 10B.2 The admin surface is NOT a React SPA

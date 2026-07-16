@@ -69,8 +69,9 @@ pub trait AgentRuntime: Send + Sync {
 mod tests {
     use super::*;
     use crate::bridge::acp::{
-        AcpMessage, AcpNotification, AcpRequest, AcpResponse, AgentEventAcpExt, Frame,
+        AcpMessage, AcpNotification, AcpRequest, AcpResponse, AgentEventAcpExt,
     };
+    use crate::bridge::framing::{ContentLength, Framing};
     use serde_json::json;
 
     // ---- Test 1: frame encode/decode round-trips a JSON-RPC message ----
@@ -87,12 +88,12 @@ mod tests {
             }),
         };
         let msg = AcpMessage::Request(req);
-        let frame = Frame::encode(&msg).expect("encode");
+        let mut frame = ContentLength.encode(&msg).expect("encode");
         assert!(frame.starts_with(b"Content-Length: "));
-        // must contain the CRLF header terminator
-        let header_end = frame.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-        let body = &frame[header_end + 4..];
-        let decoded = Frame::decode(body).expect("decode");
+        let decoded = ContentLength
+            .decode(&mut frame)
+            .expect("decode")
+            .expect("complete frame");
         assert_eq!(decoded, msg);
     }
 
@@ -155,10 +156,11 @@ mod tests {
             }),
         };
         let msg = AcpMessage::Notification(notif);
-        let frame = Frame::encode(&msg).expect("encode");
-        let header_end = frame.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-        let body = &frame[header_end + 4..];
-        let decoded = Frame::decode(body).expect("decode");
+        let mut frame = ContentLength.encode(&msg).expect("encode");
+        let decoded = ContentLength
+            .decode(&mut frame)
+            .expect("decode")
+            .expect("complete frame");
         assert_eq!(decoded, msg);
     }
 
@@ -171,10 +173,11 @@ mod tests {
             error: None,
         };
         let msg = AcpMessage::Response(resp);
-        let frame = Frame::encode(&msg).expect("encode");
-        let header_end = frame.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-        let body = &frame[header_end + 4..];
-        let decoded = Frame::decode(body).expect("decode");
+        let mut frame = ContentLength.encode(&msg).expect("encode");
+        let decoded = ContentLength
+            .decode(&mut frame)
+            .expect("decode")
+            .expect("complete frame");
         assert_eq!(decoded, msg);
     }
 
@@ -225,6 +228,56 @@ mod tests {
         let req = AcpRequest::from_command(&cmd, "sess-1", 1.into()).expect("map switch_model");
         assert_eq!(req.method, "session/set_model");
         assert_eq!(req.params["modelId"].as_str().unwrap(), "zai:glm-4.5");
+    }
+
+    #[test]
+    fn set_model_uses_set_model_for_hermes_style() {
+        use olympus_proto::ModelSetStyle;
+        let req = AcpRequest::set_model("sess-1", "zai:glm-4.5", ModelSetStyle::SetModel, 7.into());
+        assert_eq!(req.method, "session/set_model");
+        assert_eq!(req.params["sessionId"].as_str().unwrap(), "sess-1");
+        assert_eq!(req.params["modelId"].as_str().unwrap(), "zai:glm-4.5");
+        assert!(req.params.get("configId").is_none());
+    }
+
+    #[test]
+    fn set_model_uses_config_option_for_claude_and_codex_style() {
+        use olympus_proto::ModelSetStyle;
+        // Claude Code / Codex adapters return -32601 "Method not found" for
+        // session/set_model; they only accept session/set_config_option.
+        let req = AcpRequest::set_model(
+            "sess-1",
+            "claude-sonnet-4-5",
+            ModelSetStyle::ConfigOption,
+            7.into(),
+        );
+        assert_eq!(req.method, "session/set_config_option");
+        assert_eq!(req.params["sessionId"].as_str().unwrap(), "sess-1");
+        assert_eq!(req.params["configId"].as_str().unwrap(), "model");
+        assert_eq!(req.params["value"].as_str().unwrap(), "claude-sonnet-4-5");
+        assert!(req.params.get("modelId").is_none());
+    }
+
+    #[test]
+    fn model_set_style_is_harness_specific() {
+        use crate::bridge::hermes::model_set_style_for_agent;
+        use olympus_proto::ModelSetStyle;
+        assert_eq!(
+            model_set_style_for_agent(Some("default")),
+            ModelSetStyle::SetModel
+        );
+        assert_eq!(
+            model_set_style_for_agent(Some("coding-agent")),
+            ModelSetStyle::SetModel
+        );
+        assert_eq!(
+            model_set_style_for_agent(Some("claude-code")),
+            ModelSetStyle::ConfigOption
+        );
+        assert_eq!(
+            model_set_style_for_agent(Some("codex")),
+            ModelSetStyle::ConfigOption
+        );
     }
 
     // ---- Test 3: Cancel emits a JSON-RPC notification (no id), not a request ----

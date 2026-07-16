@@ -128,6 +128,9 @@ MSG
 
 build_and_install() {
     log "Building olympus-envoy (release)…"
+    local target_dir
+    target_dir="$(cd "$REPO_DIR" && cargo metadata --no-deps --format-version 1 \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
     if $DRY_RUN; then
         dry "cd '$REPO_DIR' && cargo build --release -p olympus-envoy"
     else
@@ -147,7 +150,7 @@ build_and_install() {
 
     log "Installing $target"
     run mkdir -p "$BIN_DIR"
-    run cp -f "$REPO_DIR/target/release/olympus-envoy" "$target"
+    run cp -f "$target_dir/release/olympus-envoy" "$target"
     run ln -sfn "olympus-envoy-$git_hash" "$symlink"
     log "  $symlink → olympus-envoy-$git_hash"
 }
@@ -169,6 +172,38 @@ check_required_clis() {
             warn "optional CLI '$cli' not found (some agent features may be limited)"
         fi
     done
+}
+
+install_agent_adapters() {
+    if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+        die "Node.js >=22 and npm are required to provision the Claude ACP adapter" 2
+    fi
+    local node_major
+    node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+    if [[ "$node_major" -lt 22 ]]; then
+        die "Node.js >=22 is required for Claude ACP (found $(node --version))" 2
+    fi
+
+    local source="$REPO_DIR/adapters/claude-agent-acp"
+    local target="$OLYMPUS_HOME/adapters/claude-agent-acp"
+    [[ -f "$source/package.json" && -f "$source/package-lock.json" ]] \
+        || die "locked Claude ACP adapter manifest is missing" 2
+    log "Provisioning locked Claude ACP adapter…"
+    run mkdir -p "$target"
+    run cp -f "$source/package.json" "$source/package-lock.json" "$target/"
+    if $DRY_RUN; then
+        dry "npm ci --ignore-scripts --omit=dev --no-audit --no-fund --prefix '$target'"
+    else
+        npm ci --ignore-scripts --omit=dev --no-audit --no-fund --prefix "$target" \
+            || die "Claude ACP adapter install failed" 2
+        local installed
+        installed="$(node -p "require('$target/node_modules/@agentclientprotocol/claude-agent-acp/package.json').version")"
+        [[ "$installed" == "0.58.1" ]] \
+            || die "Claude ACP adapter version mismatch: expected 0.58.1, got $installed" 2
+        [[ -x "$target/node_modules/.bin/claude-agent-acp" ]] \
+            || die "Claude ACP adapter executable missing after npm ci" 2
+    fi
+    log "  Claude ACP adapter: 0.58.1 (locked, install-time provisioned)"
 }
 
 # ── 4. Transport config validation ──────────────────────────────────────
@@ -315,6 +350,7 @@ main() {
     check_platform
     locate_repo
     check_required_clis
+    install_agent_adapters
     validate_hall_addr
     build_and_install
     install_systemd_unit

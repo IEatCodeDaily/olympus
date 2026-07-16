@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { createVault, deleteVaultNote, putVaultNote } from "../api";
@@ -11,15 +11,25 @@ import { DeleteNoteDialog, RenameNoteDialog } from "./vaults/components/NoteActi
 import { VaultSidebar } from "./vaults/components/VaultSidebar";
 import { VaultWorkspace } from "./vaults/components/VaultWorkspace";
 import {
+  activateWorkspaceGroup,
   activateWorkspaceTab,
+  closeAllWorkspaceTabs,
+  closeOtherWorkspaceTabs,
+  closeWorkspaceGroup,
+  closeWorkspaceResource,
   closeWorkspaceTab,
+  closeWorkspaceTabsToRight,
   createInitialWorkspace,
   graphTab,
+  moveWorkspaceTab,
   noteTab,
   openWorkspaceTab,
-  setWorkspaceLayout,
+  openWorkspaceTabInPane,
+  resizeWorkspaceSplit,
+  splitWorkspaceGroup,
   tableTab,
-  type VaultWorkspaceLayout,
+  workspaceGroups,
+  type VaultWorkspaceState,
   type WorkspaceTab,
 } from "./vaults/vaultWorkspace";
 
@@ -38,31 +48,51 @@ export function VaultWorkspaceView() {
   const { data: notesData } = useVaultNotes(activeVaultId);
   const notes = notesData?.notes ?? EMPTY_NOTES;
   const [workspace, setWorkspace] = useState(() => createInitialWorkspace(null));
+  const [workspaceVaultId, setWorkspaceVaultId] = useState<string | null>(activeVaultId);
+  const [dirtyResources, setDirtyResources] = useState<Set<string>>(() => new Set());
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
   const [newNoteFolder, setNewNoteFolder] = useState<string | null>(null);
   const [renameEntry, setRenameEntry] = useState<NoteTreeEntry | null>(null);
   const [deleteEntry, setDeleteEntry] = useState<NoteTreeEntry | null>(null);
   const [busy, setBusy] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const splitSequence = useRef(0);
 
   useEffect(() => {
-    const target = targetFromRoute(route.vaultPage, routeNote, notes);
-    if (target) setWorkspace((current) => openWorkspaceTab(current, target));
-  }, [notes, route.vaultPage, routeNote]);
+    if (!activeVaultId || activeVaultId === workspaceVaultId) return;
+    if (workspaceVaultId && dirtyResources.size > 0 && !window.confirm("Discard unsaved changes and switch vaults?")) {
+      void navigate({ to: "/vaults/$vaultId", params: { vaultId: workspaceVaultId } });
+      return;
+    }
+    setWorkspace(createInitialWorkspace(null));
+    setDirtyResources(new Set());
+    setWorkspaceVaultId(activeVaultId);
+  }, [activeVaultId, dirtyResources.size, navigate, workspaceVaultId]);
 
-  const activePane = workspace.panes.find((pane) => pane.id === workspace.activePaneId);
-  const activeTab = activePane?.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
-  const activeNotePath = activeTab?.kind === "note" ? activeTab.path ?? null : null;
+  useEffect(() => {
+    if (activeVaultId !== workspaceVaultId) return;
+    const target = activeVaultId
+      ? targetFromRoute(activeVaultId, route.vaultPage, routeNote, notes)
+      : null;
+    if (target) setWorkspace((current) => openWorkspaceTab(current, target));
+  }, [activeVaultId, notes, route.vaultPage, routeNote, workspaceVaultId]);
+
+  const activeGroup = workspaceGroups(workspace).find((group) => group.id === workspace.activeGroupId);
+  const activeTab = activeGroup?.views.find((tab) => tab.id === activeGroup.activeViewId) as WorkspaceTab | undefined;
+  const activeNotePath = activeTab?.kind === "note" ? activeTab.path ?? activeTab.payload.path ?? null : null;
 
   const navigateTab = (tab: WorkspaceTab) => {
     if (!activeVaultId) return;
-    if (tab.kind === "graph") {
-      void navigate({ to: "/vaults/$vaultId/graph", params: { vaultId: activeVaultId } });
-    } else if (tab.kind === "table") {
-      void navigate({ to: "/vaults/$vaultId/tables", params: { vaultId: activeVaultId } });
-    } else {
-      void navigate({ to: "/vaults/$vaultId", params: { vaultId: activeVaultId }, search: { note: tab.path! } });
-    }
+    if (tab.kind === "graph") void navigate({ to: "/vaults/$vaultId/graph", params: { vaultId: activeVaultId } });
+    else if (tab.kind === "table") void navigate({ to: "/vaults/$vaultId/tables", params: { vaultId: activeVaultId } });
+    else void navigate({ to: "/vaults/$vaultId", params: { vaultId: activeVaultId }, search: { note: tab.path ?? tab.payload.path! } });
+  };
+
+  const navigateWorkspace = (next: VaultWorkspaceState) => {
+    const group = workspaceGroups(next).find((candidate) => candidate.id === next.activeGroupId);
+    const tab = group?.views.find((candidate) => candidate.id === group.activeViewId) as WorkspaceTab | undefined;
+    if (tab) navigateTab(tab);
+    else if (activeVaultId) void navigate({ to: "/vaults/$vaultId", params: { vaultId: activeVaultId } });
   };
 
   const openTab = (tab: WorkspaceTab) => {
@@ -104,7 +134,7 @@ export function VaultWorkspaceView() {
       const document = await putVaultNote(activeVaultId, path, { markdown, createOnly: true });
       await invalidateVault(activeVaultId);
       setNewNoteFolder(null);
-      openTab(noteTab(document.path, document.title));
+      openTab(noteTab(activeVaultId, document.path, document.title));
     } catch (error) {
       setMutationError(errorMessage(error));
     } finally {
@@ -114,13 +144,18 @@ export function VaultWorkspaceView() {
 
   const handleRename = async (newPath: string) => {
     if (!activeVaultId || !renameEntry) return;
+    const oldResource = `vault:${activeVaultId}:note:${renameEntry.path}`;
+    if (dirtyResources.has(oldResource) && !window.confirm("Discard unsaved changes and rename this note?")) return;
+    setWorkspace((current) => closeWorkspaceResource(current, oldResource));
+    setDirtyResources((current) => { const next = new Set(current); next.delete(oldResource); return next; });
     setBusy(true);
     setMutationError(null);
     try {
       const document = await putVaultNote(activeVaultId, renameEntry.path, { newPath });
       await invalidateVault(activeVaultId);
       setRenameEntry(null);
-      openTab(noteTab(document.path, document.title));
+      setWorkspace((current) => openWorkspaceTab(current, noteTab(activeVaultId, document.path, document.title)));
+      navigateTab(noteTab(activeVaultId, document.path, document.title));
     } catch (error) {
       setMutationError(errorMessage(error));
     } finally {
@@ -130,12 +165,17 @@ export function VaultWorkspaceView() {
 
   const handleDelete = async () => {
     if (!activeVaultId || !deleteEntry) return;
+    const resourceKey = `vault:${activeVaultId}:note:${deleteEntry.path}`;
+    if (dirtyResources.has(resourceKey) && !window.confirm("Discard unsaved changes and delete this note?")) return;
+    const workspaceWithoutDeleted = closeWorkspaceResource(workspace, resourceKey);
+    setWorkspace(workspaceWithoutDeleted);
+    setDirtyResources((current) => { const updated = new Set(current); updated.delete(resourceKey); return updated; });
     setBusy(true);
     setMutationError(null);
     try {
       await deleteVaultNote(activeVaultId, deleteEntry.path);
       await invalidateVault(activeVaultId);
-      setWorkspace((current) => closeAllTarget(current, `note:${deleteEntry.path}`));
+      navigateWorkspace(workspaceWithoutDeleted);
       setDeleteEntry(null);
     } catch (error) {
       setMutationError(errorMessage(error));
@@ -152,26 +192,62 @@ export function VaultWorkspaceView() {
           activeVaultId={activeVaultId}
           notes={notes}
           activeNotePath={activeNotePath}
-          onSelectVault={(vaultId) => { setWorkspace(createInitialWorkspace(null)); void navigate({ to: "/vaults/$vaultId", params: { vaultId } }); }}
+          onSelectVault={(vaultId) => { void navigate({ to: "/vaults/$vaultId", params: { vaultId } }); }}
           onCreateVault={() => { setMutationError(null); setCreateVaultOpen(true); }}
           onCreateNote={(folder) => { setMutationError(null); setNewNoteFolder(folder ?? ""); }}
-          onOpenNote={(path, title) => openTab(noteTab(path, title))}
-          onOpenGraph={() => openTab(graphTab)}
-          onOpenTable={() => openTab(tableTab)}
+          onOpenNote={(path, title) => { if (activeVaultId) openTab(noteTab(activeVaultId, path, title)); }}
+          onOpenGraph={() => { if (activeVaultId) openTab(graphTab(activeVaultId)); }}
+          onOpenTable={() => { if (activeVaultId) openTab(tableTab(activeVaultId)); }}
           onRenameNote={(entry) => { setMutationError(null); setRenameEntry(entry); }}
           onDeleteNote={(entry) => { setMutationError(null); setDeleteEntry(entry); }}
         />
       )}
       <div className="viewport vault-viewport">
-        {activeVaultId ? (
+        {activeVaultId && activeVaultId === workspaceVaultId ? (
           <VaultWorkspace
             vaultId={activeVaultId}
             state={workspace}
-            onActivatePane={(paneId) => setWorkspace((current) => ({ ...current, activePaneId: paneId }))}
-            onActivateTab={(paneId, tab) => { setWorkspace((current) => activateWorkspaceTab(current, paneId, tab.id)); navigateTab(tab); }}
-            onCloseTab={(paneId, tabId) => setWorkspace((current) => closeWorkspaceTab(current, paneId, tabId))}
-            onOpenNote={(path, title) => openTab(noteTab(path, title))}
-            onLayout={(layout: VaultWorkspaceLayout) => setWorkspace((current) => setWorkspaceLayout(current, layout))}
+            onActivateGroup={(groupId) => setWorkspace((current) => activateWorkspaceGroup(current, groupId))}
+            onActivateTab={(groupId, tab) => { setWorkspace((current) => activateWorkspaceTab(current, groupId, tab.id)); navigateTab(tab); }}
+            onCloseTab={(groupId, tabId) => {
+              const next = closeWorkspaceTab(workspace, groupId, tabId);
+              setWorkspace(next);
+              navigateWorkspace(next);
+            }}
+            onMoveTab={(sourceGroupId, tabId, targetGroupId, targetIndex) => setWorkspace((current) => moveWorkspaceTab(current, sourceGroupId, tabId, targetGroupId, targetIndex))}
+            onDropNote={(groupId, path, title, targetIndex) => {
+              const tab = noteTab(activeVaultId, path, title);
+              setWorkspace((current) => openWorkspaceTabInPane(current, groupId, tab, targetIndex));
+              navigateTab(tab);
+            }}
+            onTabMenuAction={(groupId, tabId, action) => {
+              const next = action === "closeOthers"
+                ? closeOtherWorkspaceTabs(workspace, groupId, tabId)
+                : action === "closeRight"
+                  ? closeWorkspaceTabsToRight(workspace, groupId, tabId)
+                  : action === "closeAll"
+                    ? closeAllWorkspaceTabs(workspace, groupId)
+                    : closeWorkspaceTab(workspace, groupId, tabId);
+              setWorkspace(next);
+              navigateWorkspace(next);
+            }}
+            onOpenNote={(path, title) => openTab(noteTab(activeVaultId, path, title))}
+            onSplit={(groupId, axis) => {
+              splitSequence.current += 1;
+              setWorkspace((current) => splitWorkspaceGroup(current, groupId, axis, `vault-split-${splitSequence.current}`, `vault-group-${splitSequence.current}`));
+            }}
+            onCloseGroup={(groupId) => {
+              const next = closeWorkspaceGroup(workspace, groupId);
+              setWorkspace(next);
+              navigateWorkspace(next);
+            }}
+            onResizeSplit={(splitId, ratio) => setWorkspace((current) => resizeWorkspaceSplit(current, splitId, ratio))}
+            onDirtyResourceChange={(resourceKey, dirty) => setDirtyResources((current) => {
+              const next = new Set(current);
+              if (dirty) next.add(resourceKey);
+              else next.delete(resourceKey);
+              return next;
+            })}
           />
         ) : (
           <div className="empty-state"><div className="empty-state-title">Create your first vault</div><div className="empty-state-msg">Connect a GitHub repository to begin.</div><button type="button" className="btn primary" onClick={() => setCreateVaultOpen(true)}>Create vault</button></div>
@@ -185,11 +261,11 @@ export function VaultWorkspaceView() {
   );
 }
 
-function targetFromRoute(page: "note" | "tables" | "graph", path: string | null, notes: NoteTreeEntry[]): WorkspaceTab | null {
-  if (page === "graph") return graphTab;
-  if (page === "tables") return tableTab;
+function targetFromRoute(vaultId: string, page: "note" | "tables" | "graph", path: string | null, notes: NoteTreeEntry[]): WorkspaceTab | null {
+  if (page === "graph") return graphTab(vaultId);
+  if (page === "tables") return tableTab(vaultId);
   const notePath = path ?? firstNotePath(notes);
-  return notePath ? noteTab(notePath, findNote(notes, notePath)?.title) : null;
+  return notePath ? noteTab(vaultId, notePath, findNote(notes, notePath)?.title) : null;
 }
 
 function firstNotePath(notes: NoteTreeEntry[]): string | null {
@@ -208,10 +284,6 @@ function findNote(notes: NoteTreeEntry[], path: string): NoteTreeEntry | null {
     if (child) return child;
   }
   return null;
-}
-
-function closeAllTarget(state: ReturnType<typeof createInitialWorkspace>, tabId: string) {
-  return state.panes.reduce((current, pane) => closeWorkspaceTab(current, pane.id, tabId), state);
 }
 
 function yamlString(value: string): string {

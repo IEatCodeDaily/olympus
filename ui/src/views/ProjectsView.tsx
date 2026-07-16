@@ -64,6 +64,7 @@ export function ProjectsView() {
 
   const filteredCards = useMemo(() => {
     if (!filterAssignee) return cards;
+    if (filterAssignee === "__unassigned__") return cards.filter((c) => !c.assignedId);
     return cards.filter((c) => c.assignedId === filterAssignee);
   }, [cards, filterAssignee]);
 
@@ -105,7 +106,7 @@ export function ProjectsView() {
                   onClick={() => setFilterAssignee(null)}
                   title="Clear filter"
                 >
-                  {filterAssignee} ×
+                  {filterAssignee === "__unassigned__" ? "No assignee" : filterAssignee} ×
                 </button>
               )}
             </div>

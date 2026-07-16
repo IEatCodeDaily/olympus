@@ -17,6 +17,9 @@
 import { useRouterState, useNavigate } from "@tanstack/react-router";
 import { Icon, type IconName } from "./components/Icon";
 import { useUIStore } from "./store";
+import { useCockpit } from "./cockpit/store";
+import { Cockpit } from "./cockpit/Cockpit";
+import { SearchPill, CommandPalette } from "./CommandPalette";
 import { parseRoute, type SurfaceName } from "./router";
 import { useTheme } from "./theme";
 import { useHallAuth } from "./auth";
@@ -24,7 +27,7 @@ import { SessionsView } from "./views/SessionsView";
 import { VaultWorkspaceView } from "./views/VaultWorkspaceView";
 import { ProjectsView } from "./views/ProjectsView";
 import FleetView from "./views/FleetView";
-import { SettingsView } from "./views/PlaceholderViews";
+import { SettingsView } from "./views/SettingsView";
 
 // ── Helpers ────────────────────────────────────────
 
@@ -88,6 +91,11 @@ export function AppShell() {
           </div>
         ) : null}
       </div>
+      {/* Operator cockpit (ADR 0021): floating, persists across every surface
+          because it is mounted here at the app root, outside the body switch. */}
+      <Cockpit />
+      {/* Command palette (⌘K) — search sessions, vaults, nodes. */}
+      <CommandPalette />
     </div>
   );
 }
@@ -131,9 +139,13 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
         </div>
       </div>
 
-      <div className="tb-center" />
+      <div className="tb-center">
+        <SearchPill />
+      </div>
 
       <div className="tb-right">
+        {/* Operator cockpit toggle (ADR 0021) — floating terminal workspace. */}
+        <CockpitToggle />
         {/* Theme toggle */}
         <button
           type="button"
@@ -150,6 +162,22 @@ function TopBar({ activeSurface }: { activeSurface: SurfaceName }) {
         </button>
       </div>
     </div>
+  );
+}
+
+function CockpitToggle() {
+  const { open, toggle } = useCockpit();
+  return (
+    <button
+      type="button"
+      className={`icobtn ${open ? "on" : ""}`}
+      onClick={toggle}
+      title="Operator cockpit (terminal)"
+      aria-label="Toggle operator cockpit"
+      aria-pressed={open}
+    >
+      <Icon name="terminal" size={14} />
+    </button>
   );
 }
 

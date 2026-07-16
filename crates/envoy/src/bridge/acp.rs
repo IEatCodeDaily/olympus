@@ -3,13 +3,10 @@
 //!
 //! # Transport
 //!
-//! The ACP specification uses Content-Length framing (LSP-style):
-//! `Content-Length: <n>\r\n\r\n<json-body>`. The spike note
-//! (`docs/reviews/acp-wire-spike.md` §"Verdict" line 14) observed the Python
-//! reference client using newline-delimited JSON, but that was the client's own
-//! readline loop, not a transport requirement. Hermes' ACP adapter follows the
-//! spec's Content-Length framing. This implementation uses Content-Length
-//! framing as mandated by the task spec and ACP proper.
+//! Framing is adapter-selected in `bridge::framing`. Every currently supported
+//! executable (Hermes ACP, Claude Agent ACP 0.58.1, and Codex ACP 0.16.0) was
+//! probed as newline-delimited JSON. Content-Length remains only a generic codec
+//! for a future adapter that explicitly declares it.
 //!
 //! # Message model
 //!
@@ -25,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{AgentCommand, AgentEvent};
+pub use olympus_proto::ModelSetStyle;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC id type
@@ -142,6 +140,31 @@ impl AcpRequest {
             method: method.into(),
             params,
         })
+    }
+
+    /// Build a mid-session model switch request for the harness's declared
+    /// [`ModelSetStyle`]. Hermes ACP takes `session/set_model`; the Claude Code
+    /// and Codex adapters take the ACP-standard `session/set_config_option`
+    /// with `configId: "model"` (they return `-32601 Method not found` for
+    /// `session/set_model`). This is the harness-specific seam that keeps a
+    /// single `SwitchModel` command from assuming one uniform ACP surface.
+    pub fn set_model(session_id: &str, model: &str, style: ModelSetStyle, id: AcpId) -> Self {
+        let (method, params) = match style {
+            ModelSetStyle::SetModel => (
+                "session/set_model",
+                json!({ "sessionId": session_id, "modelId": model }),
+            ),
+            ModelSetStyle::ConfigOption => (
+                "session/set_config_option",
+                json!({ "sessionId": session_id, "configId": "model", "value": model }),
+            ),
+        };
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            method: method.into(),
+            params,
+        }
     }
 }
 
@@ -349,33 +372,5 @@ impl AgentEventAcpExt for AgentEvent {
         Some(AgentEvent::Done {
             finish_reason: Some(stop_reason.to_string()),
         })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Content-Length framing
-// ---------------------------------------------------------------------------
-
-/// LSP/ACP-style Content-Length frame codec.
-///
-/// Wire format: `Content-Length: <n>\r\n\r\n<json-body-of-n-bytes>`
-pub struct Frame;
-
-impl Frame {
-    /// Encode a message into a Content-Length-framed byte buffer.
-    pub fn encode(msg: &AcpMessage) -> anyhow::Result<Vec<u8>> {
-        let body = serde_json::to_vec(msg)?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        let mut out = Vec::with_capacity(header.len() + body.len());
-        out.extend_from_slice(header.as_bytes());
-        out.extend_from_slice(&body);
-        Ok(out)
-    }
-
-    /// Decode a JSON body (the bytes after the `Content-Length` header) into a
-    /// message.
-    pub fn decode(body: &[u8]) -> anyhow::Result<AcpMessage> {
-        let msg: AcpMessage = serde_json::from_slice(body)?;
-        Ok(msg)
     }
 }

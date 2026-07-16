@@ -832,6 +832,31 @@ async fn handle_envoy_frame(
                     .await;
             }
         }
+        EnvoyFrame::TerminalOutput {
+            terminal_id,
+            data_b64,
+        } => {
+            // Operator terminal output (ADR 0021): forward to any operator WS
+            // subscribed to this terminal. Never logged (shell bytes).
+            if let Some(c) = conn {
+                c.forward_terminal(
+                    &terminal_id,
+                    crate::server::envoy_conn::TerminalFrame::Output { data_b64 },
+                );
+            }
+        }
+        EnvoyFrame::TerminalExited {
+            terminal_id,
+            exit_code,
+        } => {
+            if let Some(c) = conn {
+                c.forward_terminal(
+                    &terminal_id,
+                    crate::server::envoy_conn::TerminalFrame::Exited { exit_code },
+                );
+                c.drop_terminal(&terminal_id);
+            }
+        }
     }
     FrameOutcome::Continue
 }

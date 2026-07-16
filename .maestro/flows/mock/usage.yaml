@@ -1,0 +1,18 @@
+url: ${MAESTRO_BASE_URL}/sessions/usage
+name: Usage page renders per-model token + cost rows
+properties:
+  junitId: olympus-usage-page
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Usage"
+    timeout: 15000
+# UsagePage fixture rows: claude-opus-4-8, gpt-5.4, glm-5.2
+- assertVisible: "claude-opus-4-8"
+- assertVisible: "gpt-5.4"
+- assertVisible: "IN"
+- assertVisible: "OUT"
+- assertVisible: "COST"
+- takeScreenshot:
+    path: screenshots/usage-page

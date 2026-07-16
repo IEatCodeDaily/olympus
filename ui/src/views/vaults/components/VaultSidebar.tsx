@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Icon } from "../../../components/Icon";
 import type { NoteTreeEntry, VaultSummary } from "../../../types";
 import { findFolderIndex } from "../vaultWorkspace";
+import { VAULT_NOTE_DRAG_TYPE } from "../vaultDrag";
 
 interface EntryMenu {
   entry: NoteTreeEntry;
@@ -183,7 +184,17 @@ function FileTreeEntry({
   const isExpanded = folder && expanded.has(entry.path);
   return (
     <div role="treeitem" aria-expanded={folder ? isExpanded : undefined}>
-      <div className={`vault-file-row ${!folder && activeNotePath === entry.path ? "on" : ""}`} style={{ paddingLeft: 8 + depth * 14 }} onContextMenu={(event) => onOpenMenu(event, entry)}>
+      <div
+        className={`vault-file-row ${!folder && activeNotePath === entry.path ? "on" : ""}`}
+        style={{ paddingLeft: 8 + depth * 14 }}
+        draggable={!folder}
+        onDragStart={(event) => {
+          if (folder) return;
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData(VAULT_NOTE_DRAG_TYPE, JSON.stringify({ path: entry.path, title: entry.title }));
+        }}
+        onContextMenu={(event) => onOpenMenu(event, entry)}
+      >
         <button type="button" className="vault-file-open" onClick={() => folder ? onToggleFolder(entry) : onOpenNote(entry.path, entry.title)}>
           {folder && <Icon name={isExpanded ? "chevron-down" : "chevron-right"} size={11} />}
           <Icon name={folder ? "folder" : "file"} size={13} />

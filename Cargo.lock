@@ -2593,6 +2593,7 @@ dependencies = [
  "futures",
  "hostname",
  "iroh",
+ "libc",
  "olympus-proto",
  "rusqlite",
  "serde",

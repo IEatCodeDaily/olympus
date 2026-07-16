@@ -1,0 +1,56 @@
+url: ${MAESTRO_BASE_URL}/projects
+name: Projects board — columns, card detail, assignee + unassigned filters
+properties:
+  junitId: olympus-projects-board-full
+  junitClassname: ui.mock
+---
+- launchApp
+
+# ── Board loads with both fixture cards across status columns ──────────────
+- extendedWaitUntil:
+    visible: "Projects"
+    timeout: 15000
+- assertVisible: "2 cards"
+- assertVisible: "Todo"
+- assertVisible: "Claimed"
+- assertVisible: "Design Fleet tenancy"
+- assertVisible: "Validate Maestro evidence"
+- takeScreenshot:
+    path: screenshots/projects-board-columns
+
+# ── Card select opens the right detail panel ───────────────────────────────
+- tapOn: "Validate Maestro evidence"
+- extendedWaitUntil:
+    visible: "ASSIGNED TO"
+    timeout: 10000
+- assertVisible: "BOARD"
+- assertVisible: "PRIORITY"
+- assertVisible: "terminus"
+- takeScreenshot:
+    path: screenshots/projects-card-detail
+# Close the detail panel so filter assertions aren't confounded by the panel
+# title (which repeats the selected card's name).
+- tapOn:
+    point: "97%,9%"
+
+# ── Assignee filter narrows to the assigned card ───────────────────────────
+- tapOn: "terminus"
+- assertVisible: "Validate Maestro evidence"
+- assertNotVisible: "Design Fleet tenancy"
+- takeScreenshot:
+    path: screenshots/projects-filter-assignee
+# Clear the filter chip (shows "terminus ×")
+- tapOn: "terminus ×"
+- assertVisible: "Design Fleet tenancy"
+
+# ── Unassigned filter shows the unassigned card (regression: this used to ──
+#    return an empty board because the predicate compared assignedId against
+#    the literal "__unassigned__" sentinel). ────────────────────────────────
+- tapOn: "No assignee"
+- extendedWaitUntil:
+    visible: "Design Fleet tenancy"
+    timeout: 5000
+- assertVisible: "NO ASSIGNEE"
+- assertNotVisible: "No cards"
+- takeScreenshot:
+    path: screenshots/projects-filter-unassigned

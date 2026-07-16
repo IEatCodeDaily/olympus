@@ -69,6 +69,7 @@ fn test_state() -> (AppState, tempfile::TempDir) {
         irc: crate::irc::IrcBus::new(),
         nodes: crate::node::NodeRegistry::new(),
         envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+        hall_pty: crate::server::terminal_ws::HallTerminals::new(),
         hall_iroh_id: None,
         proxy: crate::proxy::ProxyTable::new(),
         edge: crate::edge::EdgeManager::new(crate::edge::MemoryDriver::available()),
@@ -616,6 +617,7 @@ async fn sort_by_message_count_orders_descending() {
         irc: crate::irc::IrcBus::new(),
         nodes: crate::node::NodeRegistry::new(),
         envoy_conns: crate::server::envoy_conn::EnvoyConnections::new(),
+        hall_pty: crate::server::terminal_ws::HallTerminals::new(),
         hall_iroh_id: None,
         proxy: crate::proxy::ProxyTable::new(),
         edge: crate::edge::EdgeManager::new(crate::edge::MemoryDriver::available()),
@@ -1984,10 +1986,12 @@ async fn enroll_flow_mint_script_register() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let token = v["token"].as_str().unwrap().to_string();
-    assert!(v["command"]
-        .as_str()
-        .unwrap()
-        .contains(&format!("/api/enroll/{token}/install.sh")));
+    let command = v["command"].as_str().unwrap();
+    assert!(command.contains(&format!("/api/enroll/{token}/install.sh")));
+    assert!(
+        command.contains("--max-redirs 0"),
+        "the one-line installer must fail before piping an Access/login redirect body to bash"
+    );
 
     // Mint without auth is rejected (the mint endpoint is operator-only).
     let res = app

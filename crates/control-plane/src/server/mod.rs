@@ -10,6 +10,7 @@ pub mod envoy_conn;
 mod identity;
 pub mod principal;
 pub(crate) mod routes;
+pub mod terminal_ws;
 pub mod ws;
 
 // Agent discovery moved to `olympus-envoy` (ADR 0008 S2) — probing the host
@@ -106,6 +107,11 @@ pub struct AppState {
     pub nodes: crate::node::NodeRegistry,
     /// Remote envoy connections (UDS or iroh write halves for RemoteRuntime).
     pub envoy_conns: crate::server::envoy_conn::EnvoyConnections,
+    /// Hall-local operator terminal (PTY) manager — the "hall" node target in
+    /// the cockpit picker (ADR 0021). Hall has no EnvoyConnection to itself, so
+    /// it runs shells directly via the same node-agnostic PtyManager the envoy
+    /// uses. Operator-only; reachable solely from the operator terminal WS.
+    pub hall_pty: Arc<crate::server::terminal_ws::HallTerminals>,
     /// Hall's iroh node id (public key, z-base-32). `None` when iroh is not
     /// enabled (no listener bound). Exposed via GET /api/nodes/hall-identity
     /// so the installer can fetch it without scraping logs (ADR 0008 §1 S7).
@@ -165,6 +171,10 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::delete(crate::proxy::delete_proxy_endpoint),
         )
         .route("/ws", get(ws::ws_handler))
+        .route(
+            "/ws/operator/terminals/{terminal_id}",
+            get(terminal_ws::terminal_ws_handler),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_gate));
 
     // The catch-all proxy forward is PUBLIC (auth is checked per-endpoint).

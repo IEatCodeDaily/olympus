@@ -260,8 +260,6 @@ mod tests {
         assert_eq!(recent[0].content.as_deref(), Some("first"));
         assert_eq!(recent[1].message_id, 1);
         assert_eq!(recent[1].content.as_deref(), Some("second"));
-
-        // recent with limit returns the N most recent
         let last = mgr.messages.recent("sess-1", 1);
         assert_eq!(last.len(), 1);
         assert_eq!(last[0].message_id, 1);
@@ -271,6 +269,61 @@ mod tests {
     fn message_count_for_unknown_session_is_zero() {
         let mgr = ViewManager::new();
         assert_eq!(mgr.messages.count("ghost"), 0);
+    }
+
+    // ---- ADR 0020 v2 §4.5 — SessionRow.message_count must agree with the
+    // durable message rows, for BOTH session kinds, and must not double-count. ----
+
+    #[test]
+    fn session_row_message_count_matches_messages_for_managed_and_synced() {
+        let mut mgr = ViewManager::new();
+
+        // Managed (olympus): no SessionUpdated{message_count} is ever emitted;
+        // the count must come from MessageAppended increments alone.
+        mgr.apply(&session_created("managed-1", "olympus", 1.0));
+        mgr.apply(&message("managed-1", 0, "user", "hi", 2.0));
+        mgr.apply(&message("managed-1", 1, "assistant", "hello", 3.0));
+
+        // Synced (cli): the sync worker sets an ABSOLUTE count via
+        // SessionUpdated; MessageAppended must NOT also increment (no double-count).
+        mgr.apply(&session_created("synced-1", "cli", 1.0));
+        mgr.apply(&message("synced-1", 0, "user", "a", 2.0));
+        mgr.apply(&message("synced-1", 1, "assistant", "b", 3.0));
+        mgr.apply(&Event::SessionUpdated {
+            session_id: "synced-1".into(),
+            title: None,
+            model: None,
+            archived: None,
+            message_count: Some(2),
+            agent: None,
+            node: None,
+            hermes_id: None,
+            pinned: None,
+        });
+
+        let managed = mgr.sessions.get("managed-1").expect("managed row");
+        let synced = mgr.sessions.get("synced-1").expect("synced row");
+
+        // SessionRow.message_count (what SessionDto reads) agrees with the
+        // MessageView count — the divergence fixed by ADR 0020 v2.
+        assert_eq!(managed.message_count, 2, "managed row counts appends");
+        assert_eq!(mgr.messages.count("managed-1"), 2);
+        assert_eq!(synced.message_count, 2, "synced row uses absolute, no double");
+        assert_eq!(mgr.messages.count("synced-1"), 2);
+    }
+
+    #[test]
+    fn message_count_survives_replay_for_managed_sessions() {
+        let (_f, log) = fresh_log();
+        log.append(&session_created("m", "olympus", 1.0)).unwrap();
+        log.append(&message("m", 0, "user", "x", 2.0)).unwrap();
+        log.append(&message("m", 1, "assistant", "y", 3.0)).unwrap();
+
+        let mut mgr = ViewManager::new();
+        mgr.replay(&log).unwrap();
+        let row = mgr.sessions.get("m").expect("row after replay");
+        assert_eq!(row.message_count, 2, "clean replay reproduces the count");
+        assert_eq!(mgr.messages.count("m"), 2);
     }
 
     #[test]

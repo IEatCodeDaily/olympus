@@ -11,6 +11,7 @@ pub mod discovery;
 pub mod job_table;
 pub mod mock_runtime;
 pub mod observer;
+pub mod pty;
 pub mod runtime_table;
 pub mod spool;
 pub mod transport;

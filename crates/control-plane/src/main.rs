@@ -184,6 +184,10 @@ async fn main() -> Result<()> {
                         olympus_control_plane::bridge::hermes::acp_framing_for_agent(
                             spec.agent.as_deref(),
                         );
+                    let model_set_style =
+                        olympus_control_plane::bridge::hermes::model_set_style_for_agent(
+                            spec.agent.as_deref(),
+                        );
                     let config =
                         olympus_control_plane::bridge::hermes::HermesRuntimeConfig {
                             command,
@@ -194,6 +198,7 @@ async fn main() -> Result<()> {
                             mcp_servers: spec.mcp_servers.clone(),
                             env,
                             framing,
+                            model_set_style,
                         };
                     olympus_control_plane::bridge::hermes::HermesAgentRuntime::new_arc(config)
                 },
@@ -233,6 +238,7 @@ async fn main() -> Result<()> {
         envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::with_log(
             log_arc.clone(),
         ),
+        hall_pty: olympus_control_plane::server::terminal_ws::HallTerminals::new(),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),
         edge: olympus_control_plane::edge::EdgeManager::new(Arc::new(
             olympus_control_plane::edge::caddy::CaddyDriver::localhost("127.0.0.1:8787"),

@@ -73,7 +73,10 @@ pub(crate) async fn mint_enroll(State(state): State<AppState>, headers: HeaderMa
             .into_response();
     };
     let token = state.enroll.mint().await;
-    let command = format!("curl -fsSL {base}/api/enroll/{token}/install.sh | bash");
+    // Enrollment endpoints must be reached directly. Refuse redirects so an
+    // edge login/error page can never be piped into bash as if it were the
+    // installer.
+    let command = format!("curl -fsSL --max-redirs 0 {base}/api/enroll/{token}/install.sh | bash");
 
     Json(json!({
         "token": token,

@@ -68,13 +68,20 @@ export function useSession(id: string | null) {
   });
 }
 
-/** Messages for a session. */
+/** Messages for a session.
+ *
+ * ADR 0020 v2 §4.2 — the transcript is durable truth in Hall; the live WS
+ * stream only *notifies*. `staleTime: 0` (was `Infinity`) lets the active
+ * session refetch when the client (re)subscribes on mount/navigation, so the
+ * committed transcript is always reconstructed on return — deliver-on-resubscribe.
+ * Combined with durable-first `message.done` (§4.1), the done-triggered refetch
+ * now always observes the committed assistant row. */
 export function useMessages(sessionId: string | null) {
   return useQuery({
     queryKey: sessionId ? qk.messages(sessionId) : ["messages", "none"],
     queryFn: () => fetchMessages(sessionId!, { limit: 100 }),
     enabled: !!sessionId,
-    staleTime: Infinity, // don't auto-refetch; WS drives live updates
+    staleTime: 0, // WS notifies; refetch on (re)subscribe reconstructs truth
   });
 }
 
@@ -226,6 +233,13 @@ export function useLiveSync(organizationId: string) {
         }
         case "cards.changed": {
           qc.invalidateQueries({ queryKey: ["cards"] });
+          break;
+        }
+        case "ws.reconnected": {
+          // The socket was down; any session.added/updated broadcast in the
+          // gap is lost. Refetch list-level truth. (ChatPage separately
+          // resubscribes + refetches its own transcript.)
+          qc.invalidateQueries({ queryKey: ["sessions"] });
           break;
         }
         default:

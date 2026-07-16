@@ -15,5 +15,5 @@ pub mod version;
 
 pub use agent::{AgentCommand, AgentEvent, PermissionOption};
 pub use frames::{EnvoyFrame, HallFrame, RuntimeStatus};
-pub use runtime::{AcpFraming, RuntimeSpec};
+pub use runtime::{AcpFraming, ModelSetStyle, RuntimeSpec};
 pub use version::{BuildVersion, PROTOCOL_VERSION};

@@ -1,0 +1,51 @@
+url: ${MAESTRO_BASE_URL}/fleet
+name: Fleet — node detail, agent actions, add-node enroll
+properties:
+  junitId: olympus-fleet-detail
+  junitClassname: ui.mock
+---
+- launchApp
+
+# ── Fleet overview lists all three fixture nodes with status ───────────────
+- extendedWaitUntil:
+    visible: "Add node"
+    timeout: 15000
+- assertVisible: "local"
+- assertVisible: "gpu-box"
+- assertVisible: "edge-mini"
+- takeScreenshot:
+    path: screenshots/fleet-overview-full
+
+# ── Open a remote node's detail page ───────────────────────────────────────
+- tapOn: "gpu-box"
+- extendedWaitUntil:
+    visible: "STATUS"
+    timeout: 10000
+- assertVisible: "TRANSPORT"
+- assertVisible: "HOST"
+- assertVisible: "SLOTS"
+- assertVisible: "HEARTBEAT"
+- assertVisible: "Detect agents"
+- assertVisible: "Drain"
+- assertVisible: "Remove"
+- takeScreenshot:
+    path: screenshots/fleet-node-detail
+
+# ── Detect agents (mock returns updated agents, button re-enables) ─────────
+- tapOn: "Detect agents"
+- extendedWaitUntil:
+    visible: "Detect agents"
+    timeout: 10000
+- takeScreenshot:
+    path: screenshots/fleet-node-detect
+
+# ── Open the Add-node enroll dialog (the sidebar button stays visible on ───
+#    the detail page, so no back-navigation is needed). ─────────────────────
+- tapOn: "Add node"
+- extendedWaitUntil:
+    visible: ".*Run this on the target host.*"
+    timeout: 10000
+- assertVisible: ".*install.sh.*"
+- assertVisible: ".*single-use.*"
+- takeScreenshot:
+    path: screenshots/fleet-add-node-enroll

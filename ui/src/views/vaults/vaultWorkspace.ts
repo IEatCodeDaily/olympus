@@ -1,33 +1,38 @@
 import type { NoteIndexEntry, NoteTreeEntry } from "../../types";
+import {
+  activateView,
+  closeView,
+  createWorkbench,
+  findGroup,
+  listGroups,
+  moveView,
+  openView,
+  removeGroup,
+  resizeSplit,
+  splitGroup,
+  type SplitAxis,
+  type ViewRecord,
+  type WorkbenchState,
+} from "../../workbench/model";
 
 export type VaultTabKind = "note" | "graph" | "table";
-export type VaultWorkspaceLayout = "single" | "columns" | "rows" | "grid";
 
-export interface WorkspaceTab {
-  id: string;
-  kind: VaultTabKind;
-  title: string;
+export interface VaultTabPayload {
   path?: string;
 }
 
-export interface WorkspacePane {
-  id: string;
-  tabs: WorkspaceTab[];
-  activeTabId: string | null;
+export interface WorkspaceTab extends ViewRecord<VaultTabPayload> {
+  kind: VaultTabKind;
+  path?: string;
 }
 
-export interface VaultWorkspaceState {
-  layout: VaultWorkspaceLayout;
-  panes: WorkspacePane[];
-  activePaneId: string;
-}
+export type VaultWorkspaceState = WorkbenchState<VaultTabPayload>;
 
-const PANE_COUNTS: Record<VaultWorkspaceLayout, number> = {
-  single: 1,
-  columns: 2,
-  rows: 2,
-  grid: 4,
-};
+let viewSequence = 0;
+function nextViewId(kind: VaultTabKind): string {
+  viewSequence += 1;
+  return `vault-view-${kind}-${viewSequence}`;
+}
 
 export function deriveFrontmatterColumns(documents: Pick<NoteIndexEntry, "frontmatter">[]): string[] {
   return Array.from(new Set(documents.flatMap((document) => Object.keys(document.frontmatter))))
@@ -35,127 +40,170 @@ export function deriveFrontmatterColumns(documents: Pick<NoteIndexEntry, "frontm
     .sort();
 }
 
-function pane(index: number): WorkspacePane {
-  return { id: `pane-${index + 1}`, tabs: [], activeTabId: null };
+export function createInitialWorkspace(initial: WorkspaceTab | null): VaultWorkspaceState {
+  const state = createWorkbench<VaultTabPayload>("vault-group-root");
+  return initial ? openView(state, state.activeGroupId, initial) : state;
 }
 
-export function createInitialWorkspace(initial: WorkspaceTab | null): VaultWorkspaceState {
-  const first = pane(0);
-  if (initial) {
-    first.tabs = [initial];
-    first.activeTabId = initial.id;
-  }
-  return { layout: "single", panes: [first], activePaneId: first.id };
+export function workspaceGroups(state: VaultWorkspaceState) {
+  return listGroups(state);
 }
 
 export function openWorkspaceTab(
   state: VaultWorkspaceState,
   tab: WorkspaceTab,
 ): VaultWorkspaceState {
-  const existingPane = state.panes.find((candidate) =>
-    candidate.tabs.some((candidateTab) => candidateTab.id === tab.id),
+  const existing = listGroups(state).find((group) =>
+    group.views.some((candidate) => candidate.resourceKey === tab.resourceKey),
   );
-  const targetPaneId = existingPane?.id ?? state.activePaneId;
-  return {
-    ...state,
-    activePaneId: targetPaneId,
-    panes: state.panes.map((candidate) => {
-      if (candidate.id !== targetPaneId) return candidate;
-      const exists = candidate.tabs.some((candidateTab) => candidateTab.id === tab.id);
-      return {
-        ...candidate,
-        tabs: exists ? candidate.tabs : [...candidate.tabs, tab],
-        activeTabId: tab.id,
-      };
-    }),
-  };
+  if (existing) {
+    const view = existing.views.find((candidate) => candidate.resourceKey === tab.resourceKey)!;
+    return activateView(state, existing.id, view.id);
+  }
+  return openView(state, state.activeGroupId, tab);
 }
 
 export function activateWorkspaceTab(
   state: VaultWorkspaceState,
-  paneId: string,
+  groupId: string,
   tabId: string,
 ): VaultWorkspaceState {
-  return {
-    ...state,
-    activePaneId: paneId,
-    panes: state.panes.map((candidate) =>
-      candidate.id === paneId && candidate.tabs.some((tab) => tab.id === tabId)
-        ? { ...candidate, activeTabId: tabId }
-        : candidate,
-    ),
-  };
+  return activateView(state, groupId, tabId);
+}
+
+export function activateWorkspaceGroup(
+  state: VaultWorkspaceState,
+  groupId: string,
+): VaultWorkspaceState {
+  return findGroup(state, groupId) ? { ...state, activeGroupId: groupId } : state;
 }
 
 export function closeWorkspaceTab(
   state: VaultWorkspaceState,
-  paneId: string,
+  groupId: string,
   tabId: string,
 ): VaultWorkspaceState {
-  return {
-    ...state,
-    panes: state.panes.map((candidate) => {
-      if (candidate.id !== paneId) return candidate;
-      const index = candidate.tabs.findIndex((tab) => tab.id === tabId);
-      if (index < 0) return candidate;
-      const tabs = candidate.tabs.filter((tab) => tab.id !== tabId);
-      const activeTabId =
-        candidate.activeTabId === tabId
-          ? tabs[Math.min(index, tabs.length - 1)]?.id ?? null
-          : candidate.activeTabId;
-      return { ...candidate, tabs, activeTabId };
-    }),
-  };
+  return closeView(state, groupId, tabId);
 }
 
-export function setWorkspaceLayout(
+export function moveWorkspaceTab(
   state: VaultWorkspaceState,
-  layout: VaultWorkspaceLayout,
+  sourceGroupId: string,
+  tabId: string,
+  targetGroupId: string,
+  targetIndex: number,
 ): VaultWorkspaceState {
-  const count = PANE_COUNTS[layout];
-  if (count >= state.panes.length) {
-    const panes = [...state.panes];
-    const activePane = state.panes.find((candidate) => candidate.id === state.activePaneId);
-    const activeTab = activePane?.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
-    while (panes.length < count) {
-      const nextPane = pane(panes.length);
-      if (activeTab) {
-        nextPane.tabs = [activeTab];
-        nextPane.activeTabId = activeTab.id;
-      }
-      panes.push(nextPane);
-    }
-    return { ...state, layout, panes };
-  }
+  return moveView(state, sourceGroupId, tabId, targetGroupId, targetIndex);
+}
 
-  const panes = state.panes.slice(0, count).map((candidate) => ({
-    ...candidate,
-    tabs: [...candidate.tabs],
-  }));
-  for (const removed of state.panes.slice(count)) {
-    for (const tab of removed.tabs) {
-      if (!panes[0].tabs.some((candidate) => candidate.id === tab.id)) panes[0].tabs.push(tab);
-    }
+export function openWorkspaceTabInPane(
+  state: VaultWorkspaceState,
+  groupId: string,
+  tab: WorkspaceTab,
+  targetIndex: number,
+): VaultWorkspaceState {
+  const existing = listGroups(state).find((group) =>
+    group.views.some((candidate) => candidate.resourceKey === tab.resourceKey),
+  );
+  if (existing) {
+    const view = existing.views.find((candidate) => candidate.resourceKey === tab.resourceKey)!;
+    return activateView(state, existing.id, view.id);
   }
-  if (!panes[0].activeTabId) panes[0].activeTabId = panes[0].tabs[0]?.id ?? null;
-  const activePaneId = panes.some((candidate) => candidate.id === state.activePaneId)
-    ? state.activePaneId
-    : panes[0].id;
-  return { ...state, layout, panes, activePaneId };
+  return openView(state, groupId, tab, targetIndex);
+}
+
+export function closeOtherWorkspaceTabs(
+  state: VaultWorkspaceState,
+  groupId: string,
+  tabId: string,
+): VaultWorkspaceState {
+  const group = findGroup(state, groupId);
+  if (!group?.views.some((view) => view.id === tabId)) return state;
+  return group.views
+    .filter((view) => view.id !== tabId)
+    .reduce((current, view) => closeView(current, groupId, view.id), state);
+}
+
+export function closeAllWorkspaceTabs(
+  state: VaultWorkspaceState,
+  groupId: string,
+): VaultWorkspaceState {
+  const group = findGroup(state, groupId);
+  if (!group) return state;
+  return group.views.reduce((current, view) => closeView(current, groupId, view.id), state);
+}
+
+export function closeWorkspaceTabsToRight(
+  state: VaultWorkspaceState,
+  groupId: string,
+  tabId: string,
+): VaultWorkspaceState {
+  const group = findGroup(state, groupId);
+  const index = group?.views.findIndex((view) => view.id === tabId) ?? -1;
+  if (!group || index < 0) return state;
+  return group.views.slice(index + 1)
+    .reduce((current, view) => closeView(current, groupId, view.id), state);
+}
+
+export function splitWorkspaceGroup(
+  state: VaultWorkspaceState,
+  groupId: string,
+  axis: SplitAxis,
+  splitId: string,
+  newGroupId: string,
+): VaultWorkspaceState {
+  return splitGroup(state, groupId, axis, splitId, newGroupId);
+}
+
+export function closeWorkspaceGroup(state: VaultWorkspaceState, groupId: string): VaultWorkspaceState {
+  return removeGroup(state, groupId);
+}
+
+export function resizeWorkspaceSplit(state: VaultWorkspaceState, splitId: string, ratio: number): VaultWorkspaceState {
+  return resizeSplit(state, splitId, ratio);
+}
+
+export function closeWorkspaceResource(state: VaultWorkspaceState, resourceKey: string): VaultWorkspaceState {
+  return listGroups(state).reduce((current, group) => {
+    const matches = group.views.filter((view) => view.resourceKey === resourceKey);
+    return matches.reduce((next, view) => closeView(next, group.id, view.id), current);
+  }, state);
 }
 
 export function findFolderIndex(folder: NoteTreeEntry): NoteTreeEntry | null {
   if (folder.kind !== "folder") return null;
-  return (
-    folder.children.find(
-      (entry) => entry.kind === "note" && entry.path === `${folder.path}/index.md`,
-    ) ?? null
-  );
+  return folder.children.find(
+    (entry) => entry.kind === "note" && entry.path === `${folder.path}/index.md`,
+  ) ?? null;
 }
 
-export function noteTab(path: string, title?: string): WorkspaceTab {
-  return { id: `note:${path}`, kind: "note", path, title: title ?? path };
+export function noteTab(vaultId: string, path: string, title?: string): WorkspaceTab {
+  return {
+    id: nextViewId("note"),
+    resourceKey: `vault:${vaultId}:note:${path}`,
+    kind: "note",
+    path,
+    title: title ?? path,
+    payload: { path },
+  };
 }
 
-export const graphTab: WorkspaceTab = { id: "view:graph", kind: "graph", title: "Graph View" };
-export const tableTab: WorkspaceTab = { id: "view:table", kind: "table", title: "Table View" };
+export function graphTab(vaultId: string): WorkspaceTab {
+  return {
+    id: nextViewId("graph"),
+    resourceKey: `vault:${vaultId}:graph`,
+    kind: "graph",
+    title: "Graph View",
+    payload: {},
+  };
+}
+
+export function tableTab(vaultId: string): WorkspaceTab {
+  return {
+    id: nextViewId("table"),
+    resourceKey: `vault:${vaultId}:table`,
+    kind: "table",
+    title: "Table View",
+    payload: {},
+  };
+}

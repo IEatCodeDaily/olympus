@@ -1,0 +1,39 @@
+url: ${MAESTRO_BASE_URL}/sessions/history
+name: History — text filter, clear, archived toggle
+properties:
+  junitId: olympus-history-filters
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "History"
+    timeout: 15000
+- assertVisible: "Session"
+- assertVisible: "Channel"
+- assertVisible: "Agent"
+- assertVisible: "Node"
+
+# ── Free-text filter narrows the table ─────────────────────────────────────
+- tapOn: "Filter by title, agent, model…"
+- inputText: "Grafana"
+- assertVisible: ".*Grafana.*"
+- assertVisible: ".*of 29 sessions.*"
+- takeScreenshot:
+    path: screenshots/history-text-filter
+
+# ── Clear the search via the native search-input clear affordance ──────────
+#    (the placeholder text is gone once typed, so target the input value).
+- longPressOn: "Grafana"
+- eraseText
+- extendedWaitUntil:
+    visible: "Filter by title, agent, model…"
+    timeout: 5000
+
+# ── Archived toggle reveals archived sessions ──────────────────────────────
+- tapOn: "Archived"
+- extendedWaitUntil:
+    visible: ".*archived.*"
+    timeout: 5000
+- takeScreenshot:
+    path: screenshots/history-archived-shown
+- tapOn: "Archived"

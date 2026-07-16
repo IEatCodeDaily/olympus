@@ -311,9 +311,19 @@ export const handlers = [
     await delay(250 + Math.random() * 250);
     return HttpResponse.json<NodesResponse>({ nodes: NODES });
   }),
+  // Operator cockpit terminal targets (ADR 0021): Hall + TerminalHost nodes.
+  http.get("http://127.0.0.1:8787/api/terminal/targets", () =>
+    HttpResponse.json({
+      targets: [
+        { id: "hall", label: "Hall", kind: "hall", default: true },
+        { id: "terminus", label: "terminus.host.entelechia.cloud", kind: "node", default: false },
+        { id: "fxcompute-01", label: "fxcompute-01", kind: "node", default: false },
+      ],
+    }),
+  ),
   http.post("http://127.0.0.1:8787/api/enroll", () => HttpResponse.json({
     token: "maestro-enroll-token",
-    command: "curl -fsSL http://hall.test/api/enroll/maestro-enroll-token/install.sh | bash",
+    command: "curl -fsSL --max-redirs 0 http://hall.test/api/enroll/maestro-enroll-token/install.sh | bash",
     expiresInSecs: 900,
     hallIrohId: "maestro-hall-iroh-id",
   })),
@@ -527,6 +537,85 @@ export const handlers = [
         ],
       });
     },
+  ),
+
+  // ── Organization management (ADR 0022) ──────────────────────────
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/members", () =>
+    HttpResponse.json({
+      members: [
+        { userId: "user-rpw", username: "rpw", role: "owner" },
+        { userId: "user-zephyr", username: "zephyr", role: "admin" },
+        { userId: "user-guest", username: "guest", role: "member" },
+      ],
+    }),
+  ),
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/roles", () =>
+    HttpResponse.json({
+      roles: [
+        { name: "owner", permissions: JSON.stringify({ "*": ["*"] }), builtin: true },
+        {
+          name: "admin",
+          permissions: JSON.stringify({
+            session: ["read", "write", "delete"],
+            vault: ["read", "write", "delete"],
+            node: ["read", "write"],
+            member: ["read", "invite", "remove"],
+          }),
+          builtin: true,
+        },
+        {
+          name: "member",
+          permissions: JSON.stringify({ session: ["read", "write"], vault: ["read", "write"] }),
+          builtin: true,
+        },
+        {
+          name: "auditor",
+          permissions: JSON.stringify({ session: ["read"], vault: ["read"], node: ["read"] }),
+          builtin: false,
+        },
+      ],
+      statement: [
+        { resource: "session", actions: ["read", "write", "delete"] },
+        { resource: "vault", actions: ["read", "write", "delete"] },
+        { resource: "node", actions: ["read", "write", "delete"] },
+        { resource: "member", actions: ["read", "invite", "remove"] },
+        { resource: "role", actions: ["read", "write", "delete"] },
+      ],
+    }),
+  ),
+  http.get("http://127.0.0.1:8787/api/organizations/:organizationId/invitations", () =>
+    HttpResponse.json({
+      invitations: [
+        {
+          id: "inv-1",
+          emailOrUsername: "newhire",
+          roleName: "member",
+          status: "pending",
+          expiresAt: Date.now() + 86_400_000,
+        },
+      ],
+    }),
+  ),
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/members/invite", () =>
+    HttpResponse.json({ token: "mock-invite-token", acceptPath: "/api/auth/invitations/mock-invite-token/accept" }),
+  ),
+  http.patch("http://127.0.0.1:8787/api/organizations/:organizationId/members/:userId", () =>
+    new HttpResponse(null, { status: 204 }),
+  ),
+  http.delete("http://127.0.0.1:8787/api/organizations/:organizationId/members/:userId", () =>
+    new HttpResponse(null, { status: 204 }),
+  ),
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/roles", () =>
+    new HttpResponse(null, { status: 201 }),
+  ),
+  http.patch("http://127.0.0.1:8787/api/organizations/:organizationId/roles/:name", () =>
+    new HttpResponse(null, { status: 204 }),
+  ),
+  http.delete("http://127.0.0.1:8787/api/organizations/:organizationId/roles/:name", () =>
+    new HttpResponse(null, { status: 204 }),
+  ),
+  http.post("http://127.0.0.1:8787/api/organizations/:organizationId/invitations/:id/revoke", () =>
+    new HttpResponse(null, { status: 204 }),
   ),
 ];
 

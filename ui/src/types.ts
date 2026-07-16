@@ -162,7 +162,11 @@ export type ServerFrame =
   | { kind: "sync.status"; connected: boolean }
   | { kind: "cards.changed" }
   | { kind: "permission.required"; sessionId: string; toolCall: string; options: Array<{ optionId: string; name: string; kind: string }> }
-  | { kind: "user.typing"; sessionId: string; who: string; expiresAt: number };
+  | { kind: "user.typing"; sessionId: string; who: string; expiresAt: number }
+  // Synthetic client-side frame: emitted by api.ts when the WS re-establishes
+  // after a drop. Frames broadcast during the outage are gone (the stream is
+  // not replayed), so consumers must refetch durable truth on this signal.
+  | { kind: "ws.reconnected" };
 
 export type ClientFrame =
   | { kind: "subscribe"; sessionIds: string[] }

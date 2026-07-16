@@ -30,6 +30,8 @@ use crate::version::BuildVersion;
 pub enum NodeRole {
     AgentRuntime,
     JobRunner,
+    /// Node can host operator terminals (PTY shells). ADR 0021 cockpit.
+    TerminalHost,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +199,44 @@ pub enum HallFrame {
         #[serde(rename = "jobId")]
         job_id: String,
     },
+    /// Open an operator terminal (PTY) on this node (ADR 0021 cockpit).
+    /// `terminal_id` is Hall-issued and stable for the terminal's lifetime.
+    /// The envoy spawns `$SHELL` as a process-group leader with a PTY and
+    /// streams `TerminalOutput` frames back. Operator-only; no agent path.
+    TerminalOpen {
+        #[serde(rename = "reqId")]
+        req_id: u64,
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+        #[serde(default)]
+        cols: u16,
+        #[serde(default)]
+        rows: u16,
+        /// Optional starting directory; envoy falls back to $HOME. Never a
+        /// caller-arbitrary command — the shell is fixed to the node's $SHELL.
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    /// Write operator keystrokes to a terminal's PTY (fire-and-forget stream).
+    /// `data` is base64 (PTY bytes are not guaranteed UTF-8).
+    TerminalInput {
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+        #[serde(rename = "dataB64")]
+        data_b64: String,
+    },
+    /// Resize a terminal's PTY window (fire-and-forget).
+    TerminalResize {
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Close a terminal: kill its process group and drop the PTY.
+    TerminalClose {
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+    },
     /// Spool truncation watermark: Hall has durably applied events for
     /// `session_id` up to and including `seq`.
     Ack {
@@ -300,6 +340,22 @@ pub enum EnvoyFrame {
         timed_out: bool,
         cancelled: bool,
     },
+    /// Operator terminal output bytes (ADR 0021). `data_b64` is base64 —
+    /// PTY output is arbitrary bytes, not guaranteed UTF-8.
+    TerminalOutput {
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+        #[serde(rename = "dataB64")]
+        data_b64: String,
+    },
+    /// The terminal's shell exited (or was killed). Terminal-state; no more
+    /// output follows for this `terminal_id`.
+    TerminalExited {
+        #[serde(rename = "terminalId")]
+        terminal_id: String,
+        #[serde(default, rename = "exitCode")]
+        exit_code: Option<i32>,
+    },
 }
 
 impl HallFrame {
@@ -316,8 +372,13 @@ impl HallFrame {
             | HallFrame::Drain { req_id, .. }
             | HallFrame::Probe { req_id }
             | HallFrame::DispatchJob { req_id, .. }
-            | HallFrame::CancelJob { req_id, .. } => Some(*req_id),
-            HallFrame::Ack { .. } | HallFrame::ResumeFrom { .. } => None,
+            | HallFrame::CancelJob { req_id, .. }
+            | HallFrame::TerminalOpen { req_id, .. } => Some(*req_id),
+            HallFrame::Ack { .. }
+            | HallFrame::ResumeFrom { .. }
+            | HallFrame::TerminalInput { .. }
+            | HallFrame::TerminalResize { .. }
+            | HallFrame::TerminalClose { .. } => None,
         }
     }
 }

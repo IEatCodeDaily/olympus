@@ -336,10 +336,16 @@ deploys.
 
 # EPIC G — Observability admin surface  (ADR §10B)
 
-**Depends on:** Epic A (tracing spans already mandated from MVP). **Tasks:**
-the separate server-rendered admin surface on `:8788` (traces/logs/metrics/
-event-tail); ring buffer; OTLP export deferred. **Done =** operator can watch
-live traces + the event tail in the admin UI without touching the main React app.
+**Approved architecture; implementation BLOCKED on ADR 0017 Tasks 1.1–1.4:** ADR 0018 and
+`docs/plans/2026-07-13-otel-observability-session-diagnostics.md`.
+**Depends on:** the session/runtime durability spine in ADR 0017 before Envoy
+telemetry ACK semantics land. **Tasks:** OpenTelemetry-shaped bounded-operation
+traces; restart-surviving session diagnostics in disposable `telemetry.db`;
+30-day default TTL plus disk quotas; low-cardinality live metrics; authenticated
+server-rendered `:8788`; optional OTLP/Prometheus export. The in-memory ring is a
+live broadcast cache, never primary retention. **Done =** an operator can debug a
+failed session after Hall/Envoy restart, see explicit telemetry gaps/expiry, and
+delete `telemetry.db` without affecting product truth.
 
 # EPIC H — Workflows (Sayiir / code-review loop)  (ADR §15, ADR 0003)
 

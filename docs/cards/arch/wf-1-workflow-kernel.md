@@ -2,7 +2,7 @@
 
 ## Goal
 Implement ADR 0013 exactly: versioned YAML DAG definitions, event-sourced
-runs, single-scheduler step dispatch over JOBS-1/frames, capability
+runs, single-scheduler step dispatch over hardened JOBS-2/frames, capability
 intersection at run start + step dispatch. NO general control flow — read the
 ADR's scope ceiling twice before starting; it is enforced at review.
 
@@ -10,8 +10,11 @@ ADR's scope ceiling twice before starting; it is enforced at review.
 - `docs/adrs/0013-workflow-kernel-bounded-chains.md` — the whole thing; it IS
   the spec. The scope ceiling section is non-negotiable.
 - `docs/adrs/0012-programmable-operating-environment.md` principles 10/12/16.
-- JOBS-1's merged result: job dispatch API + JobDispatched/JobCompleted
-  events — your local-activity execution substrate.
+- JOBS-2's hardened result from ADR 0017: durable job intent/projection,
+  `(job_id, attempt_epoch)`, output-before-ACK, terminal-last ordering,
+  reconciliation, provider construction, and sandbox gates — this is the
+  activity execution substrate. Do not build WF-1 on the original volatile
+  JOBS-1 route.
 - CAPS-1's merged result: `authorize_capability` — call it at run start and
   before EVERY step dispatch; revoked → StepFailed{cause:"revoked"}, run
   aborts (this is the ADR's revocation semantics).
@@ -21,7 +24,9 @@ ADR's scope ceiling twice before starting; it is enforced at review.
   established module pattern.
 
 ## Build on
-Branch from main after JOBS-1, CAPS-1, and PKG-1 all merge (three parents).
+Branch from main only after canonical PKG-1, CAPS-HARDEN, JOBS-2 Tasks 2.1-2.5,
+AGENT-IFACE Tasks 3.1-3.3, and provider/sandbox/artifact Tasks 4.1-4.4 are green.
+These are dispatch-blocking dependencies, not review-time aspirations.
 
 ## Deliverables
 1. Definition schema (serde YAML + JSON-Schema validation): steps[] with
@@ -38,9 +43,13 @@ Branch from main after JOBS-1, CAPS-1, and PKG-1 all merge (three parents).
    loop in Hall dispatching ready steps (needs satisfied) with idempotency
    key run_id:step_id:attempt. Parallel fan-out via concurrent dispatch,
    join via needs. Hall restart resumes from projection (test this).
-4. Activity resolution: `uses: job.run` → JOBS-1 dispatch; provider bindings
-   resolved at run start and pinned. Unknown capability → validation error
-   at publish, not at run.
+4. Activity resolution: `uses: job.run` → JOBS-2 `JobService`; provider bindings
+   resolved at run start and pinned. Hall atomically appends
+   `StepDispatchPlanned` plus durable job intent before dispatch, then
+   reconciles/attaches to the exact attempt. Unknown capability → validation
+   error at publish, not at run. Non-idempotent ambiguous effects become
+   `StepIndeterminate` and require operator reconciliation; never redispatch
+   from absence of completion alone.
 5. REST: POST /api/workflows (draft), POST /:id/publish, POST /:id/runs
    (non-blocking, returns run id), GET runs/:id, POST runs/:id/signal,
    DELETE runs/:id (cancel). Three-file contract rule.

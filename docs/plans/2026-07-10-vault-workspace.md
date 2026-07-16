@@ -12,9 +12,9 @@ The Vault surface currently has a static `VaultsView` shell with separate VAULTS
 
 ### Hall storage boundary
 
-`VaultBackend` is a provider-neutral tagged descriptor persisted in `.vault/metadata.json`. The initial variant is GitHub (`repository`, `branch`). `VaultSyncEngine` is represented separately and initially supports `jj-git`. Credentials are never persisted. Hall configures the local jj working copy's `origin`; future sync transports can replace GitHub and/or jj-git without changing note APIs.
+Per ADR 0016, Olympus's managed working copy is always the vault authority. External synchronization and backup are independent optional bindings. The initial sync adapter is GitHub through jj's Git interoperability; the planned native adapter synchronizes directly between Olympus installations. S3-compatible object storage is a backup target, not a merge peer. Credentials are never persisted in vault metadata.
 
-Vault list responses expose backend metadata. A vault-wide document-index endpoint returns path, title, updated time, and parsed frontmatter without sending every Markdown body.
+Vault list responses expose authority plus sync/backup binding summaries. A vault-wide document-index endpoint returns path, title, updated time, and parsed frontmatter without sending every Markdown body.
 
 ### Client workspace boundary
 
@@ -38,7 +38,7 @@ Table View is a vault-wide note index. Fixed columns are title and path; all fro
 
 ## Migration
 
-Existing vault metadata without a backend remains readable and is reported as unconfigured. New vault creation requires a backend. No existing note bytes move. Routes remain compatible with `/vaults/:id?note=...`, `/graph`, and `/tables` while the workspace uses them as active-target deep links.
+Existing vault metadata without a backend is already a valid Olympus-only vault. Existing GitHub backends migrate into optional sync bindings. New vault creation requires only a name and defaults to no external sync or backup. No existing note bytes move. Routes remain compatible with `/vaults/:id?note=...`, `/graph`, and `/tables` while the workspace uses them as active-target deep links.
 
 ## Verification gates
 

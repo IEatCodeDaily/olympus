@@ -18,13 +18,14 @@ import { Icon } from "../../../components/Icon";
 import { useMessages } from "../../../hooks/queries";
 import { onFrame } from "../../../api";
 import type { Message, ServerFrame, ToolCall } from "../../../types";
-import { fmtTime } from "../helpers";
+import { fmtDateTime } from "../helpers";
 
 export type BpTab = "terminal" | "logs" | "output" | "debug";
 
 // ── Types ──────────────────────────────────────────────
 
-interface LogEntry {
+export interface LogEntry {
+  id: string;
   ts: number;
   level: "info" | "warn" | "error";
   source: string;
@@ -84,6 +85,62 @@ function extractToolCalls(m: Message): ToolCall[] {
   return m.toolCalls;
 }
 
+/**
+ * Rebuild the durable part of the lifecycle log from Hall's message
+ * projection. Prompts, reasoning, tool arguments, and tool results are
+ * deliberately not copied into the diagnostics view.
+ */
+export function logsFromMessages(messages: Message[]): LogEntry[] {
+  const logs: LogEntry[] = [];
+  for (const message of messages) {
+    const prefix = `message:${message.messageId}`;
+    if (message.role === "user") {
+      logs.push({
+        id: `${prefix}:user`,
+        ts: message.timestamp,
+        level: "info",
+        source: "olympus",
+        message: "User message sent",
+      });
+    } else if (message.role === "system") {
+      const text = message.content ?? "(system)";
+      logs.push({
+        id: `${prefix}:system`,
+        ts: message.timestamp,
+        level: text.startsWith("⚠") || message.finishReason === "error" ? "error" : "info",
+        source: "olympus",
+        message: text,
+      });
+    }
+
+    extractToolCalls(message).forEach((toolCall, index) => {
+      const toolId = toolCall.id ?? String(index);
+      const status = toolCall.status ? ` (${toolCall.status})` : "";
+      logs.push({
+        id: `${prefix}:tool:${toolId}`,
+        ts: message.timestamp,
+        level: toolCall.status === "failed" ? "error" : "info",
+        source: "agent",
+        message: `Tool call: ${toolCall.name}${status}`,
+      });
+    });
+
+    if (message.role === "assistant" && message.finishReason) {
+      const failed = message.finishReason.startsWith("error");
+      logs.push({
+        id: `${prefix}:done`,
+        ts: message.timestamp,
+        level: failed ? "error" : "info",
+        source: "agent",
+        message: failed
+          ? `Turn ended with error: ${message.finishReason}`
+          : `Turn finished: ${message.finishReason}`,
+      });
+    }
+  }
+  return logs.sort((left, right) => left.ts - right.ts);
+}
+
 function safeStringify(obj: unknown): string {
   try {
     return JSON.stringify(obj, null, 2);
@@ -116,13 +173,27 @@ export function BottomPanel({
 
   // ── Frame ring buffer (always active, regardless of active tab) ──
   const [debugFrames, setDebugFrames] = useState<DebugEntry[]>([]);
-  // ── Logs ring buffer (session.log frames + synthesized lifecycle events) ──
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  // ── Live log tail; durable entries are rebuilt from Hall messages below. ──
+  const [liveLogEntries, setLiveLogEntries] = useState<LogEntry[]>([]);
+  const [logsClearedThrough, setLogsClearedThrough] = useState(0);
+  const { data: historicalMessageData } = useMessages(sessionId);
+  const persistedLogEntries = useMemo(
+    () => logsFromMessages(historicalMessageData?.messages ?? []),
+    [historicalMessageData?.messages],
+  );
+  const logEntries = useMemo(() => {
+    const byId = new Map<string, LogEntry>();
+    for (const entry of [...persistedLogEntries, ...liveLogEntries]) {
+      if (entry.ts > logsClearedThrough) byId.set(entry.id, entry);
+    }
+    return [...byId.values()].sort((left, right) => left.ts - right.ts).slice(-MAX_LOGS);
+  }, [liveLogEntries, logsClearedThrough, persistedLogEntries]);
 
   // Reset on session change.
   useEffect(() => {
     setDebugFrames([]);
-    setLogEntries([]);
+    setLiveLogEntries([]);
+    setLogsClearedThrough(0);
   }, [sessionId]);
 
   useEffect(() => {
@@ -145,29 +216,41 @@ export function BottomPanel({
       // from lifecycle frames so the panel is useful even for events the
       // backend doesn't explicitly log yet.
       const pushLog = (e: LogEntry) =>
-        setLogEntries((prev) => {
+        setLiveLogEntries((prev) => {
           const next = [...prev, e];
           if (next.length > MAX_LOGS) next.shift();
           return next;
         });
       const now = Date.now() / 1000;
       if (frame.kind === "session.log") {
-        pushLog({ ts: frame.timestamp, level: frame.level, source: frame.source, message: frame.message });
+        pushLog({
+          id: `live:${frame.timestamp}:${frame.source}:${frame.message}`,
+          ts: frame.timestamp,
+          level: frame.level,
+          source: frame.source,
+          message: frame.message,
+        });
       } else if (frame.kind === "message.appended") {
-        const m = frame.message;
-        if (m.role === "user") {
-          pushLog({ ts: now, level: "info", source: "olympus", message: "User message sent" });
-        } else if (m.role === "system") {
-          const isErr = (m.content ?? "").startsWith("⚠");
-          pushLog({ ts: now, level: isErr ? "error" : "info", source: "olympus", message: m.content ?? "(system)" });
-        }
+        logsFromMessages([frame.message]).forEach(pushLog);
       } else if (frame.kind === "message.done") {
         const fr = frame.finishReason;
         if (fr && fr.startsWith("error")) {
-          pushLog({ ts: now, level: "error", source: "agent", message: `Turn ended with error: ${fr}` });
+          pushLog({
+            id: `message:${frame.messageId}:done`,
+            ts: now,
+            level: "error",
+            source: "agent",
+            message: `Turn ended with error: ${fr}`,
+          });
         }
       } else if (frame.kind === "permission.required") {
-        pushLog({ ts: now, level: "warn", source: "agent", message: `Permission required: ${frame.toolCall}` });
+        pushLog({
+          id: `live:${now}:permission:${frame.toolCall}`,
+          ts: now,
+          level: "warn",
+          source: "agent",
+          message: `Permission required: ${frame.toolCall}`,
+        });
       }
     });
     return unsub;
@@ -178,7 +261,8 @@ export function BottomPanel({
   }, []);
 
   const handleClearLogs = useCallback(() => {
-    setLogEntries([]);
+    setLiveLogEntries([]);
+    setLogsClearedThrough(Date.now() / 1000);
   }, []);
 
   return (
@@ -296,9 +380,9 @@ function LogsTab({
             </span>
           </div>
         ) : (
-          filtered.map((e, i) => (
-            <div className="ln bp-frame" key={i}>
-              <span className="ts">{fmtTime(e.ts)}</span>
+          filtered.map((e) => (
+            <div className="ln bp-frame" key={e.id}>
+              <span className="ts">{fmtDateTime(e.ts)}</span>
               <span
                 className="fk"
                 style={{
@@ -408,7 +492,7 @@ function OutputTab({ sessionId }: { sessionId: string | null }) {
     <div className="bp-output" ref={scrollRef}>
       {entries.map((e, i) => (
         <div className="ln" key={i}>
-          <span className="ts">{fmtTime(e.ts)}</span>
+          <span className="ts">{fmtDateTime(e.ts)}</span>
           <span className="tn">{e.label ?? e.toolName}</span>
           {e.argSummary && <span className="ar d">{oneline(e.argSummary, 80)}</span>}
           {e.result != null ? (
@@ -500,7 +584,7 @@ function DebugTab({
         ) : (
           filtered.map((e, i) => (
             <div className="ln bp-frame" key={i}>
-              <span className="ts">{fmtTime(e.ts)}</span>
+              <span className="ts">{fmtDateTime(e.ts)}</span>
               <span className="fk">{e.frame.kind}</span>
               <span className="fj">{safeStringify(e.frame)}</span>
             </div>

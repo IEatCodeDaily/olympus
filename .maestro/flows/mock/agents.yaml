@@ -1,0 +1,20 @@
+url: ${MAESTRO_BASE_URL}/sessions/agents
+name: Agents page lists drivable profiles with provider + model
+properties:
+  junitId: olympus-agents-page
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Agents"
+    timeout: 15000
+# Fixture AGENTS_LIST: default, coding-agent, gpt55, tester, claude-code, codex
+- assertVisible: "default"
+- assertVisible: "coding-agent"
+- assertVisible: "claude-code"
+- assertVisible: "codex"
+- assertVisible: "PROVIDER"
+- assertVisible: "MODEL"
+- assertVisible: "anthropic"
+- takeScreenshot:
+    path: screenshots/agents-page

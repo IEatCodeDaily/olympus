@@ -1,17 +1,27 @@
 # Olympus Architecture
 
 > **Condensed reference. The authoritative specification is
-> [`docs/adrs/0002-olympus-fleet-control-plane.md`](adrs/0002-olympus-fleet-control-plane.md),
+> [`docs/adrs/0002-olympus-fleet-control-plane.md`](../adrs/0002-olympus-fleet-control-plane.md),
 > with the substrate decision in
-> [`docs/adrs/0003-remove-convex-rust-native-substrate.md`](adrs/0003-remove-convex-rust-native-substrate.md).**
+> [`docs/adrs/0003-remove-convex-rust-native-substrate.md`](../adrs/0003-remove-convex-rust-native-substrate.md).**
 > Where this file and ADR 0002 disagree, ADR 0002 wins; where ADR 0002 and ADR
 > 0003 disagree on the substrate, ADR 0003 wins. This file is a map; the ADRs are
 > the contracts. Section numbers point into ADR 0002.
+>
+> **Implementation note (2026-07-13):** later accepted ADRs supersede several
+> early target details in ADR 0002: SQLite + JSON/zstd + FTS5 replaced redb and
+> tantivy, ADR 0013 replaced the general workflow-engine proposal with bounded
+> declarative DAGs, and ADRs 0011–0015 define jobs, capabilities, edge, packages,
+> and managed apps. ADR 0017 proposes the session-cutover and remote-development
+> gate. Accepted ADR 0018 replaces the ring-buffer-primary observability sketch
+> with an OpenTelemetry-native, TTL-bounded diagnostic store; implementation is
+> still blocked on ADR 0017 Tasks 1.1–1.4. Do not implement from an older section
+> when a later approved ADR covers it.
 
 ## 1. Doctrine
 
-> Olympus is a multi-node agent fleet control plane: a **Rust-native single-binary
-> control plane** owns all durable truth as an **append-only event log** in redb,
+> Olympus is a multi-node agent fleet control plane: a **Rust-native Hall control
+> plane** owns all durable truth as an **append-only event log** in SQLite,
 > orchestration intent, workflows, and reactive views; one **node agent ("envoy")**
 > per host owns every host effect — process supervision, workspace, skills/MCP,
 > credentials, desired-state, vault sync; and heterogeneous agents (Hermes, Claude
@@ -23,15 +33,15 @@ replacement. Agents remain external programs; Olympus manages, routes, observes,
 steers, and records them — and owns their working directories so they operate in
 a scoped jj worktree instead of grepping the whole host.
 
-**Convex is removed (ADR 0003).** The control plane is a self-contained Rust
-binary; no external backend, no DB server, no SPOF connection terminus.
+**Convex is removed (ADR 0003).** Hall and Envoy are self-contained Rust
+binaries; there is no external database server or second connection authority.
 
 ## 2. Three layers
 
 ```text
-LAYER 1  Control plane     single Rust binary + React UI over WSS
-                           sole source of truth: redb EVENT LOG
-                           in-memory VIEWS → delta broadcast
+LAYER 1  Hall              Rust binary + React UI over WSS
+                           sole source of truth: SQLite EVENT LOG
+                           SQLite projections + bounded caches → delta broadcast
                            single-writer SCHEDULER (contended state; fencing)
                            durable WORKFLOW engine (embedded, checkpoint-based)
                            tokio timers; axum HTTP/webhooks
@@ -74,15 +84,17 @@ transport** (iroh `NodeId` / UDS peer creds) — no application-layer node token
 
 ## 4. Source-of-truth matrix (summary)
 
-All "owned by control plane" rows are an append-only event type in the redb log
-with a derived in-memory view.
+All "owned by control plane" rows are an append-only event type in SQLite with a
+derived transactional projection and, where useful, a bounded in-memory cache.
 
 | Concern | Owner |
 |---|---|
 | Operator auth, identities, contexts, projects | Control plane |
 | Sessions, messages, tool-calls, streaming, utility inference | Control plane (log + views) |
+| Traces and session diagnostic logs | Hall telemetry store (disposable SQLite; TTL + quota bounded; OTel-shaped) |
+| Live metrics | Hall/Envoy in-process registries; optional OTLP/Prometheus export |
 | Cards / board | Control plane (`cards`) |
-| Workflows, cron, webhooks | Control plane (embedded engine + tokio + axum) |
+| Bounded workflows, cron, webhooks | Control plane (event-backed DAG kernel + tokio + axum) |
 | Node registry, desired-state, host-command queue, leases, budgets, chat rooms, artifact/vault/skill-MCP index, FTS | Control plane |
 | Process spawn/supervision, PTY, filesystem, workdir lifecycle, ports, sandbox, artifact bytes + blob store | Envoy |
 | Skills/MCP/cred materialization to disk, vault sync, desired-state reconciliation (installs) | Envoy |
@@ -97,9 +109,9 @@ with a derived in-memory view.
 - **Transport & identity** (§2.5): iroh (remote, NodeId = identity) + UDS (local,
   peer creds); one wire protocol behind a `Transport` trait; browser↔control plane
   over WSS (the one unavoidable second transport).
-- **Truth model** (§2.4): **event-sourced** — redb append-only log is truth;
-  in-memory materialized views + search indices are derived, rebuildable
-  projections.
+- **Truth model** (§2.4): **event-sourced** — the SQLite append-only log is truth;
+  transactional projections, bounded caches, and search indices are derived
+  and rebuildable.
 - **Filesystem hierarchy** (§5): `~/olympus/{sessions,projects,skills,mcp,creds,
   system}/`. Main sessions flat; cards nest under their main session keyed by
   stable `card_id`; projects hold shared assets (vault, config, default
@@ -124,23 +136,30 @@ with a derived in-memory view.
   allowlist + per-context grants authorize (§10.7). Host output streamed via
   `hostCommandOutput` → message view. **Reactive views + delta broadcast**
   (§10.3.1) replace Convex subscriptions.
-- **Storage / compression / search** (§10A): redb truth + **zstd with a trained
-  dictionary** + **tantivy FTS** (v1, derived index) + **content-addressed blob
+- **Storage / compression / search** (§10A, superseded in implementation):
+  SQLite truth + **JSON/zstd event payloads** + **FTS5** + **content-addressed blob
   store** (blake3) for artifacts/non-text; **vector/semantic search deferred**
   (additive — needs embedding pipeline); message lifecycle (hot→warm→cold) bounds
   bloat while keeping sessions forever searchable.
 - **Memory & observability** (§11): views are bounded caches (bulk is paged from
-  redb/blob); **cgroups v2** unifies per-agent memory monitoring + limits
+  SQLite/blob storage); **cgroups v2** unifies per-agent memory monitoring + limits
   (`memory.current` = observability, `memory.max` = cap); WSL cgroup-v2 caveat to
-  verify early.
+  verify early. ADR 0018 keeps bounded-operation traces and correlated session
+  diagnostics in a separate disposable `telemetry.db` with a 30-day default TTL
+  plus hard quotas; product/audit truth remains permanent in `olympus.db`.
 - **Inter-agent comms** (§13): local-first — SDK handles parent↔child, filesystem
   reads sibling↔sibling, control plane mirrors for observability. Control-plane-
   routed only as multi-node fallback.
 - **Chat rooms** (§14): operator-created, observable, access-controlled channels
   between peer agents of differing access (capability bridges).
-- **Workflows** (§15): generic n8n-like node/edge/template engine, embedded +
-  checkpoint-based (Sayiir-MIT-or-built-equivalent over redb). Workflows orchestrate
-  card sessions, never run agent code. GitHub CI/PR loops are one instance.
+- **Workflows** (§15, ADR 0013): bounded declarative DAGs over the event log.
+  No loops, expression language, or user code run in the kernel; typed activity
+  providers perform effects after capability checks at each dispatch.
+- **Agent operations** (ADR 0019): MCP and the Rust `olympus` CLI are protocol
+  adapters over one typed Hall operation seam. Agent CLI traffic uses an
+  Envoy-owned, runtime-bound private UDS; no Hall token, endpoint override, raw
+  HTTP, SSH, or arbitrary argv is exposed. Workflow flags/help derive from the
+  pinned published schema; stdout/stderr and JSON/JSONL contracts are stable.
 - **Budget/subscriptions** (§16): subscription-aware routing; scheduler reserves
   budget + selects a subscription with remaining quota atomically.
 - **Artifacts** (§17): index of generated files, PRs, builds; content-addressed;
@@ -172,8 +191,8 @@ with a derived in-memory view.
 | Aspect | Current | Target |
 |---|---|---|
 | Product framing | "thin host-effect runtime" (ADR 0001) | fleet control plane (ADR 0002) |
-| Substrate | ADR 0001/0002-draft: Convex | **Rust-native single binary** (ADR 0003) |
-| Scaffold | ~613 LOC TS: apps/{web,runtime}, convex/{...}, packages/{...} | Rust control plane + envoy + AgentRuntime impls |
+| Substrate | ADR 0001/0002-draft: Convex | **Rust-native Hall + Envoy binaries** (ADR 0003/0008) |
+| Runtime | Rust Hall + Rust Envoy + React UI | migration-ready remote sessions, durable jobs, managed apps, and deployment activities (ADR 0017) |
 | Node model | single host implied | multi-node fleet, session-node affinity, desired-state |
 | Workdir | none | Olympus-owned `~/olympus/` hierarchy with cards |
 

@@ -18,6 +18,39 @@ pub fn router() -> Router<AppState> {
         .route("/api/nodes/{id}/agents/refresh", post(refresh_node_agents))
         .route("/api/nodes/{id}/drain", post(drain_node))
         .route("/api/nodes/{id}", delete(remove_node))
+        .route("/api/terminal/targets", get(terminal_targets))
+}
+
+/// GET /api/terminal/targets — nodes that can host an operator terminal (ADR
+/// 0021 cockpit picker). Always includes the Hall host first (the default
+/// target), then every online node advertising `TerminalHost`.
+pub(crate) async fn terminal_targets(State(state): State<AppState>) -> Response {
+    let mut targets = vec![json!({
+        "id": "hall",
+        "label": "Hall",
+        "kind": "hall",
+        "default": true,
+    })];
+    for node in state.nodes.list().await {
+        // Only online nodes that advertise the TerminalHost role are selectable.
+        let online = matches!(node.status, crate::node::NodeStatus::Online);
+        if !online {
+            continue;
+        }
+        if state
+            .nodes
+            .has_role(&node.node_id, olympus_proto::frames::NodeRole::TerminalHost)
+            .await
+        {
+            targets.push(json!({
+                "id": node.node_id,
+                "label": node.hostname,
+                "kind": "node",
+                "default": false,
+            }));
+        }
+    }
+    Json(json!({ "targets": targets })).into_response()
 }
 
 /// GET /api/nodes/:id/agents — the agents a specific node's envoy discovered.

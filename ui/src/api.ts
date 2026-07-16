@@ -483,6 +483,11 @@ type FrameListener = (frame: ServerFrame) => void;
 
 let ws: WebSocket | null = null;
 let connecting = false;
+// Whether a WS connection has ever been established this page-load. Used to
+// distinguish first connect (no frames could have been missed) from a
+// RE-connect (frames broadcast during the outage were dropped by the server's
+// fire-and-forget stream — consumers must refetch durable truth).
+let everConnected = false;
 const listeners = new Set<FrameListener>();
 
 function getWsUrl(): string {
@@ -519,6 +524,142 @@ export function getDisplayName(): string | null {
   }
 }
 
+// ── Operator cockpit terminals (ADR 0021) ──────────────────────────────
+
+export interface TerminalTarget {
+  id: string;
+  label: string;
+  kind: "hall" | "node";
+  default: boolean;
+}
+
+/** Nodes that can host an operator terminal — Hall first, then TerminalHost
+ *  nodes. Backs the cockpit new-terminal hover picker. */
+export async function fetchTerminalTargets(): Promise<TerminalTarget[]> {
+  const res = await fetch(`${BASE}/api/terminal/targets`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`terminal targets: ${res.status}`);
+  const body = (await res.json()) as { targets: TerminalTarget[] };
+  return body.targets ?? [];
+}
+
+/** Dedicated operator-terminal WebSocket URL (NOT the /ws firehose). */
+export function terminalWsUrl(terminalId: string, node: string, cols: number, rows: number): string {
+  const origin = BASE || window.location.origin;
+  const u = new URL(origin);
+  const proto = u.protocol === "https:" ? "wss" : "ws";
+  const params = new URLSearchParams();
+  params.set("node", node);
+  params.set("cols", String(cols));
+  params.set("rows", String(rows));
+  return `${proto}://${u.host}/ws/operator/terminals/${encodeURIComponent(terminalId)}?${params}`;
+}
+
+// ── Organization management (ADR 0022) ─────────────────────────────────
+
+export interface OrgMember {
+  userId: string;
+  username: string;
+  role: string;
+}
+export interface OrgRole {
+  name: string;
+  permissions: string; // JSON statement
+  builtin: boolean;
+}
+export interface StatementEntry {
+  resource: string;
+  actions: string[];
+}
+export interface OrgInvitation {
+  id: string;
+  emailOrUsername: string;
+  roleName: string;
+  status: string;
+  expiresAt: number;
+}
+
+export async function fetchMembers(): Promise<OrgMember[]> {
+  const r = await fetch(`${BASE}/api/members`);
+  if (!r.ok) throw new Error(`members ${r.status}`);
+  return (await r.json()).members ?? [];
+}
+
+export async function fetchRoles(): Promise<{ roles: OrgRole[]; statement: StatementEntry[] }> {
+  const r = await fetch(`${BASE}/api/roles`);
+  if (!r.ok) throw new Error(`roles ${r.status}`);
+  const b = await r.json();
+  return { roles: b.roles ?? [], statement: b.statement ?? [] };
+}
+
+export async function fetchInvitations(): Promise<OrgInvitation[]> {
+  const r = await fetch(`${BASE}/api/invitations`);
+  if (!r.ok) throw new Error(`invitations ${r.status}`);
+  return (await r.json()).invitations ?? [];
+}
+
+export async function inviteMember(
+  emailOrUsername: string,
+  roleName: string,
+): Promise<{ token: string; acceptPath: string }> {
+  const r = await fetch(`${BASE}/api/members/invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ emailOrUsername, roleName }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `invite ${r.status}`);
+  return r.json();
+}
+
+export async function setMemberRole(userId: string, roleName: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/members/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roleName }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `set role ${r.status}`);
+}
+
+export async function removeMember(userId: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  if (!r.ok) throw new Error((await r.text()) || `remove ${r.status}`);
+}
+
+export async function saveRole(
+  name: string,
+  permissions: Record<string, string[]>,
+  isNew: boolean,
+): Promise<void> {
+  const path = isNew ? `${BASE}/api/roles` : `${BASE}/api/roles/${encodeURIComponent(name)}`;
+  const r = await fetch(path, {
+    method: isNew ? "POST" : "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(isNew ? { name, permissions } : { permissions }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `save role ${r.status}`);
+}
+
+export async function deleteRole(name: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/roles/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!r.ok) throw new Error((await r.text()) || `delete role ${r.status}`);
+}
+
+export async function revokeInvitation(id: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/invitations/${encodeURIComponent(id)}/revoke`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error((await r.text()) || `revoke ${r.status}`);
+}
+
+export async function createUser(username: string, password: string): Promise<{ userId: string }> {
+  const r = await fetch(`${BASE}/api/auth/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `create user ${r.status}`);
+  return r.json();
+}
+
 export function connectWs(): void {
   if (ws || connecting) return;
 
@@ -531,6 +672,15 @@ export function connectWs(): void {
 
     ws.onopen = () => {
       connecting = false;
+      // A fresh socket after a drop means every frame broadcast during the
+      // outage is lost forever (the stream has no replay). Tell consumers so
+      // they can refetch durable truth (ChatPage resubscribes + invalidates
+      // its transcript; useLiveSync invalidates the session list).
+      if (everConnected) {
+        const frame: ServerFrame = { kind: "ws.reconnected" };
+        for (const fn of listeners) fn(frame);
+      }
+      everConnected = true;
     };
 
     ws.onmessage = (e) => {

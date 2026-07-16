@@ -22,6 +22,7 @@ tracing-subscriber.workspace = true
 hostname = "0.4"
 iroh = "1"
 rusqlite = { workspace = true, features = ["bundled"] }
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

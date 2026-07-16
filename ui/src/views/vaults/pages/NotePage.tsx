@@ -1,6 +1,6 @@
 // NotePage — an always-editable, full-pane Vault note surface.
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon } from "../../../components/Icon";
@@ -23,11 +23,16 @@ interface NotePageProps {
   onEditorModeChange?: (mode: "rich" | "source") => void;
 }
 
+export function shouldClearDirtyAfterSave(liveDraft: string, submittedSnapshot: string): boolean {
+  return liveDraft === submittedSnapshot;
+}
+
 export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEditorModeChange }: NotePageProps) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: note, isLoading, error } = useVaultNote(vaultId, notePath);
   const [draft, setDraft] = useState("");
+  const draftRef = useRef("");
   const [draftPath, setDraftPath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -36,6 +41,7 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
   useEffect(() => {
     if (!note) return;
     setDraft(note.markdown);
+    draftRef.current = note.markdown;
     setDraftPath(note.path);
     setDirty(false);
     onDirtyChange(false);
@@ -71,14 +77,16 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
   }
 
   const handleSave = async () => {
+    const submittedSnapshot = draftRef.current;
     setSaving(true);
     setSaveError(null);
     try {
-      await putVaultNote(vaultId, notePath, { markdown: draft });
+      await putVaultNote(vaultId, notePath, { markdown: submittedSnapshot });
       await qc.invalidateQueries({ queryKey: qk.vaultNote(vaultId, notePath) });
       await qc.invalidateQueries({ queryKey: qk.vaultNotes(vaultId) });
-      setDirty(false);
-      onDirtyChange(false);
+      const clearDirty = shouldClearDirtyAfterSave(draftRef.current, submittedSnapshot);
+      setDirty(!clearDirty);
+      onDirtyChange(!clearDirty);
     } catch (saveFailure) {
       setSaveError(saveFailure instanceof Error ? saveFailure.message : "Save failed");
     } finally {
@@ -98,6 +106,7 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
 
   const handleCancel = () => {
     setDraft(note.markdown);
+    draftRef.current = note.markdown;
     setDirty(false);
     onDirtyChange(false);
     setSaveError(null);
@@ -120,6 +129,7 @@ export function NotePage({ vaultId, notePath, onDirtyChange, editorMode, onEdito
           onEditorModeChange={onEditorModeChange}
           onChange={(markdown) => {
             const nextDirty = markdown !== note.markdown;
+            draftRef.current = markdown;
             setDraft(markdown);
             setDirty(nextDirty);
             onDirtyChange(nextDirty);

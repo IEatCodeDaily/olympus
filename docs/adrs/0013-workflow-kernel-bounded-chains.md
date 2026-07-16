@@ -65,12 +65,17 @@ activity chain executor — and its scope ceiling is enforced by doctrine.**
   StepCompleted / StepFailed / RunSignaled / RunCompleted / RunCancelled` —
   appended to the existing SQLite event log, projected like every other view.
   Hall restarts resume runs by projection, not replay.
-- Activity dispatch rides existing machinery: local activities are JOBS-1
-  jobs; remote activities are frames to role-tagged envoys with the existing
-  seq/ack/spool exactly-once delivery. Effects are at-least-once with
-  idempotency keys (`run_id:step_id:attempt`); activity providers declare
-  idempotency in their manifest, and non-idempotent activities get
-  `max_retries: 0` by default (fail closed).
+- Activity dispatch requires the hardened JOBS-2 substrate from ADR 0017, not
+  the original volatile JOBS-1 route. Hall atomically appends
+  `StepDispatchPlanned` plus durable job intent before sending a fenced
+  `(job_id, attempt_epoch)` dispatch. Restart recovery reconciles/attaches to
+  that exact attempt; absence of completion never means "dispatch another."
+  Durable output ingestion is exactly-once by sequence, while host effects are
+  explicitly at-least-once with idempotency keys
+  (`run_id:step_id:attempt_epoch`). Providers declare idempotency in their
+  manifest. A non-idempotent ambiguous effect enters `StepIndeterminate` and
+  pauses for operator reconciliation; `max_retries: 0` alone is not considered
+  fail-closed.
 - Runs pin their definition digest + provider bindings + package versions at
   start (ADR 0012 principle 10). Referenced package versions are retained
   until no live run depends on them.
@@ -96,13 +101,16 @@ dumb.
 
 ## Consequences
 
-- Workflow kernel is weeks, not quarters: definition schema + run projection
-  + scheduler loop + step dispatch over JOBS-1/frames — all patterns that
-  already exist in the codebase.
+- Workflow kernel remains bounded: definition schema + run projection +
+  scheduler loop + step dispatch over JOBS-2's durable service/frames. It does
+  not ship until JOBS-2 attempt, ACK, terminal-order, reconciliation, provider,
+  and sandbox gates are green.
 - WorkflowComplete/StepCompleted push into session streams as new AgentEvent
   variants (ADR 0011 §6) — additive to proto.
-- The MCP tools (`run_workflow`, `get_run`, `signal_run`) expose runs to
-  agents non-blocking, per ADR 0011 §3.
+- MCP tools (`run_workflow`, `get_run`, `signal_run`) and the schema-aware
+  `olympus workflow ...` CLI expose the same typed run operations through the
+  Hall operation seam (ADR 0019). MCP starts non-blocking; CLI waits by default
+  for Unix pipeline semantics and supports explicit `--detach`.
 - What we give up: long-lived code-shaped orchestrations with complex
   branching living INSIDE the engine. Accepted: those live in agents or
   activities by design.

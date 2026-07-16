@@ -51,9 +51,28 @@ pub fn command_for_agent(agent: Option<&str>) -> Vec<String> {
             agent.to_string(),
             "acp".into(),
         ],
-        AgentKind::ClaudeCode => vec!["claude".into()],
+        AgentKind::ClaudeCode => vec![claude_acp_binary()],
         AgentKind::Codex => vec!["bunx".into(), CODEX_ACP_PACKAGE.into()],
     }
+}
+
+fn claude_acp_binary() -> String {
+    if let Ok(path) = std::env::var("OLYMPUS_CLAUDE_ACP_BIN") {
+        return path;
+    }
+    let base = std::env::var("OLYMPUS_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| {
+            std::env::var("HOME").map(|home| std::path::PathBuf::from(home).join(".olympus"))
+        })
+        .unwrap_or_else(|_| std::path::PathBuf::from(".olympus"));
+    base.join("adapters")
+        .join("claude-agent-acp")
+        .join("node_modules")
+        .join(".bin")
+        .join("claude-agent-acp")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Owned child plus its stdio endpoints and bounded diagnostic tail.
@@ -62,6 +81,7 @@ pub struct ChildHandle {
     reader: Option<ChildReader>,
     writer: Option<ChildWriter>,
     stderr: Arc<Mutex<Vec<u8>>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ChildHandle {
@@ -75,6 +95,8 @@ impl ChildHandle {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .spawn()
             .with_context(|| format!("spawning {:?}", spec.command))?;
@@ -91,12 +113,13 @@ impl ChildHandle {
             .take()
             .context("child stderr pipe was not captured")?;
         let stderr = Arc::new(Mutex::new(Vec::with_capacity(STDERR_BUF_CAP)));
-        capture_stderr(stderr_pipe, Arc::clone(&stderr));
+        let stderr_task = capture_stderr(stderr_pipe, Arc::clone(&stderr));
         Ok(Self {
             child,
             reader: Some(Box::pin(reader)),
             writer: Some(Box::pin(writer)),
             stderr,
+            stderr_task: Some(stderr_task),
         })
     }
 
@@ -124,15 +147,32 @@ impl ChildHandle {
     /// Close stdio, terminate, and reap the process.
     pub async fn reap(&mut self) -> Result<()> {
         self.writer.take();
-        if self.child.try_wait()?.is_none() {
-            let _ = self.child.kill().await;
+        if self.child.try_wait()?.is_none()
+            && tokio::time::timeout(std::time::Duration::from_millis(500), self.child.wait())
+                .await
+                .is_err()
+        {
+            signal_process_group(&self.child, libc::SIGTERM);
+            if tokio::time::timeout(std::time::Duration::from_secs(1), self.child.wait())
+                .await
+                .is_err()
+            {
+                signal_process_group(&self.child, libc::SIGKILL);
+                let _ = self.child.wait().await;
+            }
         }
-        let _ = self.child.wait().await;
+        if let Some(task) = self.stderr_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
         Ok(())
     }
 }
 
-fn capture_stderr(mut stderr: tokio::process::ChildStderr, buffer: Arc<Mutex<Vec<u8>>>) {
+fn capture_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    buffer: Arc<Mutex<Vec<u8>>>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut chunk = [0_u8; 512];
         loop {
@@ -143,8 +183,23 @@ fn capture_stderr(mut stderr: tokio::process::ChildStderr, buffer: Arc<Mutex<Vec
             let mut guard = buffer.lock().await;
             push_bounded(&mut guard, &chunk[..read]);
         }
-    });
+    })
 }
+
+#[cfg(unix)]
+fn signal_process_group(child: &Child, signal: libc::c_int) {
+    let Some(pid) = child.id() else {
+        return;
+    };
+    // SAFETY: negative pid addresses the process group created specifically
+    // for this adapter. ESRCH is benign because the process already exited.
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), signal);
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_process_group(_child: &Child, _signal: libc::c_int) {}
 
 fn push_bounded(buffer: &mut Vec<u8>, bytes: &[u8]) {
     if bytes.len() >= STDERR_BUF_CAP {
@@ -178,7 +233,11 @@ mod tests {
 
     #[test]
     fn invocation_table_is_pinned_without_running_harnesses() {
-        assert_eq!(command_for_agent(Some("claude-code")), vec!["claude"]);
+        let claude = command_for_agent(Some("claude-code"));
+        assert_eq!(claude.len(), 1);
+        assert!(
+            claude[0].ends_with("/adapters/claude-agent-acp/node_modules/.bin/claude-agent-acp")
+        );
         assert_eq!(
             command_for_agent(Some("codex")),
             vec!["bunx", "@zed-industries/codex-acp@0.16.0"]

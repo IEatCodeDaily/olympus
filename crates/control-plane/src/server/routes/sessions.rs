@@ -1513,22 +1513,20 @@ pub(crate) async fn post_message(
                             finish_reason.as_deref().unwrap_or("end_turn")
                         ),
                     );
-                    let _ = deltas.send(ServerFrame::MessageDone {
-                        session_id: session_id.clone(),
-                        message_id: assistant_msg_id,
-                        finish_reason: finish_reason.clone(),
-                    });
                     let tool_calls_json = if tool_calls_acc.is_empty() {
                         None
                     } else {
                         Some(serde_json::Value::Array(tool_calls_acc.clone()).to_string())
                     };
-                    // Persist the final assistant message AND apply it to the
-                    // views so a subsequent GET /messages reflects it. Also
-                    // broadcast a message.appended frame so the streaming UI
-                    // replaces the in-flight bubble with the final message (the
-                    // streamingText is cleared on message.done, but the final
-                    // message only enters the list via this append frame).
+                    // ADR 0020 v2 §4.1 — DURABLE-FIRST completion. Persist the
+                    // final assistant message AND apply it to the views, and
+                    // broadcast `message.appended`, BEFORE signalling
+                    // `message.done`. The client invalidates + refetches on
+                    // `done` (queries.ts); if `done` fired first the refetch
+                    // raced the uncommitted row and the assistant message
+                    // vanished on navigation (postmortem 0030). Ordering here
+                    // now matches the Error branch below, which was already
+                    // durable-first.
                     if let Ok(event) = bridge.append_assistant_message(
                         &session_id,
                         &hermes_id_clone,
@@ -1560,6 +1558,13 @@ pub(crate) async fn post_message(
                             message: dto,
                         });
                     }
+                    // Only now that the assistant row is durable + in the views
+                    // + broadcast do we signal turn completion.
+                    let _ = deltas.send(ServerFrame::MessageDone {
+                        session_id: session_id.clone(),
+                        message_id: assistant_msg_id,
+                        finish_reason: finish_reason.clone(),
+                    });
                     break;
                 }
                 AgentEvent::Error(e) => {

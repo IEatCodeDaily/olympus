@@ -207,6 +207,20 @@ impl SessionView {
                     if *timestamp > row.last_activity {
                         row.last_activity = *timestamp;
                     }
+                    // ADR 0020 v2 §4.5 — count messages from the SAME event that
+                    // MessageView counts, so SessionDto.message_count (read from
+                    // SessionRow) and MessageView.counts agree. Managed sessions
+                    // (source acp/olympus) never emit SessionUpdated{message_count},
+                    // so without this they reported 0 despite durable rows
+                    // (postmortem 0030 / the divergence in views/message.rs).
+                    // Reconciliation of the sync double-count: SYNCED sessions
+                    // set an ABSOLUTE count via SessionUpdated{message_count}, so
+                    // we increment ONLY for managed rows — absolute-set on sync,
+                    // increment on managed append, never both for one message.
+                    let managed = row.source == "acp" || row.source == "olympus";
+                    if managed {
+                        row.message_count = row.message_count.saturating_add(1);
+                    }
                 }
             }
             Event::SessionProjectAttached {

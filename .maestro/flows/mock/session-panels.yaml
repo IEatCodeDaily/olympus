@@ -1,0 +1,34 @@
+url: ${MAESTRO_BASE_URL}/sessions
+name: Session chat panels — right overview + bottom panel tabs
+properties:
+  junitId: olympus-session-panels
+  junitClassname: ui.mock
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Untitled"
+    timeout: 15000
+- tapOn: "Untitled"
+- extendedWaitUntil:
+    visible: "Type a message…"
+    timeout: 10000
+
+# ── Right panel defaults to Overview: AGENT/MODEL/STARTED metadata ─────────
+- assertVisible: "AGENT"
+- assertVisible: "MODEL"
+- assertVisible: "STARTED"
+- takeScreenshot:
+    path: screenshots/session-right-overview
+
+# ── Bottom panel tabs are text labels — cycle through them ─────────────────
+- assertVisible: "Terminal"
+- assertVisible: ".*envoy PTY support.*"
+- tapOn: "Logs"
+- takeScreenshot:
+    path: screenshots/session-bottom-logs
+- tapOn: "Output"
+- takeScreenshot:
+    path: screenshots/session-bottom-output
+- tapOn: "Debug"
+- takeScreenshot:
+    path: screenshots/session-bottom-debug

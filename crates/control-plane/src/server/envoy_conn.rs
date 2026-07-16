@@ -57,11 +57,23 @@ pub struct EnvoyConnection {
     /// HashMap lookup + broadcast send/subscribe. This lets `events()` (a sync
     /// trait method) subscribe without an `.await`.
     event_channels: std::sync::Mutex<HashMap<String, broadcast::Sender<AgentEvent>>>,
+    /// Per-terminal output channels (ADR 0021 cockpit). Keyed by Hall-issued
+    /// `terminal_id`; the operator WebSocket subscribes, the read loop forwards
+    /// `TerminalOutput`/`TerminalExited` here. Separate from `event_channels`
+    /// so shell bytes never touch the session event plane.
+    terminal_channels: std::sync::Mutex<HashMap<String, broadcast::Sender<TerminalFrame>>>,
     /// Hermes session ids captured from `ensure_runtime` responses, keyed by
     /// Olympus session id. RemoteRuntime reads this to implement
     /// `hermes_session_id()`.
     hermes_ids: std::sync::Mutex<HashMap<String, String>>,
     log: Option<Arc<crate::log::Log>>,
+}
+
+/// A terminal output/exit event forwarded from an envoy to the operator WS.
+#[derive(Debug, Clone)]
+pub enum TerminalFrame {
+    Output { data_b64: String },
+    Exited { exit_code: Option<i32> },
 }
 
 impl EnvoyConnection {
@@ -71,6 +83,7 @@ impl EnvoyConnection {
             pending: Mutex::new(HashMap::new()),
             next_req_id: AtomicU64::new(1),
             event_channels: std::sync::Mutex::new(HashMap::new()),
+            terminal_channels: std::sync::Mutex::new(HashMap::new()),
             hermes_ids: std::sync::Mutex::new(HashMap::new()),
             log,
         })
@@ -97,7 +110,8 @@ impl EnvoyConnection {
             | HallFrame::Drain { .. }
             | HallFrame::Probe { .. }
             | HallFrame::DispatchJob { .. }
-            | HallFrame::CancelJob { .. } => {
+            | HallFrame::CancelJob { .. }
+            | HallFrame::TerminalOpen { .. } => {
                 let id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
                 let frame_with_id = inject_req_id(frame, id);
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -118,7 +132,11 @@ impl EnvoyConnection {
                 }
                 Ok(Some(rx))
             }
-            HallFrame::Ack { .. } | HallFrame::ResumeFrom { .. } => {
+            HallFrame::Ack { .. }
+            | HallFrame::ResumeFrom { .. }
+            | HallFrame::TerminalInput { .. }
+            | HallFrame::TerminalResize { .. }
+            | HallFrame::TerminalClose { .. } => {
                 let json = serde_json::to_string(&frame)
                     .map_err(|e| anyhow::anyhow!("serializing HallFrame: {e}"))?;
                 {
@@ -264,6 +282,35 @@ impl EnvoyConnection {
             .or_insert_with(|| broadcast::channel::<AgentEvent>(256).0)
             .clone();
         tx.subscribe()
+    }
+
+    /// Subscribe to a terminal's output stream (ADR 0021). The operator WS
+    /// calls this before sending `TerminalOpen`; the read loop forwards
+    /// `TerminalOutput`/`TerminalExited` via `forward_terminal`.
+    pub fn subscribe_terminal(&self, terminal_id: &str) -> broadcast::Receiver<TerminalFrame> {
+        let mut channels = self.terminal_channels.lock().unwrap();
+        let tx = channels
+            .entry(terminal_id.to_string())
+            .or_insert_with(|| broadcast::channel::<TerminalFrame>(1024).0)
+            .clone();
+        tx.subscribe()
+    }
+
+    /// Forward a terminal frame from the envoy read loop to any operator WS
+    /// subscribed to this terminal. No subscribers is fine (operator detached).
+    pub fn forward_terminal(&self, terminal_id: &str, frame: TerminalFrame) {
+        let tx = {
+            let channels = self.terminal_channels.lock().unwrap();
+            channels.get(terminal_id).cloned()
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send(frame);
+        }
+    }
+
+    /// Drop a terminal's channel once it has exited/closed.
+    pub fn drop_terminal(&self, terminal_id: &str) {
+        self.terminal_channels.lock().unwrap().remove(terminal_id);
     }
 
     /// Store the Hermes session id captured from an `ensure_runtime` response.

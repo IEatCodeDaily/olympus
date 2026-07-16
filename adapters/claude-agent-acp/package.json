@@ -1,0 +1,12 @@
+{
+  "name": "olympus-claude-agent-acp-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Locked Claude ACP adapter runtime provisioned by Olympus Envoy",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.58.1"
+  }
+}

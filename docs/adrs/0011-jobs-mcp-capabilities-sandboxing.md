@@ -26,6 +26,12 @@ ID. Allowlist enrollment stays fail-closed per ADR 0008.
 
 ### 3. The agent-facing interface is MCP, not a CLI
 
+> **Superseded by ADR 0019 (2026-07-13):** MCP remains a native agent adapter,
+> but eligible runtimes also receive the schema-aware `olympus` CLI over the
+> same Envoy-mediated operation gateway. CLI and MCP call one typed Hall
+> operation seam and capability decision; neither wraps operator HTTP or holds
+> the installation token.
+
 Hall exposes an MCP server endpoint. The setup adapter injects it into each
 session's `.mcp.json` (native path per ADR 0006 §9). Tools: `list_nodes`,
 `run_job`, `get_job`; later `run_workflow`. The human-facing `olympus` CLI is
