@@ -46,3 +46,5 @@ This was not a recurrence of the framing bug in postmortem 0024 or the missing p
 ## Verification
 
 `cargo test -p olympus-envoy` passes 76 of 77 tests. The unrelated pre-existing `job_table::tests::runs_argv_and_streams_output` test remains red on the DEV host because it receives an empty output string. The new retry, stderr, process-state, process-tree cleanup, and discovery tests pass individually.
+
+A DEV Envoy built from `3294446` was run against the live DEV Hall with a controlled newline-JSON ACP adapter override. Claude-kind session `20260716T033416Z-a3b5331c` completed `ensure_runtime`; Hall persisted `hermesId: dev-smoke-acp`. The real Hermes/Claude/Codex harnesses cannot be authenticated on this isolated DEV host: Hermes, Node/npm, and all three credential files are absent. The normal `olympus-dev-envoy` service was restored after the smoke test.
