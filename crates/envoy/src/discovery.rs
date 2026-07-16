@@ -329,21 +329,15 @@ fn discover_cli_harnesses_now() -> Vec<AgentInfo> {
         .unwrap_or_default()
 }
 
-/// Discover every agent available on THIS host — the local node's envoy view:
-/// the root Hermes profile (as `default`), each `~/.hermes/profiles/<name>/`,
-/// and any installed CLI harnesses (claude, codex). Probed fresh (no cache) so
-/// a manual refresh reflects installs/uninstalls. This is what the local node
-/// reports; a remote envoy runs the equivalent on its own host.
-pub fn discover_local_agents() -> Vec<AgentInfo> {
-    let Some(home) = hermes_home() else {
-        return discover_cli_harnesses_now();
-    };
+fn discover_hermes_profiles(home: &Path, path_env: &str) -> Vec<AgentInfo> {
+    if which_in_path("hermes", path_env).is_none() {
+        return Vec::new();
+    }
     let mut out = vec![agent_from_config(
         "default",
         &home.join("config.yaml"),
         true,
     )];
-
     if let Ok(entries) = std::fs::read_dir(home.join("profiles")) {
         let mut profiles: Vec<AgentInfo> = entries
             .filter_map(|e| e.ok())
@@ -351,16 +345,25 @@ pub fn discover_local_agents() -> Vec<AgentInfo> {
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
                 let cfg = e.path().join("config.yaml");
-                if cfg.exists() {
-                    Some(agent_from_config(&name, &cfg, false))
-                } else {
-                    None
-                }
+                cfg.exists().then(|| agent_from_config(&name, &cfg, false))
             })
             .collect();
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
         out.extend(profiles);
     }
+    out
+}
+
+/// Discover every agent available on THIS host — the local node's envoy view:
+/// the root Hermes profile (as `default`), each `~/.hermes/profiles/<name>/`,
+/// and any installed CLI harnesses (claude, codex). Probed fresh (no cache) so
+/// a manual refresh reflects installs/uninstalls. This is what the local node
+/// reports; a remote envoy runs the equivalent on its own host.
+pub fn discover_local_agents() -> Vec<AgentInfo> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut out = hermes_home()
+        .map(|home| discover_hermes_profiles(&home, &path))
+        .unwrap_or_default();
     out.extend(discover_cli_harnesses_now());
     out
 }
