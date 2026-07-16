@@ -2195,3 +2195,135 @@ async fn remove_node_revokes_allowlist() {
     assert!(state.nodes.get("remote-1").await.is_none());
     assert!(crate::enroll::allowlist_list(dir.path()).is_empty());
 }
+
+/// Install must not auto-grant or auto-activate; the returned package must
+/// have active=false and granted_capabilities empty.
+#[tokio::test]
+async fn install_does_not_grant_or_activate() {
+    let (state, _dir) = test_state();
+    let app = build_router(state.clone());
+    let body = serde_json::json!({
+        "manifest": package_manifest("test.lifecycle", None),
+        "authoritySessionId": "s1"
+    })
+    .to_string();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/packages")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let views = state.views.read().await;
+    let pkg = views.registry.package("test.lifecycle").expect("installed");
+    assert!(!pkg.active, "install must not activate");
+    assert!(
+        pkg.granted_capabilities.is_empty(),
+        "install must not grant"
+    );
+}
+
+/// Activation must be rejected when required capabilities have not been granted.
+#[tokio::test]
+async fn activate_blocked_when_capabilities_not_granted() {
+    let (state, _dir) = test_state();
+    // Manifest that declares a required capability (so grant is non-trivially required).
+    let manifest_toml = r#"
+[package]
+id = "test.cap-gate"
+name = "test.cap-gate"
+version = "1.0.0"
+publisher = "test"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+[capabilities]
+required = ["job.run"]
+"#;
+    let install_ev = Event::PackageInstalledV2 {
+        manifest: manifest_toml.to_string(),
+        digest: "d1".into(),
+        source: "test".into(),
+        installed_by: "operator".into(),
+        installed_at: 1.0,
+        bindings: std::collections::BTreeMap::new(),
+    };
+    state.log.append(&install_ev).unwrap();
+    state.views.write().await.apply(&install_ev);
+
+    // Do NOT grant. Attempt activation — must be rejected.
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/packages/test.cap-gate/activate")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"authoritySessionId":"s1"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "capabilities_not_granted");
+}
+
+/// Activation must be rejected when the package contains unsupported extension classes.
+#[tokio::test]
+async fn activate_blocked_for_unsupported_extension_class() {
+    let (state, _dir) = test_state();
+    // Manifest with storage_provider (unsupported in v1).
+    let manifest_toml = r#"
+[package]
+id = "test.unsupported"
+name = "test.unsupported"
+version = "1.0.0"
+publisher = "test"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+[[contributions.storage_provider]]
+id = "store.x"
+"#;
+    let install_ev = Event::PackageInstalledV2 {
+        manifest: manifest_toml.to_string(),
+        digest: "d2".into(),
+        source: "test".into(),
+        installed_by: "operator".into(),
+        installed_at: 1.0,
+        bindings: std::collections::BTreeMap::new(),
+    };
+    state.log.append(&install_ev).unwrap();
+    state.views.write().await.apply(&install_ev);
+
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/packages/test.unsupported/activate")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"authoritySessionId":"s1"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "unsupported_yet");
+}
