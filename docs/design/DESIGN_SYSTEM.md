@@ -542,6 +542,14 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-16 — Left sidebar: session-row layout repair + navitem rhythm alignment
+
+- **Root cause fixed, not symptom.** The `.srow-main` inner wrapper was dropped from `SessionSidebar.tsx` (row children now sit directly in `.srow`), but the CSS rule carrying the row's padding, gap and `align-items:center` still targeted the dead `.srow-main`. Rows rendered flush-left with no gutter — titles collided with the time/actions on the right and misaligned from the navitem labels. Folded the layout onto `.srow` itself and deleted the orphaned rule.
+- **Session-row ↔ navitem alignment.** `.srow` now uses the navitem rhythm: `padding-x = --nav-pad-x` and a `--space-4` icon→title gap, with `.srow-icon` widened to 14px to mirror the nav glyph. Session titles now line up vertically with Agents/Usage/History labels.
+- **Right gutter, no collision.** New `--srow-gutter` (38px) reserved for the right column; `.srow-time` gets `min-width:--srow-gutter; text-align:right` and the hover `.srow-actions` (pin/archive) sit in the same gutter (`right:--nav-pad-x`) with the time hidden on hover. Removed the `background:var(--hover)` patch that was masking the old overlap.
+- **Highlight-intensity ladder documented in the CSS:** hover (`--hover`) → open (`--silver-wash`) → focused/active (`--accent-wash-2`), intensity only — no edge bars, no badges. Verified obsidian + light against the live dev UI.
+- Tokens only; no raw hex/px introduced. No view business-logic changes.
+
 ### 2026-07-16 — Vault editor as a full-pane writing surface + quiet key hints
 
 - Retuned the Vault note surface around a centered ~72ch writing measure that owns the whole pane, with floating persistence chrome instead of a persistent card header and duplicated save/delete rows.
