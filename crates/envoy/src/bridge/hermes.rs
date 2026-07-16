@@ -351,8 +351,27 @@ mod tests {
 
     #[test]
     fn diagnostic_tail_surfaces_child_failure_context() {
-        assert_eq!(diagnostic_tail(""), "(no stderr captured)");
+        assert_eq!(
+            diagnostic_tail(""),
+            "stderr: <empty; process produced no stderr>"
+        );
         assert_eq!(diagnostic_tail("missing dep"), "stderr:\nmissing dep");
+    }
+
+    #[test]
+    fn startup_probe_distinguishes_exit_silence_and_cold_cache() {
+        assert_eq!(
+            classify_startup_probe(true, Some("child exited: status 1"), "boom"),
+            "process exited early (child exited: status 1)"
+        );
+        assert_eq!(
+            classify_startup_probe(true, None, ""),
+            "process alive but silent"
+        );
+        assert_eq!(
+            classify_startup_probe(true, None, "Resolving dependencies\nDownloading packages"),
+            "slow cold start (npm/bun dependency cache activity detected)"
+        );
     }
 
     #[cfg(unix)]
