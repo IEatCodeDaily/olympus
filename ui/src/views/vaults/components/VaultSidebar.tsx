@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Icon } from "../../../components/Icon";
 import type { NoteTreeEntry, VaultSummary } from "../../../types";
 import { findFolderIndex } from "../vaultWorkspace";
-import { VAULT_NOTE_DRAG_TYPE } from "../vaultDrag";
 
 interface EntryMenu {
   entry: NoteTreeEntry;
@@ -185,13 +184,18 @@ function FileTreeEntry({
   return (
     <div role="treeitem" aria-expanded={folder ? isExpanded : undefined}>
       <div
-        className={`vault-file-row ${!folder && activeNotePath === entry.path ? "on" : ""}`}
+        className={`vault-file-row ${!folder && activeNotePath === entry.path ? "on focused" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
+        data-open={!folder && activeNotePath === entry.path ? "true" : "false"}
+        data-focused={!folder && activeNotePath === entry.path ? "true" : "false"}
         draggable={!folder}
         onDragStart={(event) => {
           if (folder) return;
           event.dataTransfer.effectAllowed = "copy";
-          event.dataTransfer.setData(VAULT_NOTE_DRAG_TYPE, JSON.stringify({ path: entry.path, title: entry.title }));
+          event.dataTransfer.setData(
+            "application/x-olympus-vault-note",
+            JSON.stringify({ type: "vault-note", path: entry.path, title: entry.title }),
+          );
         }}
         onContextMenu={(event) => onOpenMenu(event, entry)}
       >
