@@ -1033,6 +1033,45 @@ mod tests {
         task.abort();
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn three_missed_heartbeat_acks_cause_a_fresh_hello() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = Arc::new(RuntimeTable::new(dir.path().join("runtime")));
+        let spool = Arc::new(EventSpool::open(dir.path().join("spool"), 1024).unwrap());
+        let jobs = Arc::new(JobTable::new());
+        let pty = Arc::new(PtyTable::new());
+        let (envoy, hall) = tokio::io::duplex(64 * 1024);
+        let (envoy_reader, envoy_writer) = tokio::io::split(envoy);
+        let (hall_reader, _hall_writer) = tokio::io::split(hall);
+        let task = tokio::spawn(run_connection(
+            envoy_reader,
+            envoy_writer,
+            table,
+            spool,
+            jobs,
+            pty,
+            "self-heal",
+            "host",
+            2,
+        ));
+        let mut lines = tokio::io::BufReader::new(hall_reader).lines();
+        let first: EnvoyFrame =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert!(matches!(first, EnvoyFrame::Hello { .. }));
+
+        for _ in 0..HEARTBEAT_REREGISTER_AFTER {
+            tokio::time::advance(HEARTBEAT_INTERVAL).await;
+            tokio::task::yield_now().await;
+            let frame: EnvoyFrame =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert!(matches!(frame, EnvoyFrame::Heartbeat { .. }));
+        }
+        let repaired: EnvoyFrame =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert!(matches!(repaired, EnvoyFrame::Hello { .. }));
+        task.abort();
+    }
+
     #[test]
     fn resume_replay_never_blocks_the_socket_read_loop() {
         assert!(!dispatch_inline(&HallFrame::ResumeFrom {
