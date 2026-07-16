@@ -8,6 +8,7 @@ interface EntryMenu {
   entry: NoteTreeEntry;
   x: number;
   y: number;
+  maxHeight: number;
 }
 
 export function VaultSidebar({
@@ -71,7 +72,7 @@ export function VaultSidebar({
   const openMenu = (event: MouseEvent, entry: NoteTreeEntry) => {
     event.preventDefault();
     event.stopPropagation();
-    setEntryMenu({ entry, x: event.clientX, y: event.clientY });
+    setEntryMenu({ entry, x: event.clientX, y: event.clientY, maxHeight: Math.max(48, window.innerHeight - event.clientY - 12) });
   };
 
   return (
@@ -139,7 +140,7 @@ export function VaultSidebar({
       </div>
 
       {entryMenu && (
-        <div className="menu vault-context-menu" role="menu" style={{ left: entryMenu.x, top: entryMenu.y }} onClick={(event) => event.stopPropagation()}>
+        <div className="menu vault-context-menu" role="menu" aria-label="File actions" style={{ left: entryMenu.x, top: entryMenu.y, bottom: "auto", maxHeight: entryMenu.maxHeight, overflowY: "auto" }} onClick={(event) => event.stopPropagation()}>
           {entryMenu.entry.kind === "note" ? (
             <button type="button" className="mi" role="menuitem" onClick={() => { onOpenNote(entryMenu.entry.path, entryMenu.entry.title); setEntryMenu(null); }}><Icon name="file" size={13} />Open</button>
           ) : (

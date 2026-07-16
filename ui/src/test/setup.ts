@@ -36,6 +36,10 @@ Object.defineProperty(window, "IntersectionObserver", {
 Element.prototype.scrollTo = () => {};
 Document.prototype.elementFromPoint = () => null;
 
+// Milkdown calls bare browser listener globals from delayed cleanup timers.
+globalThis.addEventListener ??= window.addEventListener.bind(window);
+globalThis.removeEventListener ??= window.removeEventListener.bind(window);
+
 // CodeMirror measures DOM ranges; jsdom does not implement these geometry APIs.
 Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect = () => ({
