@@ -14,7 +14,7 @@ import { NotePage } from "../pages/NotePage";
 import { VaultTablePage } from "../pages/VaultTablePage";
 import { noteTab, type WorkspaceTab } from "../vaultWorkspace";
 
-type DockLayout = unknown;
+type DockLayout = ReturnType<DockviewApi["toJSON"]>;
 
 interface VaultPanelParams {
   vaultId: string;

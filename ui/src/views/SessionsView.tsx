@@ -59,7 +59,7 @@ import { AgentsPage } from "./sessions/pages/AgentsPage";
 import { UsagePage } from "./sessions/pages/UsagePage";
 import { HistoryPage } from "./sessions/pages/HistoryPage";
 
-type DockLayout = unknown;
+type DockLayout = ReturnType<DockviewApi["toJSON"]>;
 
 interface SessionPanelParams {
   sessionId: string;
