@@ -379,6 +379,7 @@ function NodeDetailPage({ nodeId }: { nodeId: string }) {
   const { data: nodeData } = useNodes();
   const queryClient = useQueryClient();
   const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
 
   const node = nodeData?.nodes.find((n) => n.nodeId === nodeId) ?? null;
@@ -420,11 +421,14 @@ function NodeDetailPage({ nodeId }: { nodeId: string }) {
 
   const handleDetect = async () => {
     setDetecting(true);
+    setDetectError(null);
     try {
       await refreshNodeAgents(node.nodeId);
       await invalidate();
-    } catch {
-      // remote node without envoy returns 501
+    } catch (e) {
+      // Surface the honest error (e.g. node's envoy disconnected, probe
+      // timeout) instead of silently doing nothing.
+      setDetectError(e instanceof Error ? e.message : String(e));
     } finally {
       setDetecting(false);
     }
@@ -517,110 +521,134 @@ function NodeDetailPage({ nodeId }: { nodeId: string }) {
         </div>
       </div>
       <div className="gv-body">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-            gap: 12,
-            marginBottom: 24,
-          }}
-        >
-          <div className="gcard">
-            <div className="kv" style={{ marginBottom: 6 }}>
-              <span className="k">STATUS</span>
-              <span className="v">
-                <span className={statusTagClass(node.status)}>{node.status}</span>
-              </span>
-            </div>
-            <div className="kv" style={{ marginBottom: 6 }}>
-              <span className="k">TRANSPORT</span>
-              <span className="v">
-                <span className="gtag">{transportLabel(node)}</span>
-              </span>
-            </div>
-            <div className="kv">
-              <span className="k">HOST</span>
-              <span className="v">{node.hostname}</span>
-            </div>
-          </div>
-          <div className="gcard">
-            <div className="kv" style={{ marginBottom: 6 }}>
-              <span className="k">SLOTS</span>
-              <span className="v">
-                {node.slotsUsed} / {node.slotsTotal}
-              </span>
-            </div>
-            <div className="gbar" style={{ marginBottom: 8 }}>
-              <i style={{ width: `${pct}%` }} />
-            </div>
-            <div className="kv" style={{ marginBottom: 6 }}>
-              <span className="k">HEARTBEAT</span>
-              <span className="v">{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
-            </div>
-            <div className="kv">
-              <span className="k">VERSION</span>
-              <span className="v" style={{ fontSize: 11 }}>
-                {node.version}
-              </span>
-            </div>
-          </div>
-          {node.irohNodeId && (
-            <div className="gcard">
-              <div className="kv">
-                <span className="k">IROH ID</span>
-                <span
-                  className="v mono"
-                  style={{ fontSize: 10, wordBreak: "break-all" }}
-                >
-                  {node.irohNodeId}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="gk" style={{ marginBottom: 8 }}>
-          Agents on node ({agents.length})
-        </div>
-        {agents.length > 0 ? (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              marginBottom: 24,
-            }}
-          >
-            {agents.map((a) => (
-              <AgentRow key={a.id} agent={a} />
-            ))}
-          </div>
-        ) : (
-          <div
-            className="mono"
-            style={{ fontSize: 11, color: "var(--faint)", marginBottom: 24 }}
-          >
-            no agents detected — click "Detect agents" to re-scan
+        {detectError && (
+          <div className="fleet-detect-err" role="alert">
+            <Icon name="alert" size={13} />
+            <span>Detect failed: {detectError}</span>
           </div>
         )}
 
-        <NodeSessions nodeId={node.nodeId} />
+        {/* Node header — status / transport / slots / heartbeat at a glance. */}
+        <section className="fleet-section">
+          <div className="fleet-node-header">
+            <div className="gcard">
+              <div className="kv">
+                <span className="k">STATUS</span>
+                <span className="v">
+                  <span className={statusTagClass(node.status)}>{node.status}</span>
+                </span>
+              </div>
+              <div className="kv">
+                <span className="k">TRANSPORT</span>
+                <span className="v">
+                  <span className="gtag">{transportLabel(node)}</span>
+                </span>
+              </div>
+              <div className="kv">
+                <span className="k">HOST</span>
+                <span className="v">{node.hostname}</span>
+              </div>
+            </div>
+            <div className="gcard">
+              <div className="kv">
+                <span className="k">SLOTS</span>
+                <span className="v">
+                  {node.slotsUsed} / {node.slotsTotal}
+                </span>
+              </div>
+              <div className="gbar">
+                <i style={{ width: `${pct}%` }} />
+              </div>
+              <div className="kv">
+                <span className="k">HEARTBEAT</span>
+                <span className="v">{heartbeatLabel(node.lastHeartbeatAgoSecs)}</span>
+              </div>
+              <div className="kv">
+                <span className="k">VERSION</span>
+                <span className="v fleet-version">{node.version}</span>
+              </div>
+            </div>
+            {node.irohNodeId && (
+              <div className="gcard">
+                <div className="kv">
+                  <span className="k">IROH ID</span>
+                </div>
+                <span className="v mono fleet-iroh-id">{node.irohNodeId}</span>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Agents table — the harnesses this node's envoy discovered. */}
+        <section className="fleet-section">
+          <div className="fleet-section-head">
+            <span className="gk">Agents</span>
+            <span className="fleet-count">{agents.length}</span>
+          </div>
+          {agents.length > 0 ? (
+            <div className="fleet-table-wrap">
+              <table className="hist-table fleet-agents">
+                <thead>
+                  <tr>
+                    <th className="col-kind">Kind</th>
+                    <th>ID</th>
+                    <th>Provider / Model</th>
+                    <th className="col-avail">Availability</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agents.map((a) => (
+                    <AgentRow key={a.id} agent={a} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="fleet-empty">
+              No agents detected — click “Detect agents” to re-scan.
+            </div>
+          )}
+        </section>
+
+        {/* Sessions pinned to this node. */}
+        <section className="fleet-section">
+          <NodeSessions nodeId={node.nodeId} />
+        </section>
       </div>
     </div>
   );
 }
 
+/** Human-readable availability for an agent's `ready` state. */
+function availability(agent: AgentInfo): { label: string; tone: string } {
+  if (agent.ready === undefined) return { label: "ready", tone: "ok" };
+  if (agent.ready) return { label: "ready", tone: "ok" };
+  return { label: "needs login", tone: "warn" };
+}
+
 function AgentRow({ agent }: { agent: AgentInfo }) {
+  const avail = availability(agent);
+  const providerModel = [agent.provider, agent.model].filter(Boolean).join(" · ") || "—";
   return (
-    <div
-      className="agrow"
-      title={`${agent.provider ?? agent.kind} · ${agent.model ?? "—"}`}
-    >
-      <BrandIcon name={agentBrand(agent.kind, agent.provider)} size={15} />
-      <span className="nm">{agent.id}</span>
-      <span className="sp" />
-      <span className="gk">{agent.model ?? "—"}</span>
-    </div>
+    <tr>
+      <td className="col-kind">
+        <BrandIcon
+          name={agentBrand(agent.kind, agent.provider)}
+          size={15}
+          title={agent.kind}
+        />
+      </td>
+      <td className="mono">
+        {agent.id}
+        {agent.isDefault && <span className="fleet-default-tag">default</span>}
+      </td>
+      <td className="mono fleet-provider" title={agent.version ?? undefined}>
+        {providerModel}
+      </td>
+      <td className="col-avail">
+        <span className={`gtag ${avail.tone}`}>{avail.label}</span>
+      </td>
+    </tr>
   );
 }
 

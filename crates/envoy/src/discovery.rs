@@ -364,13 +364,21 @@ fn discover_cli_harnesses(path_env: &str, claude_adapter: &Path) -> Vec<AgentInf
             ready: probe_cli_auth(CLAUDE_CODE_AGENT_ID),
         });
     }
-    if let Some(codex) = which_in_path("codex", path_env) {
+    // Codex is not a bare `codex` binary — the runtime spawns it via the locked
+    // adapter (`command_for_agent(codex)` → `bunx @zed-industries/codex-acp@…`).
+    // Detection must gate on the SAME thing the spawn needs: the launcher
+    // (bunx) resolvable on PATH. Gating on a bare `codex` binary meant a
+    // perfectly drivable codex never showed in the fleet (it would run fine if
+    // selected, but "Detect agents" never surfaced it). See postmortem 0039.
+    if let Some(launcher) = codex_launcher_on_path(path_env) {
         out.push(AgentInfo {
             id: CODEX_AGENT_ID.to_string(),
             provider: Some("openai-codex".to_string()),
             model: CODEX_MODELS.first().map(|s| s.to_string()),
             models: catalog_entries("openai-codex", CODEX_MODELS),
-            version: command_version_with_timeout(&codex, Duration::from_secs(2)),
+            // The adapter is bunx-resolved at spawn (possibly over the network);
+            // don't run it here just to scrape a version — report the launcher.
+            version: Some(format!("codex-acp via {}", launcher.display())),
             kind: CODEX_AGENT_ID.to_string(),
             is_default: false,
             ready: probe_cli_auth(CODEX_AGENT_ID),
@@ -390,6 +398,23 @@ fn catalog_entries(provider: &str, catalog: &[&str]) -> Vec<ModelEntry> {
             default: if i == 0 { Some(true) } else { None },
         })
         .collect()
+}
+
+/// The launcher `command_for_agent(codex)` needs, resolved on `path_env`.
+/// Derives the launcher from the spawn table (not a hardcoded string) so
+/// detection tracks the runtime: change how codex is spawned and detection
+/// follows. Returns `None` when the launcher isn't installed (codex undrivable).
+fn codex_launcher_on_path(path_env: &str) -> Option<PathBuf> {
+    let cmd = command_for_agent(Some(CODEX_AGENT_ID));
+    let launcher = cmd.first()?;
+    // An absolute/relative path launcher (unusual) is checked directly;
+    // a bare name (the `bunx` case) is resolved against PATH.
+    if launcher.contains('/') {
+        let p = PathBuf::from(launcher);
+        is_executable(&p).then_some(p)
+    } else {
+        which_in_path(launcher, path_env)
+    }
 }
 
 /// Probe the local host's PATH for CLI harnesses (claude, codex), fresh each
@@ -687,7 +712,9 @@ mod tests {
             "claude-agent-acp",
             "#!/bin/sh\necho '2.1.195 (Claude Code)'\n",
         );
-        write_stub(tmp.path(), "codex", "#!/bin/sh\necho 'codex-cli 0.133.0'\n");
+        // Codex is spawned via the bunx-resolved adapter, not a bare `codex`
+        // binary — detection gates on the launcher (bunx) being on PATH.
+        write_stub(tmp.path(), "bunx", "#!/bin/sh\nexit 0\n");
 
         let agents = discover_cli_harnesses(
             tmp.path().to_str().unwrap(),
@@ -709,9 +736,26 @@ mod tests {
                 && a.provider.as_deref() == Some("openai-codex")
                 && a.kind == "codex"
                 && a.model.as_deref() == CODEX_MODELS.first().copied()
-                && a.version.as_deref() == Some("codex-cli 0.133.0")
+                // version reports the resolved launcher, not a scraped CLI
+                // version (the adapter is bunx-fetched at spawn time).
+                && a.version.as_deref().is_some_and(|v| v.starts_with("codex-acp via "))
                 && !a.is_default
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_not_detected_without_its_launcher() {
+        // No `bunx` on PATH → codex is undrivable → must not appear, even
+        // though a stray `codex` binary exists (the old, wrong gate).
+        let tmp = tempfile::tempdir().unwrap();
+        write_stub(tmp.path(), "codex", "#!/bin/sh\necho 'codex-cli 0.133.0'\n");
+        let adapter = tmp.path().join("claude-agent-acp"); // absent
+        let agents = discover_cli_harnesses(tmp.path().to_str().unwrap(), &adapter);
+        assert!(
+            !agents.iter().any(|a| a.id == "codex"),
+            "a bare codex binary must NOT satisfy detection; the bunx launcher must"
+        );
     }
 
     #[cfg(unix)]

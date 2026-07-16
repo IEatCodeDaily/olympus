@@ -67,23 +67,53 @@ pub(crate) async fn node_agents(State(state): State<AppState>, Path(id): Path<St
 
 /// POST /api/nodes/:id/agents/refresh — re-detect agents on a node (manual, as
 /// requested: refreshing to detect newly-installed agents is explicit, not
-/// automatic). For the local node the control plane re-runs discovery in-process;
-/// a remote node would forward a detect request to its envoy (TODO when the
-/// standalone envoy binary lands).
+/// automatic).
+///
+/// - `local` (the in-process control-plane host, no envoy connection): re-run
+///   discovery in-process.
+/// - any node with a connected envoy: send a `Probe` frame over its existing
+///   connection and store what it reports. This is what makes "Detect agents"
+///   work for the real fleet nodes (the dev node registers as its hostname,
+///   not `local`) — the older blanket 501 predated the Probe frame.
+/// - a known-but-disconnected node: honest 503, not a silent success.
 pub(crate) async fn refresh_node_agents(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    if id != "local" {
+    // The in-process host has no envoy connection to itself.
+    if id == "local" {
+        let fresh = agents::discover_local_agents();
+        return match state.nodes.set_agents(&id, fresh).await {
+            Ok(agents) => Json(json!({ "agents": agents })).into_response(),
+            Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+        };
+    }
+
+    // Remote node: ask its envoy to re-probe over the live connection.
+    let Some(conn) = state.envoy_conns.get(&id).await else {
+        // Distinguish "unknown node" from "known but its envoy isn't connected".
+        let status = if state.nodes.get(&id).await.is_some() {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::NOT_FOUND
+        };
         return (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": "remote agent refresh requires the node's envoy; only 'local' is supported in-process for now"
-            })),
+            status,
+            Json(json!({ "error": format!("node '{id}' has no connected envoy to probe") })),
         )
             .into_response();
-    }
-    let fresh = agents::discover_local_agents();
+    };
+
+    let fresh = match probe_agents(&conn).await {
+        Ok(agents) => agents,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("probe failed: {e}") })),
+            )
+                .into_response()
+        }
+    };
     match state.nodes.set_agents(&id, fresh).await {
         Ok(agents) => Json(json!({ "agents": agents })).into_response(),
         Err(e) => (
@@ -92,6 +122,31 @@ pub(crate) async fn refresh_node_agents(
         )
             .into_response(),
     }
+}
+
+/// Send a `Probe` frame to an envoy and parse its reported agents. Bounded by a
+/// timeout so a wedged envoy can't hang the request.
+async fn probe_agents(
+    conn: &crate::server::envoy_conn::EnvoyConnection,
+) -> Result<Vec<agents::AgentInfo>, String> {
+    let rx = conn
+        .send_request(olympus_proto::frames::HallFrame::Probe { req_id: 0 })
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("probe is a request frame but no response slot was created")?;
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+        .await
+        .map_err(|_| "envoy did not respond within 5s".to_string())?
+        .map_err(|_| "envoy disconnected before responding".to_string())?;
+    if !resp.ok {
+        return Err(resp.error.unwrap_or_else(|| "envoy reported failure".into()));
+    }
+    let result = resp.result.ok_or("probe response had no result payload")?;
+    let agents = result
+        .get("agents")
+        .cloned()
+        .ok_or("probe response missing 'agents'")?;
+    serde_json::from_value(agents).map_err(|e| format!("decoding agents: {e}"))
 }
 
 pub(crate) async fn list_nodes(State(state): State<AppState>) -> impl IntoResponse {
