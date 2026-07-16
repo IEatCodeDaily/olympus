@@ -41,6 +41,7 @@ vi.mock("../../../hooks/queries", () => ({
     },
   }),
   useUpdateSession: () => ({ mutate: vi.fn() }),
+  useAgents: () => ({ data: { agents: [] }, isLoading: false }),
 }));
 
 vi.mock("../../../api", () => ({ createSession: vi.fn() }));
