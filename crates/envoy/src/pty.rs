@@ -350,11 +350,8 @@ impl PtyManager {
         let mut shells = self.shells.lock().await;
         if let Some(shell) = shells.remove(terminal_id) {
             shell.reader_task.abort();
-            // Close the master fd so the tmux client process exits cleanly.
-            // SAFETY: fd is valid and owned.
-            unsafe {
-                libc::close(shell.master_fd);
-            }
+            // PtyShell drops here: writer File closes master_fd, no manual close
+            // needed (double-close → IO safety violation).
             tracing::debug!(terminal = %terminal_id, "operator PTY detached");
         }
         Ok(())
@@ -381,9 +378,7 @@ impl PtyManager {
                 libc::kill(-shell.child_pid, libc::SIGHUP);
                 libc::kill(-shell.child_pid, libc::SIGKILL);
             }
-            unsafe {
-                libc::close(shell.master_fd);
-            }
+            // PtyShell drops here: writer File closes master_fd.
             tracing::info!(terminal = %terminal_id, "operator PTY closed");
         }
         Ok(())
@@ -451,7 +446,6 @@ fn spawn_tmux_attach(
 
         let tmux_c = std::ffi::CString::new("tmux").unwrap();
         let session_c = std::ffi::CString::new(session).unwrap();
-        let shell_c = std::ffi::CString::new(shell).unwrap();
 
         if session_exists {
             // Attach to existing session.
