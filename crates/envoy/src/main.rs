@@ -937,6 +937,54 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn reregister_frame_causes_a_second_hello_on_same_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = Arc::new(RuntimeTable::with_factory(Arc::new(|_| {
+            MockAgentRuntime::new_arc() as Arc<dyn AgentRuntime>
+        })));
+        let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
+        let jobs = Arc::new(JobTable::new(dir.path().join("jobs")).unwrap());
+        let (envoy, hall) = tokio::io::duplex(16 * 1024);
+        let (envoy_reader, envoy_writer) = tokio::io::split(envoy);
+        let (hall_reader, mut hall_writer) = tokio::io::split(hall);
+        let task = tokio::spawn(run_connection(
+            envoy_reader,
+            envoy_writer,
+            table,
+            "node",
+            "host",
+            vec![],
+            spool,
+            jobs,
+            vec![],
+        ));
+        let mut lines = tokio::io::BufReader::new(hall_reader).lines();
+        assert!(matches!(
+            serde_json::from_str::<EnvoyFrame>(&lines.next_line().await.unwrap().unwrap()).unwrap(),
+            EnvoyFrame::Hello { .. }
+        ));
+        hall_writer
+            .write_all(
+                format!("{}\n", serde_json::to_string(&HallFrame::ReRegister).unwrap()).as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<EnvoyFrame>(
+                &tokio::time::timeout(std::time::Duration::from_secs(1), lines.next_line())
+                    .await
+                    .expect("envoy must re-Hello immediately")
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            EnvoyFrame::Hello { .. }
+        ));
+        drop(hall_writer);
+        task.await.unwrap().unwrap();
+    }
+
     #[test]
     fn resume_replay_never_blocks_the_socket_read_loop() {
         assert!(!dispatch_inline(&HallFrame::ResumeFrom {

@@ -967,7 +967,146 @@ pub async fn run_iroh_accept_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use olympus_proto::version::{BuildVersion, PROTOCOL_VERSION};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     use tokio::time::sleep;
+
+    fn hello(node_id: &str) -> olympus_proto::frames::EnvoyFrame {
+        olympus_proto::frames::EnvoyFrame::Hello {
+            node_id: node_id.into(),
+            hostname: "host".into(),
+            slots_total: 4,
+            protocol_version: PROTOCOL_VERSION,
+            version: BuildVersion::for_binary("test"),
+            agents: None,
+            runtimes: vec![],
+            roles: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_connection_death_does_not_deregister_newer_epoch() {
+        let reg = NodeRegistry::new();
+        assert!(reg
+            .register_connection("node", "old", 4, "v1", NodeTransport::Iroh, None, vec![], 1)
+            .await);
+        assert!(reg
+            .register_connection("node", "new", 4, "v2", NodeTransport::Iroh, None, vec![], 2)
+            .await);
+
+        assert!(!reg.deregister_connection("node", 1).await);
+        let node = reg.get("node").await.expect("new registration survives");
+        assert_eq!(node.hostname, "new");
+        assert_eq!(node.version, "v2");
+    }
+
+    #[tokio::test]
+    async fn newer_hello_supersedes_and_closes_old_connection() {
+        let registry = NodeRegistry::new();
+        let conns = crate::server::envoy_conn::EnvoyConnections::new();
+        let (old_hall, mut old_envoy) = tokio::io::duplex(4096);
+        let (old_reader, old_writer) = tokio::io::split(old_hall);
+        let old_task = tokio::spawn(handle_envoy_conn(
+            old_reader,
+            old_writer,
+            registry.clone(),
+            conns.clone(),
+            NodeTransport::Iroh,
+            Some("key".into()),
+        ));
+        old_envoy
+            .write_all(format!("{}\n", serde_json::to_string(&hello("node")).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        while registry.get("node").await.is_none() {
+            tokio::task::yield_now().await;
+        }
+
+        let (new_hall, mut new_envoy) = tokio::io::duplex(4096);
+        let (new_reader, new_writer) = tokio::io::split(new_hall);
+        let new_task = tokio::spawn(handle_envoy_conn(
+            new_reader,
+            new_writer,
+            registry.clone(),
+            conns.clone(),
+            NodeTransport::Iroh,
+            Some("key".into()),
+        ));
+        new_envoy
+            .write_all(format!("{}\n", serde_json::to_string(&hello("node")).unwrap()).as_bytes())
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), old_task)
+            .await
+            .expect("superseded connection must be actively closed")
+            .unwrap();
+        assert!(registry.get("node").await.is_some());
+        drop(new_envoy);
+        new_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unknown_node_heartbeat_requests_reregistration() {
+        let registry = NodeRegistry::new();
+        let conns = crate::server::envoy_conn::EnvoyConnections::new();
+        let (hall, envoy) = tokio::io::duplex(4096);
+        let (hall_reader, hall_writer) = tokio::io::split(hall);
+        let (envoy_reader, mut envoy_writer) = tokio::io::split(envoy);
+        let task = tokio::spawn(handle_envoy_conn(
+            hall_reader,
+            hall_writer,
+            registry.clone(),
+            conns,
+            NodeTransport::Iroh,
+            Some("key".into()),
+        ));
+        envoy_writer
+            .write_all(format!("{}\n", serde_json::to_string(&hello("node")).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        while registry.get("node").await.is_none() {
+            tokio::task::yield_now().await;
+        }
+        registry.deregister("node").await;
+        let heartbeat = olympus_proto::frames::EnvoyFrame::Heartbeat {
+            node_id: "node".into(),
+            slots_used: 0,
+        };
+        envoy_writer
+            .write_all(format!("{}\n", serde_json::to_string(&heartbeat).unwrap()).as_bytes())
+            .await
+            .unwrap();
+
+        let mut lines = tokio::io::BufReader::new(envoy_reader).lines();
+        let line = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
+            .await
+            .expect("Hall must repair unknown heartbeat")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<olympus_proto::frames::HallFrame>(&line).unwrap(),
+            olympus_proto::frames::HallFrame::ReRegister
+        ));
+        drop(envoy_writer);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enrolled_offline_node_survives_registry_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = NodeRegistry::with_inventory(dir.path()).unwrap();
+        registry
+            .enroll("node", "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320")
+            .await
+            .unwrap();
+        drop(registry);
+
+        let restarted = NodeRegistry::with_inventory(dir.path()).unwrap();
+        let node = restarted.get("node").await.expect("durable enrolled node");
+        assert_eq!(node.status, NodeStatus::Offline);
+        assert_eq!(node.version, "");
+    }
 
     #[tokio::test]
     async fn register_and_list() {

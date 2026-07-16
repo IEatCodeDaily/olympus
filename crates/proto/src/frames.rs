@@ -473,6 +473,8 @@ mod tests {
                 session_id: "s-1".into(),
                 seq: 7,
             },
+            HallFrame::HeartbeatAck,
+            HallFrame::ReRegister,
         ];
         for f in &frames {
             round_trip(f);
