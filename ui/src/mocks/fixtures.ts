@@ -52,6 +52,12 @@ export const NODES: NodeInfo[] = [
     local: true,
     lastHeartbeatAgoSecs: 1,
     transport: "local",
+    agents: [
+      { id: "default", provider: "anthropic", model: "claude-opus-4-8", kind: "hermes", isDefault: true },
+      { id: "tester", provider: "anthropic", model: "claude-sonnet-4-6", kind: "hermes", isDefault: false },
+      { id: "claude-code", provider: "claude-code", model: "claude-opus-4-8", kind: "claude-code", version: "2.1.195 (Claude Code)", ready: true, isDefault: false },
+      { id: "codex", provider: "openai-codex", model: "gpt-5.5", kind: "codex", version: "codex-acp via /home/rpw/.local/bin/bunx", ready: false, isDefault: false },
+    ],
   },
   {
     nodeId: "gpu-box",
@@ -345,8 +351,10 @@ export const AGENTS_LIST: AgentInfo[] = [
   { id: "coding-agent", provider: "openai-codex", model: "gpt-5.4", kind: "hermes", isDefault: false },
   { id: "gpt55", provider: "openai-codex", model: "gpt-5.5", kind: "hermes", isDefault: false },
   { id: "tester", provider: "anthropic", model: "claude-sonnet-4-6", kind: "hermes", isDefault: false },
-  { id: "claude-code", provider: "claude-code", model: "2.1.195 (Claude Code)", kind: "claude-code", isDefault: false },
-  { id: "codex", provider: "openai-codex", model: "codex-cli 0.133.0", kind: "codex", isDefault: false },
+  // CLI harnesses: model = curated catalog slug; the CLI/adapter version goes
+  // in `version`, not `model` (it used to leak into the model picker).
+  { id: "claude-code", provider: "claude-code", model: "claude-opus-4-8", kind: "claude-code", version: "2.1.195 (Claude Code)", ready: true, isDefault: false },
+  { id: "codex", provider: "openai-codex", model: "gpt-5.5", kind: "codex", version: "codex-acp via /home/rpw/.local/bin/bunx", ready: false, isDefault: false },
 ];
 
 export const USAGE_BY_RANGE: Record<UsageRange, UsageResponse> = {
