@@ -582,9 +582,6 @@ mod tests {
                 msgs: std::sync::Mutex::new(Vec::new()),
             })
         }
-        fn snapshot(&self) -> Vec<(String, String)> {
-            self.msgs.lock().unwrap().clone()
-        }
     }
 
     impl TerminalSink for RecordingSink {
