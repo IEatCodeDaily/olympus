@@ -194,15 +194,21 @@ impl HermesAgentRuntime {
     }
 
     async fn failure_report(&self, error: anyhow::Error, timed_out: bool) -> String {
-        let tail = self.stderr_tail().await;
-        let probe = if timed_out {
-            let (started, exit) = {
-                let mut state = self.state.lock().await;
-                match state.child.as_mut() {
-                    Some(child) => (true, child.early_exit()),
-                    None => (false, None),
+        let (started, exit) = {
+            let mut state = self.state.lock().await;
+            match state.child.as_mut() {
+                Some(child) => {
+                    let exit = child.early_exit();
+                    if exit.is_some() {
+                        child.finish_stderr().await;
+                    }
+                    (true, exit)
                 }
-            };
+                None => (false, None),
+            }
+        };
+        let tail = self.stderr_tail().await;
+        let probe = if timed_out || exit.is_some() {
             Some(classify_startup_probe(started, exit.as_deref(), &tail))
         } else {
             None
