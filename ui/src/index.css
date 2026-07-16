@@ -1188,7 +1188,7 @@ div[data-view="sessions"].view.on { display: flex; flex: 1; min-height: 0; }
   user-select: none;
 }
 .cockpit-title { display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-12); color: var(--dim); font-weight: var(--fw-semibold); }
-.cockpit-tabs { display: flex; align-items: center; gap: var(--space-1); flex: 1; overflow-x: auto; }
+.cockpit-tabs { display: flex; align-items: center; gap: var(--space-1); flex: 1; overflow: visible; }
 .cockpit-tab {
   display: flex; align-items: center; gap: var(--space-2);
   padding: var(--space-1) var(--space-4); border-radius: var(--radius); font-size: var(--fs-12); color: var(--dim);
@@ -1208,6 +1208,14 @@ div[data-view="sessions"].view.on { display: flex; flex: 1; min-height: 0; }
 .cockpit-menu {
   top: calc(100% + var(--space-1)); bottom: auto; left: 0; z-index: 1001;
   min-width: 200px;
+  overflow: visible;
+}
+.cockpit-submenu {
+  top: 0; bottom: auto; left: calc(100% + var(--space-1));
+  min-width: 180px;
+}
+.cockpit-submenu::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(-1 * var(--space-2)); width: var(--space-2);
 }
 .cockpit-menu-head {
   display: flex; align-items: center; gap: var(--space-2);
