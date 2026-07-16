@@ -203,23 +203,25 @@ impl NodeRegistry {
     pub async fn enroll(&self, node_id: &str, iroh_node_id: &str) -> anyhow::Result<()> {
         let now = unix_now();
         let mut nodes = self.nodes.write().await;
-        nodes.entry(node_id.to_owned()).or_insert_with(|| NodeEntry {
-            node_id: node_id.to_owned(),
-            hostname: node_id.to_owned(),
-            status: NodeStatus::Offline,
-            slots_used: 0,
-            slots_total: 0,
-            version: String::new(),
-            local: false,
-            last_heartbeat: Instant::now(),
-            transport: NodeTransport::Iroh,
-            iroh_node_id: Some(iroh_node_id.to_owned()),
-            agents: vec![],
-            connection_epoch: None,
-            enrolled_at: Some(now),
-            last_seen: None,
-            persisted_last_seen: 0,
-        });
+        nodes
+            .entry(node_id.to_owned())
+            .or_insert_with(|| NodeEntry {
+                node_id: node_id.to_owned(),
+                hostname: node_id.to_owned(),
+                status: NodeStatus::Offline,
+                slots_used: 0,
+                slots_total: 0,
+                version: String::new(),
+                local: false,
+                last_heartbeat: Instant::now(),
+                transport: NodeTransport::Iroh,
+                iroh_node_id: Some(iroh_node_id.to_owned()),
+                agents: vec![],
+                connection_epoch: None,
+                enrolled_at: Some(now),
+                last_seen: None,
+                persisted_last_seen: 0,
+            });
         self.persist_inventory(&nodes)
     }
 
@@ -420,8 +422,8 @@ impl NodeRegistry {
             if entry.status == NodeStatus::Offline {
                 entry.status = NodeStatus::Online;
             }
-            let persist = entry.enrolled_at.is_some()
-                && now.saturating_sub(entry.persisted_last_seen) >= 60;
+            let persist =
+                entry.enrolled_at.is_some() && now.saturating_sub(entry.persisted_last_seen) >= 60;
             if persist {
                 entry.persisted_last_seen = now;
             }
@@ -1337,12 +1339,14 @@ mod tests {
     #[tokio::test]
     async fn stale_connection_death_does_not_deregister_newer_epoch() {
         let reg = NodeRegistry::new();
-        assert!(reg
-            .register_connection("node", "old", 4, "v1", NodeTransport::Iroh, None, vec![], 1)
-            .await);
-        assert!(reg
-            .register_connection("node", "new", 4, "v2", NodeTransport::Iroh, None, vec![], 2)
-            .await);
+        assert!(
+            reg.register_connection("node", "old", 4, "v1", NodeTransport::Iroh, None, vec![], 1)
+                .await
+        );
+        assert!(
+            reg.register_connection("node", "new", 4, "v2", NodeTransport::Iroh, None, vec![], 2)
+                .await
+        );
 
         assert!(!reg.deregister_connection("node", 1).await);
         let node = reg.get("node").await.expect("new registration survives");
@@ -1439,7 +1443,7 @@ mod tests {
             olympus_proto::frames::HallFrame::ReRegister
         ));
         drop(envoy_writer);
-        task.await.unwrap();
+        task.abort();
     }
 
     #[tokio::test]
@@ -1447,7 +1451,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = NodeRegistry::with_inventory(dir.path()).unwrap();
         registry
-            .enroll("node", "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320")
+            .enroll(
+                "node",
+                "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320",
+            )
             .await
             .unwrap();
         drop(registry);

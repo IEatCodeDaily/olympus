@@ -483,11 +483,7 @@ impl EnvoyConnections {
         self.inner.write().await.remove(node_id)
     }
 
-    pub async fn remove_epoch(
-        &self,
-        node_id: &str,
-        epoch: u64,
-    ) -> Option<Arc<EnvoyConnection>> {
+    pub async fn remove_epoch(&self, node_id: &str, epoch: u64) -> Option<Arc<EnvoyConnection>> {
         let mut inner = self.inner.write().await;
         if inner.get(node_id).is_some_and(|conn| conn.epoch == epoch) {
             inner.remove(node_id)

@@ -382,7 +382,10 @@ where
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     + 1;
                 if unacked >= HEARTBEAT_REREGISTER_AFTER {
-                    tracing::warn!(unacked, "heartbeat acknowledgements missing; re-registering");
+                    tracing::warn!(
+                        unacked,
+                        "heartbeat acknowledgements missing; re-registering"
+                    );
                     if hb_conn.send_hello().await.is_err() {
                         break;
                     }
@@ -1005,7 +1008,11 @@ mod tests {
         ));
         hall_writer
             .write_all(
-                format!("{}\n", serde_json::to_string(&HallFrame::ReRegister).unwrap()).as_bytes(),
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&HallFrame::ReRegister).unwrap()
+                )
+                .as_bytes(),
             )
             .await
             .unwrap();
