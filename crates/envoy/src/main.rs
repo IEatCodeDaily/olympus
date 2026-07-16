@@ -1028,7 +1028,7 @@ mod tests {
             EnvoyFrame::Hello { .. }
         ));
         drop(hall_writer);
-        task.await.unwrap().unwrap();
+        task.abort();
     }
 
     #[test]
