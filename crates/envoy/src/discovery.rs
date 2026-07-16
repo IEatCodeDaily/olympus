@@ -16,6 +16,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bridge::child::command_for_agent;
+
 const CLAUDE_CODE_AGENT_ID: &str = "claude-code";
 const CODEX_AGENT_ID: &str = "codex";
 
@@ -282,9 +284,9 @@ fn command_version_with_timeout(binary: &Path, timeout: Duration) -> Option<Stri
     }
 }
 
-fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
+fn discover_cli_harnesses(path_env: &str, claude_adapter: &Path) -> Vec<AgentInfo> {
     let mut out = Vec::new();
-    if let Some(claude) = which_in_path("claude", path_env) {
+    if is_executable(claude_adapter) {
         out.push(AgentInfo {
             id: CLAUDE_CODE_AGENT_ID.to_string(),
             provider: Some(CLAUDE_CODE_AGENT_ID.to_string()),
@@ -292,7 +294,7 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
             // version string goes in `version`, NOT `model` (it used to leak
             // into the model picker as "codex-cli 0.133.0").
             model: CLAUDE_CODE_MODELS.first().map(|s| s.to_string()),
-            version: command_version_with_timeout(&claude, Duration::from_secs(2)),
+            version: command_version_with_timeout(claude_adapter, Duration::from_secs(2)),
             kind: CLAUDE_CODE_AGENT_ID.to_string(),
             is_default: false,
             ready: probe_cli_auth(CLAUDE_CODE_AGENT_ID),
@@ -316,9 +318,14 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
 /// call. This is the local envoy's job — no process-lifetime cache, so a manual
 /// "detect agents" refresh picks up newly-installed CLIs.
 fn discover_cli_harnesses_now() -> Vec<AgentInfo> {
+    let claude_adapter = command_for_agent(Some(CLAUDE_CODE_AGENT_ID))
+        .into_iter()
+        .next()
+        .map(PathBuf::from);
     std::env::var_os("PATH")
         .and_then(|p| p.into_string().ok())
-        .map(|path| discover_cli_harnesses(&path))
+        .zip(claude_adapter)
+        .map(|(path, adapter)| discover_cli_harnesses(&path, &adapter))
         .unwrap_or_default()
 }
 
