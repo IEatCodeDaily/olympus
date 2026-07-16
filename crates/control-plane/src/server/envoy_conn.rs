@@ -751,10 +751,10 @@ mod tests {
     async fn older_epoch_cannot_replace_newer_connection() {
         let conns = EnvoyConnections::new();
         let (shutdown, _) = tokio::sync::watch::channel(false);
-        conns
+        assert!(conns
             .insert_epoch("n1", test_writer(), 2, shutdown)
             .await
-            .unwrap();
+            .is_ok());
         let (shutdown, _) = tokio::sync::watch::channel(false);
         assert!(conns
             .insert_epoch("n1", test_writer(), 1, shutdown)
