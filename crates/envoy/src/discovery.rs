@@ -535,16 +535,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn discover_cli_harnesses_finds_stubbed_claude_and_codex() {
+    fn discover_cli_harnesses_finds_runtime_adapter_and_codex() {
         let tmp = tempfile::tempdir().unwrap();
         write_stub(
             tmp.path(),
-            "claude",
+            "claude-agent-acp",
             "#!/bin/sh\necho '2.1.195 (Claude Code)'\n",
         );
         write_stub(tmp.path(), "codex", "#!/bin/sh\necho 'codex-cli 0.133.0'\n");
 
-        let agents = discover_cli_harnesses(tmp.path().to_str().unwrap());
+        let agents = discover_cli_harnesses(
+            tmp.path().to_str().unwrap(),
+            &tmp.path().join("claude-agent-acp"),
+        );
 
         assert!(agents.iter().any(|a| {
             a.id == "claude-code"
@@ -570,7 +573,8 @@ mod tests {
     #[test]
     fn discover_cli_harnesses_ignores_non_executable_files() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("claude"), "#!/bin/sh\necho nope\n").unwrap();
-        assert!(discover_cli_harnesses(tmp.path().to_str().unwrap()).is_empty());
+        let adapter = tmp.path().join("claude-agent-acp");
+        std::fs::write(&adapter, "#!/bin/sh\necho nope\n").unwrap();
+        assert!(discover_cli_harnesses(tmp.path().to_str().unwrap(), &adapter).is_empty());
     }
 }
