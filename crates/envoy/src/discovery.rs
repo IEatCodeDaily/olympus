@@ -542,6 +542,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn hermes_profiles_require_a_runnable_hermes_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".hermes");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("config.yaml"), "model:\n  default: test\n").unwrap();
+
+        assert!(discover_hermes_profiles(&home, tmp.path().to_str().unwrap()).is_empty());
+
+        write_stub(tmp.path(), "hermes", "#!/bin/sh\nexit 0\n");
+        assert_eq!(
+            discover_hermes_profiles(&home, tmp.path().to_str().unwrap())[0].id,
+            "default"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn discover_cli_harnesses_finds_runtime_adapter_and_codex() {
         let tmp = tempfile::tempdir().unwrap();
         write_stub(
