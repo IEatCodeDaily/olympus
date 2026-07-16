@@ -122,8 +122,8 @@ button {
 /* Session rows are the Sessions surface's vertical tab list. */
 .srow { display: flex; align-items: stretch; border-radius: var(--radius); transition: background var(--dur) var(--ease); position: relative; }
 .srow:hover { background: var(--hover); }
-.srow.on { background: var(--silver-wash); }
-.srow.visible:not(.on) { box-shadow: inset 2px 0 0 var(--border-strong); }
+.srow.on, .srow[data-open="true"] { background: var(--silver-wash); }
+.srow.focused, .srow[data-focused="true"] { box-shadow: inset 2px 0 0 var(--accent); }
 .srow-main { display: flex; min-width: 0; flex: 1; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); text-align: left; color: inherit; }
 .srow-icon { display: flex; align-items: center; justify-content: center; width: 12px; flex-shrink: 0; }
 .srow-spinner { width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: var(--radius-full); animation: olympus-spin var(--loop-spin) linear infinite; }
@@ -165,21 +165,6 @@ button {
 
 .vp-body { flex: 1; min-height: 0; display: flex; }
 
-/* ── Shared nested workbench split geometry ─────── */
-.workbench-split-root { display: flex; min-width: 0; min-height: 0; flex: 1; }
-.workbench-split { display: flex; min-width: 0; min-height: 0; flex: 1; background: var(--border-strong); }
-.workbench-split-horizontal { flex-direction: row; }
-.workbench-split-vertical { flex-direction: column; }
-.workbench-split-child { display: flex; min-width: 0; min-height: 0; flex-grow: 0; flex-shrink: 0; overflow: hidden; }
-.workbench-separator { position: relative; z-index: 8; flex: 0 0 var(--border-w); background: var(--border-strong); }
-.workbench-split-horizontal > .workbench-separator { width: var(--border-w); cursor: col-resize; }
-.workbench-split-vertical > .workbench-separator { height: var(--border-w); cursor: row-resize; }
-.workbench-separator::after { position: absolute; content: ""; background: transparent; transition: background var(--dur-fast) var(--ease-out); }
-.workbench-split-horizontal > .workbench-separator::after { inset: 0 -3px; }
-.workbench-split-vertical > .workbench-separator::after { inset: -3px 0; }
-.workbench-separator:hover::after, .workbench-separator:focus-visible::after { background: var(--accent); }
-.session-pane { min-width: 0; min-height: 0; background: var(--bg); box-shadow: inset 0 0 0 var(--border-w) transparent; }
-.session-pane.active { box-shadow: inset 0 0 0 var(--border-w) var(--border-strong); }
 
 /* ── Chat column ─────────────────────────────────── */
 .chatcol { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -847,44 +832,21 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   .vault-dialog-error { margin: 0 var(--space-5); }
   .btn.danger { color: var(--danger); border-color: var(--danger); }
   .vault-viewport { min-width: 0; overflow: hidden; }
-  .vault-workspace-shell { display: flex; min-width: 0; height: 100%; flex: 1; flex-direction: column; }
-  .vault-layout-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); padding: 0 var(--space-2); }
-  .vault-layout-actions button { display: grid; width: 25px; height: 24px; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--faint); }
-  .vault-layout-actions button:hover, .vault-layout-actions button.on { background: var(--elev); color: var(--text); }
-  .vault-workspace { position: relative; display: grid; min-width: 0; min-height: 0; flex: 1; gap: var(--border-w); background: var(--border-strong); }
-  .vault-layout-single { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
-  .vault-layout-columns { grid-template: minmax(0, 1fr) / repeat(2, minmax(0, 1fr)); }
-  .vault-layout-rows { grid-template: repeat(2, minmax(0, 1fr)) / minmax(0, 1fr); }
-  .vault-layout-grid { grid-template: repeat(2, minmax(0, 1fr)) / repeat(2, minmax(0, 1fr)); }
-  .vault-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--bg); }
-  .vault-pane.active { box-shadow: inset 0 0 0 var(--border-w) var(--border-strong); }
-  .vault-pane-header { display: flex; min-width: 0; min-height: 34px; border-bottom: var(--border-w) solid var(--border); background: var(--surface); }
-  .vault-tabs { display: flex; min-width: 0; flex: 1; overflow-x: auto; }
-  .vault-tabs.drop-end { box-shadow: inset -2px 0 0 var(--accent); }
-  .vault-tab { position: relative; display: flex; flex: 0 0 auto; align-items: center; border-right: var(--border-w) solid var(--border); color: var(--faint); cursor: grab; }
-  .vault-tab:active { cursor: grabbing; }
-  .vault-tab.drop-before::before, .vault-tab.drop-after::after { position: absolute; z-index: 2; top: 3px; bottom: 3px; width: 2px; content: ""; background: var(--accent); }
-  .vault-tab.drop-before::before { left: -1px; }
-  .vault-tab.drop-after::after { right: -1px; }
-  .vault-tab.on { background: var(--bg); color: var(--text); box-shadow: inset 0 2px 0 var(--accent); }
-  .vault-tab > button:first-child { display: flex; max-width: 220px; height: 33px; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); border: 0; background: transparent; color: inherit; }
-  .vault-tab > button:first-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .vault-tab-close { display: grid; width: 22px; height: 22px; place-items: center; margin-right: var(--space-1); border: 0; border-radius: var(--radius-sm); background: transparent; color: transparent; }
-  .vault-tab:hover .vault-tab-close, .vault-tab-close:focus-visible { color: var(--faint); }
-  .vault-tab-close:hover { background: var(--elev); color: var(--text); }
-  .vault-pane-content { min-width: 0; min-height: 0; flex: 1; overflow: auto; }
-  .vault-tab-panel { width: 100%; height: 100%; }
-  .vault-tab-panel[hidden] { display: none; }
-  .vault-pane-content > .vault-content, .vault-tab-panel > .vault-content { width: 100%; height: 100%; }
-  .vault-pane-empty { height: 100%; }
-  .vault-pane-resizer { position: absolute; z-index: 8; background: transparent; }
-  .vault-pane-resizer::after { position: absolute; content: ""; background: transparent; transition: background var(--dur-fast) var(--ease-out); }
-  .vault-pane-resizer:hover::after, .vault-pane-resizer:focus-visible::after { background: var(--accent); }
-  .vault-pane-resizer-x { top: 0; bottom: 0; width: 7px; transform: translateX(-3px); cursor: col-resize; }
-  .vault-pane-resizer-x::after { top: 0; bottom: 0; left: 3px; width: var(--border-w); }
-  .vault-pane-resizer-y { right: 0; left: 0; height: 7px; transform: translateY(-3px); cursor: row-resize; }
-  .vault-pane-resizer-y::after { top: 3px; right: 0; left: 0; height: var(--border-w); }
-  .vault-tab-menu { position: fixed; z-index: 40; right: auto; bottom: auto; min-width: 170px; }
+  .vault-workspace-shell { display: flex; min-width: 0; height: 100%; flex-direction: column; }
+  .olympus-dockview { flex: 1; min-width: 0; min-height: 0; background: var(--bg); color: var(--text); --dv-background-color: var(--bg); --dv-paneview-active-outline-color: var(--accent); --dv-tabs-and-actions-container-background-color: var(--surface); --dv-activegroup-visiblepanel-tab-background-color: var(--bg); --dv-activegroup-hiddenpanel-tab-background-color: var(--surface); --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg); --dv-inactivegroup-hiddenpanel-tab-background-color: var(--surface); --dv-separator-border: var(--border); --dv-tabs-container-scrollbar-color: var(--scrollbar); --dv-icon-foreground: var(--faint); --dv-activegroup-visiblepanel-tab-color: var(--text); --dv-activegroup-hiddenpanel-tab-color: var(--faint); --dv-inactivegroup-visiblepanel-tab-color: var(--text); --dv-inactivegroup-hiddenpanel-tab-color: var(--faint); }
+  .olympus-dockview .dv-groupview { background: var(--bg); }
+  .olympus-dockview .dv-tabs-and-actions-container { min-height: 34px; border-bottom: var(--border-w) solid var(--border); font: var(--fs-12)/1 var(--font-sans); }
+  .olympus-dockview .dv-tab { border-right: var(--border-w) solid var(--border); }
+  .olympus-dockview .dv-tab.dv-active-tab { box-shadow: inset 0 2px 0 var(--accent); }
+  .vault-dock-tab { display: flex; min-width: 0; height: 100%; align-items: center; gap: var(--space-2); padding-left: var(--space-3); }
+  .vault-dock-tab > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vault-dock-tab > button { display: grid; width: 22px; height: 22px; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--faint); }
+  .vault-dock-tab > button:hover { background: var(--elev); color: var(--text); }
+  .olympus-dockview .dv-content-container { min-width: 0; min-height: 0; background: var(--bg); }
+  .sessions-dock-shell { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+  .sessions-dock-empty { position: absolute; inset: 0; display: flex; flex-direction: column; pointer-events: none; }
+  .sessions-dockview .dv-tabs-and-actions-container { display: none; }
+  .sessions-dockview .dv-split-view-container, .sessions-dockview .dv-groupview, .sessions-dockview .dv-content-container { height: 100%; }
   .vault-view-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-6); padding: var(--space-5) var(--space-6); border-bottom: var(--border-w) solid var(--border); }
   .vault-view-header > div { display: flex; flex-direction: column; gap: var(--space-2); }
   .vault-view-header > span { color: var(--faint); font-size: var(--fs-11); }
@@ -898,8 +860,6 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   .vault-table-empty { display: grid; place-items: center; }
 
   @media (max-width: 900px) {
-    .vault-layout-columns, .vault-layout-grid { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none !important; grid-auto-rows: minmax(320px, 1fr); overflow: auto; }
-    .vault-pane-resizer { display: none; }
     .vault-view-header { flex-direction: column; }
   }
 

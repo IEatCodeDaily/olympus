@@ -33,15 +33,23 @@
  *   └──────────────────────────────────────────────────────────────┘
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import {
+  DockviewReact,
+  type DockviewApi,
+  type DockviewDidDropEvent,
+  type DockviewReadyEvent,
+  type IDockviewPanelProps,
+} from "dockview-react";
+import "dockview-react/dist/styles/dockview.css";
 import { Icon } from "../components/Icon";
 import { BrandIcon, agentBrand } from "../components/BrandIcons";
 import { useUIStore } from "../store";
-import { useSession, useMessages, useAgents, useSessions } from "../hooks/queries";
+import { useSession, useMessages, useAgents } from "../hooks/queries";
 import { useResizable } from "../hooks/useResizable";
-import type { Message } from "../types";
-import { fmtTime, tokenFmt, isDiffResult } from "./sessions/helpers";
+import { getLocalUiState, loadWorkspaceState, saveWorkspaceState } from "../lib/uiState";
+import { readSessionPanelState, writeSessionPanelState } from "../workbench/sessionPanelState";
 
 import { SessionSidebar } from "./sessions/components/SessionSidebar";
 import { RightPanel, type RsTab } from "./sessions/components/RightPanel";
@@ -50,15 +58,14 @@ import { ChatPage } from "./sessions/pages/ChatPage";
 import { AgentsPage } from "./sessions/pages/AgentsPage";
 import { UsagePage } from "./sessions/pages/UsagePage";
 import { HistoryPage } from "./sessions/pages/HistoryPage";
-import { SplitLayout } from "../workbench/SplitLayout";
-import { activateView, findGroup, listGroups, resizeSplit } from "../workbench/model";
-import {
-  closeSessionPane,
-  createSessionWorkspace,
-  openSession,
-  splitSession,
-  type SessionWorkspace,
-} from "./sessions/sessionWorkspace";
+
+type DockLayout = ReturnType<DockviewApi["toJSON"]>;
+
+interface SessionPanelParams {
+  sessionId: string;
+}
+
+let savedSessionsLayout: DockLayout | null = null;
 
 export function SessionsView({
   sessionId,
@@ -68,79 +75,109 @@ export function SessionsView({
   page: "chat" | "agents" | "usage" | "history" | null;
 }) {
   const { sidebarCollapsed } = useUIStore();
-  const [rsCollapsed, setRsCollapsed] = useState(false);
-  const [bpCollapsed, setBpCollapsed] = useState(false);
-  const [rsTab, setRsTab] = useState<RsTab>("overview");
-  const [bpTab, setBpTab] = useState<BpTab>("terminal");
-  const { data: sessionsData } = useSessions({ managed: true, archived: false });
-  const [sessionWorkspace, setSessionWorkspace] = useState<SessionWorkspace>(() =>
-    createSessionWorkspace(sessionId),
-  );
-  const idSequence = useRef(0);
   const navigate = useNavigate();
+  const apiRef = useRef<DockviewApi | null>(null);
+  const [openSessionIds, setOpenSessionIds] = useState<Set<string>>(() => new Set());
 
-  const sessionTitle = (id: string) =>
-    sessionsData?.sessions.find((session) => session.id === id)?.title || "Untitled";
-
-  useEffect(() => {
-    if (!sessionId || page !== "chat") return;
-    setSessionWorkspace((current) => openSession(current, sessionId, sessionTitle(sessionId)));
-  }, [page, sessionId, sessionsData?.sessions]);
-
-  const sessionPaneLabels = useMemo(
-    () => new Map(listGroups(sessionWorkspace).flatMap((group, index) =>
-      group.views.map((view) => [view.payload.sessionId, `P${index + 1}`] as const),
-    )),
-    [sessionWorkspace],
-  );
-  const visibleSessionIds = useMemo(() => new Set(sessionPaneLabels.keys()), [sessionPaneLabels]);
-
-  const selectSession = (id: string) => {
-    setSessionWorkspace((current) => openSession(current, id, sessionTitle(id)));
-    void navigate({ to: "/sessions/$sessionId", params: { sessionId: id } });
-  };
-
-  const placeSession = (id: string, axis: "horizontal" | "vertical") => {
-    idSequence.current += 1;
-    setSessionWorkspace((current) => splitSession(
-      current,
-      id,
-      sessionTitle(id),
-      axis,
-      `session-split-${idSequence.current}`,
-      `session-group-${idSequence.current}`,
-    ));
-    void navigate({ to: "/sessions/$sessionId", params: { sessionId: id } });
-  };
-
-  const activateSessionPane = (groupId: string) => {
-    const view = findGroup(sessionWorkspace, groupId)?.views[0];
-    if (!view) return;
-    setSessionWorkspace((current) => activateView(current, groupId, view.id));
-    void navigate({ to: "/sessions/$sessionId", params: { sessionId: view.payload.sessionId } });
-  };
-
-  const closePane = (groupId: string) => {
-    const next = closeSessionPane(sessionWorkspace, groupId);
-    setSessionWorkspace(next);
-    const nextView = findGroup(next, next.activeGroupId)?.views[0];
-    if (nextView) void navigate({ to: "/sessions/$sessionId", params: { sessionId: nextView.payload.sessionId } });
-    else void navigate({ to: "/sessions" });
-  };
+  const syncOpenSessions = useCallback((api: DockviewApi) => {
+    setOpenSessionIds(new Set(api.panels.flatMap((panel) => {
+      const id = (panel.params as SessionPanelParams | undefined)?.sessionId;
+      return id ? [id] : [];
+    })));
+  }, []);
 
   // Bug 17: resizable panels — left sidebar, right sidebar, bottom panel
   const sidebar = useResizable({
-    axis: "x", min: 180, max: 400, initial: 260,
+    axis: "x", min: 160, max: 400, initial: 220,
     direction: "right", persistKey: "olympus-sidebar-w",
   });
-  const rightPanel = useResizable({
-    axis: "x", min: 200, max: 450, initial: 279,
-    direction: "left", persistKey: "olympus-rsidebar-w",
-  });
-  const bottomPanel = useResizable({
-    axis: "y", min: 80, max: 400, initial: 152,
-    direction: "down", persistKey: "olympus-bpanel-h",
-  });
+  const persist = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    savedSessionsLayout = api.toJSON();
+    saveWorkspaceState("sessions", savedSessionsLayout);
+  }, []);
+
+  const openSessionPanel = useCallback((id: string, drop?: DockviewDidDropEvent) => {
+    const api = apiRef.current;
+    if (!api) return;
+    const panelId = `session:${id}`;
+    const existing = api.getPanel(panelId);
+    if (existing) {
+      existing.api.setActive();
+      syncOpenSessions(api);
+      return;
+    }
+    const panel = api.addPanel({
+      id: panelId,
+      title: id,
+      component: "session-panel",
+      params: { sessionId: id } satisfies SessionPanelParams,
+      ...(drop?.group ? {
+        position: { referenceGroup: drop.group, direction: dropDirection(drop.position) },
+      } : {}),
+    });
+    panel.api.setActive();
+    syncOpenSessions(api);
+    persist();
+  }, [persist, syncOpenSessions]);
+
+  useEffect(() => {
+    if (sessionId) openSessionPanel(sessionId);
+  }, [openSessionPanel, sessionId]);
+
+  useEffect(() => () => persist(), [persist]);
+
+  const handleReady = useCallback((event: DockviewReadyEvent) => {
+    apiRef.current = event.api;
+    const local = savedSessionsLayout ?? getLocalUiState<DockLayout>("sessions");
+    if (local) {
+      try {
+        event.api.fromJSON(local);
+        syncOpenSessions(event.api);
+      } catch {
+        savedSessionsLayout = null;
+      }
+    }
+    void loadWorkspaceState<DockLayout>("sessions").then((remote) => {
+      if (!remote || apiRef.current !== event.api) return;
+      try {
+        event.api.fromJSON(remote);
+        syncOpenSessions(event.api);
+        savedSessionsLayout = remote;
+        if (sessionId) openSessionPanel(sessionId);
+      } catch {
+        // Ignore incompatible remote layouts.
+      }
+    });
+    if (sessionId) openSessionPanel(sessionId);
+    const layoutDisposable = event.api.onDidLayoutChange(() => persist());
+    const activeDisposable = event.api.onDidActivePanelChange(({ panel }) => {
+      const params = panel?.params as SessionPanelParams | undefined;
+      if (params?.sessionId) {
+        void navigate({ to: "/sessions/$sessionId", params: { sessionId: params.sessionId } });
+      }
+    });
+    const removeDisposable = event.api.onDidRemovePanel(() => {
+      syncOpenSessions(event.api);
+    });
+    const dragOverDisposable = event.api.onUnhandledDragOver((dragEvent) => {
+      if (hasDragType(dragEvent.nativeEvent, "application/x-olympus-session")) dragEvent.accept();
+    });
+    const dropDisposable = event.api.onDidDrop((dropEvent) => {
+      const payload = dragPayload(dropEvent.nativeEvent, "application/x-olympus-session") as { sessionId?: string } | null;
+      if (!payload?.sessionId) return;
+      openSessionPanel(payload.sessionId, dropEvent);
+      void navigate({ to: "/sessions/$sessionId", params: { sessionId: payload.sessionId } });
+    });
+    return () => {
+      layoutDisposable.dispose();
+      activeDisposable.dispose();
+      removeDisposable.dispose();
+      dragOverDisposable.dispose();
+      dropDisposable.dispose();
+    };
+  }, [navigate, openSessionPanel, persist, sessionId, syncOpenSessions]);
 
   return (
     <>
@@ -149,17 +186,13 @@ export function SessionsView({
         <SessionSidebar
           width={sidebar.size}
           activeSessionId={sessionId}
+          openSessionIds={openSessionIds}
           onResizeStart={sidebar.onResizeStart}
           onResizeKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
             event.preventDefault();
-            sidebar.setSize(Math.max(180, Math.min(400, sidebar.size + (event.key === "ArrowRight" ? 10 : -10))));
+            sidebar.setSize(Math.max(160, Math.min(400, sidebar.size + (event.key === "ArrowRight" ? 10 : -10))));
           }}
-          visibleSessionIds={visibleSessionIds}
-          sessionPaneLabels={sessionPaneLabels}
-          onSelectSession={selectSession}
-          onOpenSessionRight={(id) => placeSession(id, "horizontal")}
-          onOpenSessionBelow={(id) => placeSession(id, "vertical")}
         />
       )}
 
@@ -177,44 +210,79 @@ export function SessionsView({
           <div className="view on" data-view="sessions" style={{ flexDirection: "column" }}>
             <HistoryPage />
           </div>
-        ) : sessionId ? (
-          <SplitLayout
-            root={sessionWorkspace.root}
-            surfaceLabel="session panes"
-            onResize={(splitId, ratio) => setSessionWorkspace((current) => resizeSplit(current, splitId, ratio))}
-            renderGroup={(group) => {
-              const paneSessionId = group.views[0]?.payload.sessionId;
-              if (!paneSessionId) return <SessionEmptyPane />;
-              return (
-                <SessionChatLayout
-                  key={group.id}
-                  sessionId={paneSessionId}
-                  activePane={group.id === sessionWorkspace.activeGroupId}
-                  onActivatePane={() => activateSessionPane(group.id)}
-                  onClosePane={() => closePane(group.id)}
-                  rsCollapsed={rsCollapsed}
-                  bpCollapsed={bpCollapsed}
-                  rsTab={rsTab}
-                  bpTab={bpTab}
-                  rsWidth={rightPanel.size}
-                  bpHeight={bottomPanel.size}
-                  onRsResizeStart={rightPanel.onResizeStart}
-                  onBpResizeStart={bottomPanel.onResizeStart}
-                  onToggleRs={() => setRsCollapsed((v) => !v)}
-                  onToggleBp={() => setBpCollapsed((v) => !v)}
-                  onRsTabChange={setRsTab}
-                  onBpTabChange={setBpTab}
-                  onCloseBp={() => setBpCollapsed(true)}
-                />
-              );
-            }}
-          />
         ) : (
-          <SessionEmptyPane />
+          <div className="sessions-dock-shell">
+            <DockviewReact
+              className="dockview-theme-abyss olympus-dockview sessions-dockview"
+              components={{ "session-panel": SessionDockPanel }}
+              onReady={handleReady}
+            />
+            {!sessionId && openSessionIds.size === 0 && <div className="sessions-dock-empty"><SessionEmptyPane /></div>}
+          </div>
         )}
       </div>
     </>
   );
+}
+
+function dropDirection(position: "top" | "bottom" | "left" | "right" | "center"): "left" | "right" | "above" | "below" | "within" {
+  return position === "top" ? "above" : position === "bottom" ? "below" : position === "center" ? "within" : position;
+}
+
+function hasDragType(event: globalThis.DragEvent | PointerEvent, type: string): boolean {
+  return event instanceof globalThis.DragEvent && event.dataTransfer?.types.includes(type) === true;
+}
+
+function dragPayload(event: globalThis.DragEvent | PointerEvent, type: string): unknown | null {
+  if (!(event instanceof globalThis.DragEvent)) return null;
+  try {
+    const value = event.dataTransfer?.getData(type);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function SessionDockPanel({ params }: IDockviewPanelProps<SessionPanelParams>) {
+  const [rsCollapsed, setRsCollapsed] = useSessionPanelState(params.sessionId, "rsCollapsed", false);
+  const [bpCollapsed, setBpCollapsed] = useSessionPanelState(params.sessionId, "bpCollapsed", false);
+  const [rsTab, setRsTab] = useSessionPanelState<RsTab>(params.sessionId, "rsTab", "overview");
+  const [bpTab, setBpTab] = useSessionPanelState<BpTab>(params.sessionId, "bpTab", "terminal");
+  const rightPanel = useResizable({
+    axis: "x", min: 200, max: 450, initial: 279,
+    direction: "left", persistKey: `olympus-session-${params.sessionId}-rsidebar-w`,
+  });
+  const bottomPanel = useResizable({
+    axis: "y", min: 80, max: 400, initial: 152,
+    direction: "down", persistKey: `olympus-session-${params.sessionId}-bpanel-h`,
+  });
+
+  return (
+    <SessionChatLayout
+      sessionId={params.sessionId}
+      rsCollapsed={rsCollapsed}
+      bpCollapsed={bpCollapsed}
+      rsTab={rsTab}
+      bpTab={bpTab}
+      rsWidth={rightPanel.size}
+      bpHeight={bottomPanel.size}
+      onRsResizeStart={rightPanel.onResizeStart}
+      onBpResizeStart={bottomPanel.onResizeStart}
+      onToggleRs={() => setRsCollapsed((v) => !v)}
+      onToggleBp={() => setBpCollapsed((v) => !v)}
+      onRsTabChange={setRsTab}
+      onBpTabChange={setBpTab}
+      onCloseBp={() => setBpCollapsed(true)}
+    />
+  );
+}
+
+function useSessionPanelState<T>(sessionId: string, key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [value, setValue] = useState<T>(() => readSessionPanelState(sessionId, key, initial));
+  useEffect(() => {
+    writeSessionPanelState(sessionId, key, value);
+  }, [key, sessionId, value]);
+  return [value, setValue];
 }
 
 /**
@@ -224,9 +292,6 @@ export function SessionsView({
  */
 function SessionChatLayout({
   sessionId,
-  activePane,
-  onActivatePane,
-  onClosePane,
   rsCollapsed,
   bpCollapsed,
   rsTab,
@@ -242,9 +307,6 @@ function SessionChatLayout({
   onCloseBp,
 }: {
   sessionId: string;
-  activePane: boolean;
-  onActivatePane: () => void;
-  onClosePane: () => void;
   rsCollapsed: boolean;
   bpCollapsed: boolean;
   rsTab: RsTab;
@@ -294,11 +356,10 @@ function SessionChatLayout({
 
   return (
     <div
-      className={`view on chat-view session-pane${activePane ? " active" : ""}`}
+      className="view on chat-view"
       data-view="sessions"
       data-session-id={sessionId}
       style={{ flexDirection: "column" }}
-      onMouseDown={onActivatePane}
     >
       {/* ── vp-head ─────────────────────────────────────────────── */}
       <div className="vp-head">
@@ -346,15 +407,6 @@ function SessionChatLayout({
           >
             <Icon name="panel-right" size={14} />
           </button>
-          <button
-            type="button"
-            className="icobtn"
-            title="Close session view"
-            aria-label="Close session view"
-            onClick={(event) => { event.stopPropagation(); onClosePane(); }}
-          >
-            <Icon name="x" size={13} />
-          </button>
         </div>
       </div>
 
@@ -366,7 +418,7 @@ function SessionChatLayout({
           <ChatPage sessionId={sessionId} />
 
           {/* View-owned bottom panel */}
-          {!bpCollapsed && activePane && (
+          {!bpCollapsed && (
             <>
               <div className="rz-y" onMouseDown={onBpResizeStart} />
               <BottomPanel
@@ -381,7 +433,7 @@ function SessionChatLayout({
         </div>
 
         {/* View-owned right sidebar */}
-        {!rsCollapsed && activePane && (
+        {!rsCollapsed && (
           <>
             <div className="rz-x" onMouseDown={onRsResizeStart} />
             <RightPanel
