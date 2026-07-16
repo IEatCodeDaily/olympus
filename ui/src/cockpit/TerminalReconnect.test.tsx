@@ -1,6 +1,7 @@
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalPane } from "./tabs";
+import React from "react";
+import { getCockpitTabKind } from "./tabs";
 import { useCockpit, type CockpitTab } from "./store";
 
 // ── Mocks ───────────────────────────────────────────────────────────────
@@ -14,8 +15,7 @@ vi.mock("@xterm/xterm", () => ({
     write() {}
     focus() {}
     dispose() {}
-    onData(cb: (d: string) => void) {
-      (this as any)._dataCb = cb;
+    onData() {
       return { dispose: () => {} };
     }
     onResize() {
@@ -29,6 +29,10 @@ vi.mock("../api", () => ({
   terminalWsUrl: () => "ws://test/terminal",
 }));
 
+vi.mock("../components/Icon", () => ({
+  Icon: () => null,
+}));
+
 // ── Fake WebSocket ──────────────────────────────────────────────────────
 
 class FakeWebSocket {
@@ -39,7 +43,6 @@ class FakeWebSocket {
   readyState = FakeWebSocket.OPEN;
   close = vi.fn((code?: number) => {
     this.readyState = FakeWebSocket.CLOSED;
-    // Fire onclose asynchronously like a real WS.
     setTimeout(() => {
       this.onclose?.({ code: code ?? 1000 } as CloseEvent);
     }, 0);
@@ -60,6 +63,12 @@ function makeTab(id: string): CockpitTab {
     title: "Hall 1",
     target: { nodeId: "hall" },
   };
+}
+
+function renderTerminalPane(tab: CockpitTab, visible = true) {
+  const def = getCockpitTabKind("terminal");
+  if (!def) throw new Error("terminal tab kind not registered");
+  return render(<div>{def.render({ tab, visible })}</div>);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -84,42 +93,31 @@ describe("TerminalPane reconnect behavior", () => {
 
   it("schedules a reconnect after an abnormal socket close", () => {
     const tab = makeTab("term-reconnect");
-    const { unmount } = render(
-      <TerminalPane tab={tab} visible={true} />,
-    );
+    const { unmount } = renderTerminalPane(tab);
 
-    // Initial socket created on mount.
     expect(FakeWebSocket.instances).toHaveLength(1);
     const sock1 = FakeWebSocket.instances[0];
 
-    // Simulate abnormal close (e.g. network drop — code 1006).
     act(() => {
       sock1.readyState = FakeWebSocket.CLOSED;
       sock1.onclose?.({ code: 1006 } as CloseEvent);
     });
 
-    // Backoff timer should be pending. Advance timers to fire it.
     act(() => {
       vi.advanceTimersByTime(2000);
     });
 
-    // A new WebSocket should have been created.
     expect(FakeWebSocket.instances).toHaveLength(2);
-
     unmount();
   });
 
   it("does NOT reconnect after explicit tab close (unmount)", () => {
     const tab = makeTab("term-reconnect-2");
-    const { unmount } = render(
-      <TerminalPane tab={tab} visible={true} />,
-    );
+    const { unmount } = renderTerminalPane(tab);
 
     const beforeCount = FakeWebSocket.instances.length;
-    // Unmounting the pane simulates tab close → cleanup sends code 4000.
     unmount();
 
-    // Advance timers — no new socket should be created.
     act(() => {
       vi.advanceTimersByTime(5000);
     });
@@ -129,20 +127,16 @@ describe("TerminalPane reconnect behavior", () => {
 
   it("does NOT reconnect when server sends 'exited' message", () => {
     const tab = makeTab("term-reconnect-3");
-    const { unmount } = render(
-      <TerminalPane tab={tab} visible={true} />,
-    );
+    const { unmount } = renderTerminalPane(tab);
 
     const sock = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
 
-    // Simulate server telling us the process exited.
     act(() => {
       sock.onmessage?.({
         data: JSON.stringify({ kind: "exited", exitCode: 0 }),
       } as MessageEvent);
     });
 
-    // Now simulate the socket closing afterwards.
     act(() => {
       sock.readyState = FakeWebSocket.CLOSED;
       sock.onclose?.({ code: 1000 } as CloseEvent);
@@ -154,9 +148,7 @@ describe("TerminalPane reconnect behavior", () => {
       vi.advanceTimersByTime(5000);
     });
 
-    // No reconnect — the shell exited.
     expect(FakeWebSocket.instances).toHaveLength(countAfterClose);
-
     unmount();
   });
 });

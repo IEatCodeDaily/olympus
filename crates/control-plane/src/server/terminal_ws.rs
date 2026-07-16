@@ -110,7 +110,7 @@ impl HallTerminals {
     }
 
     fn drop_terminal(&self, terminal_id: &str) {
-        self.channels.lock().unwrap().remove(&terminal_id);
+        self.channels.lock().unwrap().remove(terminal_id);
     }
 
     pub fn manager(&self) -> Arc<PtyManager> {

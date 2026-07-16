@@ -276,7 +276,7 @@ function b64ToUint8(b64: string): Uint8Array {
 function normalizeUrl(raw: string): string {
   const t = raw.trim();
   if (!t) return "";
-  if (/^https?:\/\/i.test(t)) return t;
+  if (/^https?:\/\//i.test(t)) return t;
   return `https://${t}`;
 }
 
