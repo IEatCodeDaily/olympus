@@ -185,9 +185,17 @@ pub(crate) async fn enroll_register(
     }
     match crate::enroll::allowlist_add(&state.home, &body.iroh_node_id) {
         Ok(added) => {
+            let node_id = body.node_id.as_deref().unwrap_or(&body.iroh_node_id);
+            if let Err(e) = state.nodes.enroll(node_id, &body.iroh_node_id).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
             tracing::info!(
                 iroh = %body.iroh_node_id,
-                node = body.node_id.as_deref().unwrap_or("?"),
+                node = %node_id,
                 added,
                 "envoy enrolled via one-line installer"
             );

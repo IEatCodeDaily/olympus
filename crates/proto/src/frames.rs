@@ -251,6 +251,12 @@ pub enum HallFrame {
         session_id: String,
         seq: u64,
     },
+    /// Acknowledge one envoy heartbeat. Envoys use missing acknowledgements to
+    /// detect a Hall-side registration black hole.
+    HeartbeatAck,
+    /// The authenticated connection is alive, but Hall no longer has its node
+    /// registration. The envoy must send Hello again on this connection.
+    ReRegister,
 }
 
 /// Envoy→Hall frames.
@@ -376,6 +382,8 @@ impl HallFrame {
             | HallFrame::TerminalOpen { req_id, .. } => Some(*req_id),
             HallFrame::Ack { .. }
             | HallFrame::ResumeFrom { .. }
+            | HallFrame::HeartbeatAck
+            | HallFrame::ReRegister
             | HallFrame::TerminalInput { .. }
             | HallFrame::TerminalResize { .. }
             | HallFrame::TerminalClose { .. } => None,

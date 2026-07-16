@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -84,6 +84,9 @@ pub struct NodeInfo {
     /// node, by in-process discovery at boot and on manual refresh. Empty until
     /// a remote envoy reports its agents.
     pub agents: Vec<AgentInfo>,
+    pub enrolled_at: Option<u64>,
+    pub last_seen: Option<u64>,
+    pub last_version: String,
 }
 
 /// Internal tracking entry (not serialized directly; `NodeInfo` is the wire shape).
@@ -99,6 +102,21 @@ struct NodeEntry {
     transport: NodeTransport,
     iroh_node_id: Option<String>,
     agents: Vec<AgentInfo>,
+    connection_epoch: Option<u64>,
+    enrolled_at: Option<u64>,
+    last_seen: Option<u64>,
+    persisted_last_seen: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableNode {
+    node_id: String,
+    iroh_node_id: String,
+    enrolled_at: u64,
+    last_seen: Option<u64>,
+    #[serde(default)]
+    last_version: String,
 }
 
 /// Heartbeat timeout: a node is `offline` if no heartbeat for this long.
@@ -106,11 +124,19 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Eviction timeout: an offline node is removed after this long.
 const EVICTION_TIMEOUT: Duration = Duration::from_secs(60);
 
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Thread-safe in-memory node registry.
 #[derive(Clone)]
 pub struct NodeRegistry {
     nodes: Arc<RwLock<HashMap<String, NodeEntry>>>,
     roles: Arc<RwLock<HashMap<String, Vec<olympus_proto::frames::NodeRole>>>>,
+    inventory_path: Option<Arc<std::path::PathBuf>>,
 }
 
 impl NodeRegistry {
@@ -118,13 +144,111 @@ impl NodeRegistry {
         Self {
             nodes: Arc::new(RwLock::new(HashMap::new())),
             roles: Arc::new(RwLock::new(HashMap::new())),
+            inventory_path: None,
         }
     }
 
-    /// Register or re-register a node (hello handshake). Updates all fields.
-    /// `agents` is the node's envoy-discovered agent list (empty for a remote
-    /// node until it reports; the local node passes its in-process discovery).
-    /// `iroh_node_id` is the peer's iroh public key for iroh-connected envoys.
+    pub fn with_inventory(home: &std::path::Path) -> anyhow::Result<Self> {
+        let path = home.join("nodes.json");
+        let mut durable: Vec<DurableNode> = std::fs::read(&path)
+            .ok()
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?
+            .unwrap_or_default();
+        let now = unix_now();
+        for key in crate::enroll::allowlist_list(home) {
+            if !durable.iter().any(|node| node.iroh_node_id == key) {
+                durable.push(DurableNode {
+                    node_id: key.clone(),
+                    iroh_node_id: key,
+                    enrolled_at: now,
+                    last_seen: None,
+                    last_version: String::new(),
+                });
+            }
+        }
+        let nodes = durable
+            .into_iter()
+            .map(|node| {
+                let persisted_last_seen = node.last_seen.unwrap_or(0);
+                (
+                    node.node_id.clone(),
+                    NodeEntry {
+                        node_id: node.node_id.clone(),
+                        hostname: node.node_id,
+                        status: NodeStatus::Offline,
+                        slots_used: 0,
+                        slots_total: 0,
+                        version: node.last_version,
+                        local: false,
+                        last_heartbeat: Instant::now(),
+                        transport: NodeTransport::Iroh,
+                        iroh_node_id: Some(node.iroh_node_id),
+                        agents: vec![],
+                        connection_epoch: None,
+                        enrolled_at: Some(node.enrolled_at),
+                        last_seen: node.last_seen,
+                        persisted_last_seen,
+                    },
+                )
+            })
+            .collect();
+        Ok(Self {
+            nodes: Arc::new(RwLock::new(nodes)),
+            roles: Arc::new(RwLock::new(HashMap::new())),
+            inventory_path: Some(Arc::new(path)),
+        })
+    }
+
+    pub async fn enroll(&self, node_id: &str, iroh_node_id: &str) -> anyhow::Result<()> {
+        let now = unix_now();
+        let mut nodes = self.nodes.write().await;
+        nodes.entry(node_id.to_owned()).or_insert_with(|| NodeEntry {
+            node_id: node_id.to_owned(),
+            hostname: node_id.to_owned(),
+            status: NodeStatus::Offline,
+            slots_used: 0,
+            slots_total: 0,
+            version: String::new(),
+            local: false,
+            last_heartbeat: Instant::now(),
+            transport: NodeTransport::Iroh,
+            iroh_node_id: Some(iroh_node_id.to_owned()),
+            agents: vec![],
+            connection_epoch: None,
+            enrolled_at: Some(now),
+            last_seen: None,
+            persisted_last_seen: 0,
+        });
+        self.persist_inventory(&nodes)
+    }
+
+    fn persist_inventory(&self, nodes: &HashMap<String, NodeEntry>) -> anyhow::Result<()> {
+        let Some(path) = &self.inventory_path else {
+            return Ok(());
+        };
+        let durable: Vec<_> = nodes
+            .values()
+            .filter_map(|node| {
+                Some(DurableNode {
+                    node_id: node.node_id.clone(),
+                    iroh_node_id: node.iroh_node_id.clone()?,
+                    enrolled_at: node.enrolled_at?,
+                    last_seen: node.last_seen,
+                    last_version: node.version.clone(),
+                })
+            })
+            .collect();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&durable)?)?;
+        std::fs::rename(tmp, path.as_ref())?;
+        Ok(())
+    }
+
+    /// Register or re-register a node outside a connection lifecycle.
     #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &self,
@@ -137,24 +261,111 @@ impl NodeRegistry {
         iroh_node_id: Option<String>,
         agents: Vec<AgentInfo>,
     ) {
-        let now = Instant::now();
+        self.register_inner(
+            node_id,
+            hostname,
+            slots_total,
+            version,
+            local,
+            transport,
+            iroh_node_id,
+            agents,
+            None,
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_connection(
+        &self,
+        node_id: &str,
+        hostname: &str,
+        slots_total: u32,
+        version: &str,
+        transport: NodeTransport,
+        iroh_node_id: Option<String>,
+        agents: Vec<AgentInfo>,
+        epoch: u64,
+    ) -> bool {
+        self.register_inner(
+            node_id,
+            hostname,
+            slots_total,
+            version,
+            false,
+            transport,
+            iroh_node_id,
+            agents,
+            Some(epoch),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn register_inner(
+        &self,
+        node_id: &str,
+        hostname: &str,
+        slots_total: u32,
+        version: &str,
+        local: bool,
+        transport: NodeTransport,
+        iroh_node_id: Option<String>,
+        agents: Vec<AgentInfo>,
+        epoch: Option<u64>,
+    ) -> bool {
         let mut nodes = self.nodes.write().await;
+        if let (Some(new), Some(current)) = (
+            epoch,
+            nodes.get(node_id).and_then(|entry| entry.connection_epoch),
+        ) {
+            if new < current {
+                return false;
+            }
+        }
+        let enrolled = iroh_node_id.as_ref().and_then(|key| {
+            nodes
+                .iter()
+                .find(|(_, entry)| entry.iroh_node_id.as_ref() == Some(key))
+                .map(|(id, entry)| {
+                    (
+                        id.clone(),
+                        entry.enrolled_at,
+                        entry.last_seen,
+                        entry.persisted_last_seen,
+                    )
+                })
+        });
+        if let Some((old_id, _, _, _)) = &enrolled {
+            if old_id != node_id {
+                nodes.remove(old_id);
+            }
+        }
+        let now = unix_now();
+        let (_, enrolled_at, previous_seen, persisted_last_seen) =
+            enrolled.unwrap_or_else(|| (node_id.to_owned(), None, None, 0));
         nodes.insert(
-            node_id.to_string(),
+            node_id.to_owned(),
             NodeEntry {
-                node_id: node_id.to_string(),
-                hostname: hostname.to_string(),
+                node_id: node_id.to_owned(),
+                hostname: hostname.to_owned(),
                 status: NodeStatus::Online,
                 slots_used: 0,
                 slots_total,
-                version: version.to_string(),
+                version: version.to_owned(),
                 local,
-                last_heartbeat: now,
+                last_heartbeat: Instant::now(),
                 transport,
                 iroh_node_id,
                 agents,
+                connection_epoch: epoch,
+                enrolled_at,
+                last_seen: enrolled_at.map(|_| now).or(previous_seen),
+                persisted_last_seen,
             },
         );
+        let _ = self.persist_inventory(&nodes);
+        true
     }
 
     /// Replace a node's discovered agent list (manual "detect agents" refresh,
@@ -198,13 +409,26 @@ impl NodeRegistry {
     /// Update a node's heartbeat and slot usage.
     pub async fn heartbeat(&self, node_id: &str, slots_used: u32) -> Result<(), NodeError> {
         let mut nodes = self.nodes.write().await;
-        let entry = nodes
-            .get_mut(node_id)
-            .ok_or(NodeError::UnknownNode(node_id.to_string()))?;
-        entry.last_heartbeat = Instant::now();
-        entry.slots_used = slots_used;
-        if entry.status == NodeStatus::Offline {
-            entry.status = NodeStatus::Online;
+        let now = unix_now();
+        let persist = {
+            let entry = nodes
+                .get_mut(node_id)
+                .ok_or(NodeError::UnknownNode(node_id.to_string()))?;
+            entry.last_heartbeat = Instant::now();
+            entry.slots_used = slots_used;
+            entry.last_seen = entry.enrolled_at.map(|_| now);
+            if entry.status == NodeStatus::Offline {
+                entry.status = NodeStatus::Online;
+            }
+            let persist = entry.enrolled_at.is_some()
+                && now.saturating_sub(entry.persisted_last_seen) >= 60;
+            if persist {
+                entry.persisted_last_seen = now;
+            }
+            persist
+        };
+        if persist {
+            let _ = self.persist_inventory(&nodes);
         }
         Ok(())
     }
@@ -219,10 +443,35 @@ impl NodeRegistry {
         Ok(())
     }
 
-    /// Remove a node from the registry (bye or disconnect).
+    /// Remove a node identity from the registry (operator action/tests).
     pub async fn deregister(&self, node_id: &str) {
-        self.nodes.write().await.remove(node_id);
+        let mut nodes = self.nodes.write().await;
+        nodes.remove(node_id);
+        let _ = self.persist_inventory(&nodes);
         self.roles.write().await.remove(node_id);
+    }
+
+    /// Tear down only the registration owned by `epoch`. Durable enrolled
+    /// identity remains visible offline; a stale epoch is a no-op.
+    pub async fn deregister_connection(&self, node_id: &str, epoch: u64) -> bool {
+        let mut nodes = self.nodes.write().await;
+        let Some(entry) = nodes.get(node_id) else {
+            return false;
+        };
+        if entry.connection_epoch != Some(epoch) {
+            return false;
+        }
+        if entry.enrolled_at.is_some() {
+            let entry = nodes.get_mut(node_id).unwrap();
+            entry.status = NodeStatus::Offline;
+            entry.connection_epoch = None;
+            entry.slots_used = 0;
+        } else {
+            nodes.remove(node_id);
+        }
+        let _ = self.persist_inventory(&nodes);
+        self.roles.write().await.remove(node_id);
+        true
     }
 
     pub async fn set_roles(&self, node_id: &str, roles: Vec<olympus_proto::frames::NodeRole>) {
@@ -245,8 +494,8 @@ impl NodeRegistry {
 
         // Evict nodes that have been offline too long.
         nodes.retain(|_, e| {
-            if e.local {
-                return true; // local node never evicted
+            if e.local || e.enrolled_at.is_some() {
+                return true; // durable identity remains visible while offline
             }
             let elapsed = now.duration_since(e.last_heartbeat);
             if elapsed > EVICTION_TIMEOUT {
@@ -283,6 +532,9 @@ impl NodeRegistry {
                 transport: e.transport,
                 iroh_node_id: e.iroh_node_id.clone(),
                 agents: e.agents.clone(),
+                enrolled_at: e.enrolled_at,
+                last_seen: e.last_seen,
+                last_version: e.version.clone(),
             })
             .collect()
     }
@@ -302,6 +554,9 @@ impl NodeRegistry {
             transport: e.transport,
             iroh_node_id: e.iroh_node_id.clone(),
             agents: e.agents.clone(),
+            enrolled_at: e.enrolled_at,
+            last_seen: e.last_seen,
+            last_version: e.version.clone(),
         })
     }
 
@@ -462,6 +717,8 @@ pub async fn handle_envoy_conn<R, W>(
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let mut lines = BufReader::new(reader).lines();
+    let epoch = envoy_conns.allocate_epoch();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let mut connected_node: Option<String> = None;
     // The EnvoyConnection (set on hello). All writes to the envoy go through
     // its buffered writer. For legacy v1 connections, we fall back to writing
@@ -470,7 +727,11 @@ pub async fn handle_envoy_conn<R, W>(
     let mut legacy_writer: Option<crate::server::envoy_conn::BoxedWriter> = Some(Box::new(writer));
 
     loop {
-        let line = match lines.next_line().await {
+        let next = tokio::select! {
+            line = lines.next_line() => line,
+            _ = shutdown_rx.changed() => break,
+        };
+        let line = match next {
             Ok(Some(l)) => l,
             Ok(None) => break, // EOF — peer disconnected
             Err(_) => break,   // read error
@@ -502,6 +763,8 @@ pub async fn handle_envoy_conn<R, W>(
                         &mut connected_node,
                         transport,
                         peer_iroh_id.clone(),
+                        epoch,
+                        shutdown_tx.clone(),
                     )
                     .await;
                     match new_conn {
@@ -513,7 +776,16 @@ pub async fn handle_envoy_conn<R, W>(
                     continue;
                 }
             }
-            let outcome = handle_envoy_frame(frame, &registry, &envoy_conns, &mut conn).await;
+            let outcome = handle_envoy_frame(
+                frame,
+                &registry,
+                &envoy_conns,
+                &mut conn,
+                transport,
+                peer_iroh_id.clone(),
+                epoch,
+            )
+            .await;
             if outcome == FrameOutcome::Disconnect {
                 break;
             }
@@ -546,18 +818,21 @@ pub async fn handle_envoy_conn<R, W>(
                 version,
             } => {
                 tracing::info!(node = %node_id, hostname = %hostname, "node registered (legacy v1)");
-                registry
-                    .register(
+                if !registry
+                    .register_connection(
                         &node_id,
                         &hostname,
                         slots_total,
                         &version,
-                        false,
                         transport,
                         peer_iroh_id.clone(),
                         Vec::new(),
+                        epoch,
                     )
-                    .await;
+                    .await
+                {
+                    break;
+                }
                 connected_node = Some(node_id);
                 NodeResponse::Welcome { status: "ok" }
             }
@@ -575,7 +850,7 @@ pub async fn handle_envoy_conn<R, W>(
             }
             NodeMessage::Bye { node_id } => {
                 tracing::info!(node = %node_id, "node deregistered (bye)");
-                registry.deregister(&node_id).await;
+                registry.deregister_connection(&node_id, epoch).await;
                 if let Some(ref mut w) = legacy_writer {
                     let resp = NodeResponse::Ack { status: "ok" };
                     let _ = w
@@ -598,9 +873,9 @@ pub async fn handle_envoy_conn<R, W>(
     // Connection closed — deregister the node if it was registered.
     if let Some(node_id) = connected_node {
         tracing::info!(node = %node_id, "node disconnected, deregistering");
-        registry.deregister(&node_id).await;
+        registry.deregister_connection(&node_id, epoch).await;
         // Fail all pending requests on this envoy's connection and remove it.
-        if let Some(conn) = envoy_conns.remove(&node_id).await {
+        if let Some(conn) = envoy_conns.remove_epoch(&node_id, epoch).await {
             conn.fail_all().await;
         }
     }
@@ -631,6 +906,8 @@ async fn handle_envoy_hello(
     connected_node: &mut Option<String>,
     transport: NodeTransport,
     peer_iroh_id: Option<String>,
+    epoch: u64,
+    shutdown: tokio::sync::watch::Sender<bool>,
 ) -> HelloOutcome {
     use olympus_proto::frames::EnvoyFrame;
     use olympus_proto::version::PROTOCOL_VERSION;
@@ -683,22 +960,30 @@ async fn handle_envoy_hello(
         build_version.semver.clone()
     };
 
-    registry
-        .register(
+    if !registry
+        .register_connection(
             &node_id,
             &hostname,
             slots_total,
             &version_str,
-            false,
             transport,
             peer_iroh_id,
             agents_parsed,
+            epoch,
         )
-        .await;
+        .await
+    {
+        return HelloOutcome::Rejected;
+    }
     registry.set_roles(&node_id, roles).await;
 
-    // Create the EnvoyConnection and store it for RemoteRuntime.
-    let conn = envoy_conns.insert(&node_id, writer).await;
+    // Publish the new epoch before closing the superseded connection.
+    let (conn, old) = envoy_conns
+        .insert_epoch(&node_id, writer, epoch, shutdown)
+        .await;
+    if let Some(old) = old {
+        old.close().await;
+    }
     for runtime in runtimes {
         let watermark = match conn.watermark(&runtime.session_id) {
             Ok(Some(seq)) => seq,
@@ -723,34 +1008,105 @@ async fn handle_envoy_hello(
     HelloOutcome::Accepted(conn)
 }
 
+async fn reregister_hello(
+    frame: olympus_proto::frames::EnvoyFrame,
+    registry: &NodeRegistry,
+    transport: NodeTransport,
+    peer_iroh_id: Option<String>,
+    epoch: u64,
+) -> bool {
+    use olympus_proto::frames::EnvoyFrame;
+    use olympus_proto::version::PROTOCOL_VERSION;
+
+    let EnvoyFrame::Hello {
+        node_id,
+        hostname,
+        slots_total,
+        build_version,
+        protocol_version,
+        agents,
+        roles,
+        ..
+    } = frame
+    else {
+        return false;
+    };
+    if protocol_version != PROTOCOL_VERSION {
+        return false;
+    }
+    let version = if build_version.git_sha.is_empty() {
+        build_version.semver
+    } else {
+        format!("{} ({})", build_version.semver, build_version.git_sha)
+    };
+    let agents = agents
+        .into_iter()
+        .map(|a| AgentInfo {
+            name: a.name,
+            command: a.command,
+            version: a.version,
+            available: a.available,
+        })
+        .collect();
+    let accepted = registry
+        .register_connection(
+            &node_id,
+            &hostname,
+            slots_total,
+            &version,
+            transport,
+            peer_iroh_id,
+            agents,
+            epoch,
+        )
+        .await;
+    if accepted {
+        registry.set_roles(&node_id, roles).await;
+    }
+    accepted
+}
+
 /// Dispatch a parsed EnvoyFrame (ADR 0008 v2 protocol) — all variants except
-/// Hello (handled by handle_envoy_hello). The `conn` is set after a successful
-/// hello; Resp and Event frames route through it.
+/// the initial Hello. Resp and Event frames route through `conn`.
 async fn handle_envoy_frame(
     frame: olympus_proto::frames::EnvoyFrame,
     registry: &NodeRegistry,
     envoy_conns: &crate::server::envoy_conn::EnvoyConnections,
     conn: &mut Option<Arc<crate::server::envoy_conn::EnvoyConnection>>,
+    transport: NodeTransport,
+    peer_iroh_id: Option<String>,
+    epoch: u64,
 ) -> FrameOutcome {
     use olympus_proto::frames::EnvoyFrame;
 
     match frame {
-        EnvoyFrame::Hello { .. } => {
-            // A second hello on the same connection is a no-op (the first was
-            // handled by handle_envoy_hello in the read loop).
+        hello @ EnvoyFrame::Hello { .. } => {
+            if !reregister_hello(hello, registry, transport, peer_iroh_id, epoch).await {
+                return FrameOutcome::Disconnect;
+            }
         }
         EnvoyFrame::Heartbeat {
             node_id,
             slots_used,
         } => {
-            if let Err(e) = registry.heartbeat(&node_id, slots_used).await {
-                tracing::warn!(node = %node_id, error = %e, "heartbeat for unknown node");
+            let reply = match registry.heartbeat(&node_id, slots_used).await {
+                Ok(()) => olympus_proto::frames::HallFrame::HeartbeatAck,
+                Err(e) => {
+                    tracing::warn!(node = %node_id, error = %e, "heartbeat for unknown node; requesting registration");
+                    olympus_proto::frames::HallFrame::ReRegister
+                }
+            };
+            let Some(conn) = conn else {
+                return FrameOutcome::Disconnect;
+            };
+            if conn.send_request(reply).await.is_err() {
+                return FrameOutcome::Disconnect;
             }
         }
         EnvoyFrame::Bye { node_id } => {
             tracing::info!(node = %node_id, "envoy deregistered (bye)");
-            registry.deregister(&node_id).await;
-            if let Some(conn) = envoy_conns.remove(&node_id).await {
+            registry.deregister_connection(&node_id, epoch).await;
+            if let Some(conn) = envoy_conns.remove_epoch(&node_id, epoch).await {
                 conn.fail_all().await;
             }
             return FrameOutcome::Disconnect;

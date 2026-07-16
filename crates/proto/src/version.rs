@@ -9,8 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Frame-schema compatibility version. v1 was the hello/heartbeat/bye-only
-/// node protocol; v2 adds the session frame families (ADR 0008 §1).
-pub const PROTOCOL_VERSION: u32 = 2;
+/// node protocol; v2 adds session frames; v3 adds heartbeat acknowledgement
+/// and explicit re-registration repair.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Build identity: which build of the binary is speaking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
