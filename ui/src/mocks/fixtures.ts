@@ -349,6 +349,10 @@ export const AGENTS_LIST: AgentInfo[] = [
   { id: "codex", provider: "openai-codex", model: "codex-cli 0.133.0", kind: "codex", isDefault: false },
 ];
 
+NODES[0].agents = AGENTS_LIST.slice(0, 4);
+NODES[1].agents = [AGENTS_LIST[0], AGENTS_LIST[5]];
+NODES[2].agents = [AGENTS_LIST[3]];
+
 export const USAGE_BY_RANGE: Record<UsageRange, UsageResponse> = {
   "24h": {
     range: "24h",

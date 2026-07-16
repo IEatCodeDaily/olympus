@@ -21,6 +21,7 @@ import type {
   SearchResponse,
   ModelsResponse,
   AgentsResponse,
+  AgentsCatalogResponse,
   HealthResponse,
   WorkflowsResponse,
   ServerFrame,
@@ -106,6 +107,11 @@ export const handlers = [
       agent?: string;
       node?: string;
     };
+    if (body.node) {
+      const target = NODES.find((node) => node.nodeId === body.node);
+      if (!target) return HttpResponse.json({ error: "unknown_node" }, { status: 404 });
+      if (target.status !== "online") return HttpResponse.json({ error: "node_unavailable" }, { status: 409 });
+    }
     const now = Date.now() / 1000;
     const id = `oly-draft-${Math.floor(now * 1000)}`;
     const draft = {
@@ -297,6 +303,9 @@ export const handlers = [
   // GET /api/agents
   http.get("http://127.0.0.1:8787/api/agents", () => {
     return HttpResponse.json<AgentsResponse>({ agents: AGENTS_LIST });
+  }),
+  http.get("http://127.0.0.1:8787/api/agents/catalog", () => {
+    return HttpResponse.json<AgentsCatalogResponse>({ nodes: NODES });
   }),
 
   // GET /api/usage

@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/models", get(models))
         .route("/api/agents", get(list_agents_handler))
+        .route("/api/agents/catalog", get(agent_catalog_handler))
         .route("/api/agents/{id}/models", get(agent_models))
 }
 
@@ -38,7 +39,12 @@ pub(crate) async fn agent_models(
 
 /// GET /api/agents — flat list of agents across all fleet nodes (deduped by id).
 /// Sourced from the node registry (each node's envoy-reported agents), NOT a
-/// live control-plane probe. For per-node scoping use /api/nodes/:id/agents.
+/// live control-plane probe. For per-node scoping use /api/agents/catalog.
 pub(crate) async fn list_agents_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({ "agents": state.nodes.all_agents().await }))
+}
+
+/// GET /api/agents/catalog — per-node agent availability for node-aware session creation.
+pub(crate) async fn agent_catalog_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(json!({ "nodes": state.nodes.agent_catalog().await }))
 }

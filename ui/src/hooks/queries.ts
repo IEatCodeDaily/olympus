@@ -5,6 +5,7 @@ import {
   fetchSession,
   fetchMessages,
   fetchAgents,
+  fetchAgentCatalog,
   fetchNodes,
   fetchModels,
   healthCheck,
@@ -25,6 +26,7 @@ export const qk = {
   session: (id: string) => ["session", id] as const,
   messages: (id: string) => ["messages", id] as const,
   agents: () => ["agents"] as const,
+  agentCatalog: () => ["agents", "catalog"] as const,
   models: (agentId?: string | null) => ["models", agentId ?? "all"] as const,
   health: () => ["health"] as const,
   cards: (params?: Record<string, unknown>) => ["cards", params] as const,
@@ -81,6 +83,16 @@ export function useMessages(sessionId: string | null) {
 /** Agents list. */
 export function useAgents() {
   return useQuery({ queryKey: qk.agents(), queryFn: fetchAgents, staleTime: 60_000 });
+}
+
+/** Per-node agent availability for new-session routing. */
+export function useAgentCatalog() {
+  return useQuery({
+    queryKey: qk.agentCatalog(),
+    queryFn: fetchAgentCatalog,
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
 }
 
 /**

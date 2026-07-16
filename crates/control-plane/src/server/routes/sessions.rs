@@ -437,6 +437,31 @@ pub(crate) async fn create_session(
     body: Option<Json<CreateSessionBody>>,
 ) -> Response {
     let body = body.map(|Json(b)| b).unwrap_or_default();
+    if let Some(node_id) = body.node.as_deref() {
+        match state.nodes.get(node_id).await {
+            Some(node) if node.status == crate::node::NodeStatus::Online => {}
+            Some(node) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "node_unavailable",
+                        "message": format!("Node {node_id} is {:?}; choose an online node", node.status),
+                    })),
+                )
+                    .into_response();
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "error": "unknown_node",
+                        "message": format!("Unknown node {node_id}"),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
     let spec = crate::server::bridge_mgr::RuntimeSpec {
         agent: body.agent.clone(),
         node: body.node.clone(),

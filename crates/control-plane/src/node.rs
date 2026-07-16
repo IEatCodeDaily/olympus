@@ -195,6 +195,12 @@ impl NodeRegistry {
         seen.into_values().collect()
     }
 
+    /// Per-node agent catalog for node-aware session creation. Unlike
+    /// `all_agents`, this preserves duplicate agent ids on different nodes.
+    pub async fn agent_catalog(&self) -> Vec<NodeInfo> {
+        self.list().await
+    }
+
     /// Update a node's heartbeat and slot usage.
     pub async fn heartbeat(&self, node_id: &str, slots_used: u32) -> Result<(), NodeError> {
         let mut nodes = self.nodes.write().await;
@@ -943,6 +949,60 @@ pub async fn run_iroh_accept_loop(
 mod tests {
     use super::*;
     use tokio::time::sleep;
+
+    fn test_agent(id: &str) -> AgentInfo {
+        AgentInfo {
+            id: id.into(),
+            provider: Some("test-provider".into()),
+            model: Some("test-model".into()),
+            version: None,
+            kind: "hermes".into(),
+            is_default: id == "default",
+            ready: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_catalog_preserves_duplicate_agent_ids_per_node() {
+        let reg = NodeRegistry::new();
+        reg.register(
+            "local",
+            "localhost",
+            4,
+            "0.1",
+            true,
+            NodeTransport::Local,
+            None,
+            vec![test_agent("default")],
+        )
+        .await;
+        reg.register(
+            "fx-zephyrus",
+            "zephyrus",
+            4,
+            "0.1",
+            false,
+            NodeTransport::Iroh,
+            None,
+            vec![test_agent("default"), test_agent("codex")],
+        )
+        .await;
+
+        let catalog = reg.agent_catalog().await;
+        let pairs: Vec<_> = catalog
+            .iter()
+            .flat_map(|node| {
+                node.agents
+                    .iter()
+                    .map(move |agent| format!("{}:{}", node.node_id, agent.id))
+            })
+            .collect();
+
+        assert!(pairs.contains(&"local:default".to_string()));
+        assert!(pairs.contains(&"fx-zephyrus:default".to_string()));
+        assert!(pairs.contains(&"fx-zephyrus:codex".to_string()));
+        assert_eq!(reg.all_agents().await.len(), 2);
+    }
 
     #[tokio::test]
     async fn register_and_list() {

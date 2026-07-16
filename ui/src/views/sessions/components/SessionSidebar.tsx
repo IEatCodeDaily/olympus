@@ -68,10 +68,10 @@ export function SessionSidebar({
   }, []);
 
   const handlePickAgent = useCallback(
-    async (agentId: string) => {
+    async (agentId: string, nodeId: string) => {
       setPickerOpen(false);
       try {
-        const session = await createSession({ agent: agentId });
+        const session = await createSession({ agent: agentId, node: nodeId });
         if (session?.id) {
           void navigate({
             to: "/sessions/$sessionId",

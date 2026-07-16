@@ -946,6 +946,19 @@ async fn post_sessions_creates_managed_olympus_session() {
 async fn post_sessions_with_agent_binds_it_at_creation() {
     // POST /api/sessions {agent, node} → the draft carries the binding.
     let (state, _d) = test_state();
+    state
+        .nodes
+        .register(
+            "local",
+            "localhost",
+            4,
+            "0.1",
+            true,
+            crate::node::NodeTransport::Local,
+            None,
+            vec![],
+        )
+        .await;
     let app = build_router(state);
     let res = app
         .oneshot(
