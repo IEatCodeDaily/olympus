@@ -124,6 +124,16 @@ Pre-built release binaries are not yet available (future CI work).
 MSG
         die "cargo not found — cannot build olympus-envoy" 2
     fi
+
+    # tmux: required for persistent operator terminals (ADR 0021 cockpit).
+    # Without it the envoy falls back to bare PTY (non-persistent) with a
+    # visible badge, so this is a warning, not a hard failure.
+    if ! command -v tmux &>/dev/null; then
+        log "WARNING: tmux not found — operator terminals will be non-persistent."
+        log "  Install tmux for persistent sessions:"
+        log "    apt install tmux    # Debian/Ubuntu"
+        log "    dnf install tmux    # Fedora/RHEL"
+    fi
 }
 
 build_and_install() {

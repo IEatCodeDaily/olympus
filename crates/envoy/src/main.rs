@@ -668,7 +668,7 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
                 .open(&terminal_id, cols, rows, cwd.as_deref())
                 .await;
             match outcome {
-                Ok(()) => conn.send_resp(req_id, true, None).await,
+                Ok(_) => conn.send_resp(req_id, true, None).await,
                 Err(e) => conn.send_resp(req_id, false, Some(&format!("{e:#}"))).await,
             }
         }
