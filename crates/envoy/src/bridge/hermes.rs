@@ -140,6 +140,23 @@ impl HermesAgentRuntime {
         Ok(client)
     }
 
+    async fn start_once(&self, session_id: Option<&str>) -> Result<()> {
+        let client = self.spawn_client().await?;
+        client.initialize().await?;
+        match session_id {
+            Some(session_id) => {
+                client
+                    .session_resume(session_id, &self.config.cwd, &self.config.mcp_servers)
+                    .await
+            }
+            None => {
+                client
+                    .session_new(&self.config.cwd, &self.config.mcp_servers)
+                    .await
+            }
+        }
+    }
+
     async fn stderr_tail(&self) -> String {
         let buffer = self
             .state
@@ -176,14 +193,18 @@ impl HermesAgentRuntime {
         Ok(())
     }
 
-    async fn fail_start(&self, error: anyhow::Error) -> anyhow::Error {
+    async fn failure_report(&self, error: anyhow::Error) -> String {
         let tail = self.stderr_tail().await;
         let cleanup_error = self.cleanup_runtime().await.err();
         let mut message = format!("{error:#}\n{}", diagnostic_tail(&tail));
         if let Some(cleanup_error) = cleanup_error {
             message.push_str(&format!("\ncleanup failed: {cleanup_error:#}"));
         }
-        anyhow::anyhow!(message)
+        message
+    }
+
+    async fn fail_start(&self, error: anyhow::Error) -> anyhow::Error {
+        anyhow::anyhow!(self.failure_report(error).await)
     }
 }
 
@@ -198,39 +219,32 @@ fn diagnostic_tail(tail: &str) -> String {
 #[async_trait::async_trait]
 impl AgentRuntime for HermesAgentRuntime {
     async fn start(&self, session_id: Option<&str>) -> Result<()> {
-        let handshake = async {
-            let client = self.spawn_client().await?;
-            client.initialize().await?;
-            match session_id {
-                Some(session_id) => {
-                    client
-                        .session_resume(session_id, &self.config.cwd, &self.config.mcp_servers)
-                        .await?
+        let mut failures = Vec::with_capacity(2);
+        for attempt in 1..=2 {
+            match tokio::time::timeout(
+                Duration::from_secs(self.config.start_timeout_secs),
+                self.start_once(session_id),
+            )
+            .await
+            {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(error)) => return Err(self.fail_start(error).await),
+                Err(_) => {
+                    let error = anyhow::anyhow!(
+                        "timed out after {}s waiting for ACP initialize/session response",
+                        self.config.start_timeout_secs
+                    );
+                    failures.push(format!(
+                        "attempt {attempt}:\n{}",
+                        self.failure_report(error).await
+                    ));
                 }
-                None => {
-                    client
-                        .session_new(&self.config.cwd, &self.config.mcp_servers)
-                        .await?
-                }
-            }
-            Ok(())
-        };
-        match tokio::time::timeout(
-            Duration::from_secs(self.config.start_timeout_secs),
-            handshake,
-        )
-        .await
-        {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(self.fail_start(error).await),
-            Err(_) => {
-                let error = anyhow::anyhow!(
-                    "timed out after {}s waiting for ACP initialize/session response",
-                    self.config.start_timeout_secs
-                );
-                Err(self.fail_start(error).await)
             }
         }
+        anyhow::bail!(
+            "ACP startup timed out after 2 attempts with fresh processes\n{}",
+            failures.join("\n")
+        )
     }
 
     async fn fork_session(&self, session_id: &str) -> Result<()> {
@@ -408,7 +422,7 @@ mod tests {
             ..Default::default()
         });
 
-        let outcome = tokio::time::timeout(Duration::from_secs(3), runtime.start(None)).await;
+        let outcome = tokio::time::timeout(Duration::from_secs(5), runtime.start(None)).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let pids = std::fs::read_to_string(&pidfile)
             .unwrap_or_default()
