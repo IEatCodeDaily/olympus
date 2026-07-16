@@ -19,6 +19,10 @@ import { getCockpitTabKind, listCockpitTabKinds, UnknownKindPane } from "./tabs"
 const MIN_W = 480;
 const MIN_H = 280;
 
+function isInteractiveTitlebarTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("button,a,input,select,textarea,[role='button'],[role='menuitem'],[data-cockpit-interactive]"));
+}
+
 export function Cockpit() {
   const { open, geometry, tabs, activeTabId, setGeometry, closeTab, setActiveTab, toggle } =
     useCockpit();
@@ -43,6 +47,7 @@ export function Cockpit() {
   );
 
   const startDrag = (mode: "move" | "resize") => (e: React.PointerEvent) => {
+    if (mode === "move" && isInteractiveTitlebarTarget(e.target)) return;
     e.preventDefault();
     dragRef.current = { mode, sx: e.clientX, sy: e.clientY, g: geometry };
     const up = () => {
@@ -74,7 +79,6 @@ export function Cockpit() {
               key={t.id}
               type="button"
               className={`cockpit-tab ${t.id === active?.id ? "on" : ""}`}
-              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setActiveTab(t.id)}
               title={t.title}
             >
@@ -100,7 +104,6 @@ export function Cockpit() {
           className="cockpit-icobtn cockpit-hide"
           title="Hide cockpit (tabs stay open)"
           aria-label="Hide cockpit"
-          onPointerDown={(e) => e.stopPropagation()}
           onClick={toggle}
         >
           <Icon name="x" size={13} />
@@ -133,20 +136,37 @@ export function Cockpit() {
   );
 }
 
-/** The `+` button. CLICK toggles the menu (hover was finicky: the pointer had
- *  to cross a dead gap to reach the popup and the target rows were small —
- *  see the cockpit styling review). The menu lists tab kinds; kinds that need
- *  a node (terminal, editor) expand into the node list in a second step. */
 function NewTabButton({ inline }: { inline?: boolean }) {
   const addTab = useCockpit((s) => s.addTab);
-  const [menu, setMenu] = useState<"closed" | "kinds" | { pickNode: string }>("closed");
+  const [open, setOpen] = useState(false);
+  const [nodeKind, setNodeKind] = useState<string | null>(null);
   const [targets, setTargets] = useState<TerminalTarget[] | null>(null);
   const rootRef = useRef<HTMLSpanElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load node targets when a node-picking step opens.
+  const clearCloseTimer = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const closeMenu = () => {
+    clearCloseTimer();
+    setOpen(false);
+    setNodeKind(null);
+  };
+  const scheduleCloseSubmenu = () => {
+    clearCloseTimer();
+    closeTimer.current = setTimeout(() => setNodeKind(null), 180);
+  };
+
+  useEffect(() => () => clearCloseTimer(), []);
+
+  // Load node targets when a node submenu opens.
   useEffect(() => {
-    if (typeof menu !== "object") return;
+    if (!nodeKind) return;
     let alive = true;
+    setTargets(null);
     fetchTerminalTargets()
       .then((t) => {
         if (alive) setTargets(t);
@@ -157,16 +177,16 @@ function NewTabButton({ inline }: { inline?: boolean }) {
     return () => {
       alive = false;
     };
-  }, [menu]);
+  }, [nodeKind]);
 
   // Close on click-outside / Escape.
   useEffect(() => {
-    if (menu === "closed") return;
+    if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setMenu("closed");
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) closeMenu();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu("closed");
+      if (e.key === "Escape") closeMenu();
     };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
@@ -174,65 +194,69 @@ function NewTabButton({ inline }: { inline?: boolean }) {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menu]);
+  }, [open]);
 
   const openKind = (kind: string) => {
     const def = getCockpitTabKind(kind);
     if (!def) return;
     if (def.needsNode) {
-      setTargets(null);
-      setMenu({ pickNode: kind });
+      clearCloseTimer();
+      setNodeKind(kind);
     } else {
       addTab({ kind, label: def.label });
-      setMenu("closed");
+      closeMenu();
     }
   };
 
   const spawnOnNode = (kind: string, target: TerminalTarget) => {
     addTab({ kind, node: target.id, label: target.label });
-    setMenu("closed");
+    closeMenu();
   };
 
   return (
-    <span className="cockpit-newtab" ref={rootRef} onPointerDown={(e) => e.stopPropagation()}>
+    <span className="cockpit-newtab" ref={rootRef} data-cockpit-interactive onMouseEnter={clearCloseTimer} onMouseLeave={scheduleCloseSubmenu}>
       <button
         type="button"
         className={inline ? "cockpit-newbtn-inline" : "cockpit-icobtn"}
         title="New tab"
         aria-haspopup="menu"
-        aria-expanded={menu !== "closed"}
-        onClick={() => setMenu(menu === "closed" ? "kinds" : "closed")}
+        aria-expanded={open}
+        onClick={() => {
+          clearCloseTimer();
+          setOpen((value) => !value);
+        }}
       >
         <Icon name="plus" size={inline ? 13 : 12} /> {inline ? "New tab" : null}
       </button>
-      {menu !== "closed" && (
+      {open && (
         <div className="cockpit-menu menu on" role="menu">
-          {menu === "kinds" ? (
-            <>
-              <div className="cockpit-menu-head">New tab</div>
-              {listCockpitTabKinds().map((k) => (
-                <button
-                  key={k.kind}
-                  type="button"
-                  role="menuitem"
-                  className="cockpit-menu-item"
-                  onClick={() => openKind(k.kind)}
-                >
-                  <Icon name={k.icon} size={12} />
-                  <span>{k.label}</span>
-                  {k.needsNode && <Icon name="chevron-right" size={11} />}
-                </button>
-              ))}
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="cockpit-menu-head cockpit-menu-back"
-                onClick={() => setMenu("kinds")}
-              >
-                <Icon name="chevron-left" size={11} /> {getCockpitTabKind(menu.pickNode)?.label} on…
-              </button>
+          <div className="cockpit-menu-head">New tab</div>
+          {listCockpitTabKinds().map((k) => (
+            <button
+              key={k.kind}
+              type="button"
+              role="menuitem"
+              aria-haspopup={k.needsNode ? "menu" : undefined}
+              aria-expanded={k.needsNode ? nodeKind === k.kind : undefined}
+              className="cockpit-menu-item"
+              onMouseEnter={() => (k.needsNode ? openKind(k.kind) : setNodeKind(null))}
+              onFocus={() => (k.needsNode ? openKind(k.kind) : setNodeKind(null))}
+              onClick={() => openKind(k.kind)}
+              onKeyDown={(e) => {
+                if (k.needsNode && (e.key === "Enter" || e.key === "ArrowRight")) {
+                  e.preventDefault();
+                  openKind(k.kind);
+                }
+              }}
+            >
+              <Icon name={k.icon} size={12} />
+              <span>{k.label}</span>
+              {k.needsNode && <Icon name="chevron-right" size={11} />}
+            </button>
+          ))}
+          {nodeKind && (
+            <div className="cockpit-submenu menu on" role="menu" onMouseEnter={clearCloseTimer}>
+              <div className="cockpit-menu-head">{getCockpitTabKind(nodeKind)?.label} on…</div>
               {targets === null && <div className="cockpit-menu-item is-loading">loading…</div>}
               {targets?.map((t) => (
                 <button
@@ -240,14 +264,14 @@ function NewTabButton({ inline }: { inline?: boolean }) {
                   type="button"
                   role="menuitem"
                   className="cockpit-menu-item"
-                  onClick={() => spawnOnNode(menu.pickNode, t)}
+                  onClick={() => spawnOnNode(nodeKind, t)}
                 >
                   <Icon name="server" size={12} />
                   <span>{t.label}</span>
                   {t.default && <span className="cockpit-menu-default">default</span>}
                 </button>
               ))}
-            </>
+            </div>
           )}
         </div>
       )}
