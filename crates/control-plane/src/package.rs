@@ -564,4 +564,125 @@ state_namespaces = ["bad://acme"]
         let err = parsed.validate_schema().unwrap_err().to_string();
         assert!(err.contains("invalid plugin state namespace"), "got: {err}");
     }
+
+    /// validate_compatibility must reject mismatched olympus_api and non-matching platforms.
+    #[test]
+    fn compatibility_rejects_incompatible_api_and_platform() {
+        struct Case {
+            api: &'static str,
+            platform: &'static str,
+            ok: bool,
+        }
+        let cases = [
+            Case {
+                api: "0.1",
+                platform: "linux",
+                ok: true,
+            },
+            Case {
+                api: "*",
+                platform: "linux",
+                ok: true,
+            },
+            Case {
+                api: "^0.1",
+                platform: "linux",
+                ok: true,
+            },
+            Case {
+                api: "99.0",
+                platform: "linux",
+                ok: false,
+            },
+            Case {
+                api: "0.1",
+                platform: "windows",
+                ok: false,
+            },
+        ];
+        for case in &cases {
+            let toml = format!(
+                r#"
+[package]
+id = "acme.compat"
+name = "Acme compat"
+version = "1.0.0"
+publisher = "acme"
+license = "MIT"
+[compatibility]
+olympus_api = "{api}"
+platforms = ["linux"]
+"#,
+                api = case.api,
+            );
+            let pkg = PackageManifest::parse_toml(&toml).expect("parse");
+            let result = pkg.validate_compatibility("0.1", case.platform);
+            assert_eq!(
+                result.is_ok(),
+                case.ok,
+                "api={} platform={} expected ok={}: {:?}",
+                case.api,
+                case.platform,
+                case.ok,
+                result
+            );
+        }
+    }
+
+    /// validate_install returns dev-unsigned trust and does NOT auto-grant or activate.
+    #[test]
+    fn install_returns_dev_unsigned_without_granting_or_activating() {
+        let pkg = manifest("");
+        let report = validate_install(&pkg, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(report.trust, DEV_UNSIGNED);
+        // requested capabilities are surfaced but NOT granted — callers must check separately.
+        assert!(report.requested_capabilities.contains("job.run"));
+    }
+
+    /// Unsupported extension classes are correctly named by unsupported_classes().
+    #[test]
+    fn unsupported_classes_enumerated_correctly() {
+        // workflow_template and activity_provider are v1-supported; storage_provider is not.
+        let toml = r#"
+[package]
+id = "acme.mixed"
+name = "Acme mixed"
+version = "0.1.0"
+publisher = "acme"
+license = "MIT"
+[compatibility]
+olympus_api = "*"
+
+[[contributions.session_tool_provider]]
+id = "mcp.a"
+[[contributions.skill]]
+id = "skill.b"
+[[contributions.workflow_template]]
+id = "wf.c"
+[[contributions.activity_provider]]
+id = "act.d"
+[[contributions.storage_provider]]
+id = "store.e"
+[[contributions.trigger_provider]]
+id = "trig.f"
+"#;
+        let pkg = PackageManifest::parse_toml(toml).expect("parse");
+        let unsupported = pkg.unsupported_classes();
+        assert!(unsupported.contains(&"storage_provider"), "{unsupported:?}");
+        assert!(unsupported.contains(&"trigger_provider"), "{unsupported:?}");
+        // v1-supported classes must not appear.
+        assert!(
+            !unsupported.contains(&"session_tool_provider"),
+            "{unsupported:?}"
+        );
+        assert!(!unsupported.contains(&"skill"), "{unsupported:?}");
+        assert!(
+            !unsupported.contains(&"workflow_template"),
+            "{unsupported:?}"
+        );
+        assert!(
+            !unsupported.contains(&"activity_provider"),
+            "{unsupported:?}"
+        );
+    }
 }
