@@ -41,6 +41,7 @@
   --panel-pad-lg:   16px;    /* dialog / large panel interior */
   --nav-pad-y:      5px;     /* nav item (.navitem) */
   --nav-pad-x:      10px;
+  --srow-gutter:    38px;    /* session-row right column: time (idle) & pin+archive (hover) share this width so neither collides with the title */
   --gap-page:       16px;    /* header → content */
 
   /* Reading measure — transcript column + message caps */

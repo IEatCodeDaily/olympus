@@ -119,31 +119,37 @@ button {
 .sec-head .sp { flex: 1; }
 .sec-head .ct { font-family: var(--font-mono); font-size: var(--fs-10); color: var(--faint); }
 .sec-content { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-4) var(--space-4); }
-/* Session rows are the Sessions surface's vertical tab list. */
-.srow { display: flex; align-items: stretch; border-radius: var(--radius); transition: background var(--dur) var(--ease); position: relative; }
+/* Session rows are the Sessions surface's vertical tab list.
+   Layout mirrors .navitem rhythm: icon column + --space-4 gap so titles line up
+   with navitem labels; padding-x = --nav-pad-x so both icon columns share an edge. */
+.srow { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--nav-pad-x); border-radius: var(--radius); transition: background var(--dur) var(--ease); position: relative; }
+/* Highlight-INTENSITY ladder (doctrine: intensity only — no edge bars, no badges):
+   hover (transient pointer feedback) → open (--silver-wash) → focused/active (--accent-wash-2). */
 .srow:hover { background: var(--hover); }
 .srow.on, .srow[data-open="true"] { background: var(--silver-wash); }
-/* Focused = stronger highlight INTENSITY (doctrine: no edge bars, no badges). */
 .srow.focused, .srow[data-focused="true"] { background: var(--accent-wash-2); }
 .srow.focused .srow-title, .srow[data-focused="true"] .srow-title { color: var(--silver); }
-.srow-main { display: flex; min-width: 0; flex: 1; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); text-align: left; color: inherit; }
-.srow-icon { display: flex; align-items: center; justify-content: center; width: 12px; flex-shrink: 0; }
+/* 14px mirrors the nav icon glyph (Icon size={14}) so idle & live rows keep a
+   stable title column aligned with navitem labels. */
+.srow-icon { display: flex; align-items: center; justify-content: center; width: 14px; flex-shrink: 0; }
 .srow-spinner { width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: var(--radius-full); animation: olympus-spin var(--loop-spin) linear infinite; }
 .srow-dot.done { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--ok); }
 .srow-dot.needs-input { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--amber); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 25%, transparent); }
 .srow-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: var(--space-1); }
 .srow-title { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srow-meta { overflow: hidden; color: var(--faint); font-family: var(--font-mono); font-size: var(--fs-9); line-height: var(--lh-tight); text-overflow: ellipsis; white-space: nowrap; }
-.srow-time { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); flex-shrink: 0; }
-.srow-pane-mark { position: absolute; right: var(--space-4); bottom: var(--space-1); color: var(--faint); font-family: var(--font-mono); font-size: var(--fs-8); letter-spacing: var(--tracking-wide); }
-.srow-actions { display: none; align-items: center; gap: 1px; position: absolute; z-index: 2; right: var(--space-2); top: 50%; transform: translateY(-50%); background: var(--hover); padding-left: var(--space-2); }
+/* Reserve the right gutter so idle time & hover actions occupy the same column —
+   the title can never collide with either. */
+.srow-time { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--faint); flex-shrink: 0; min-width: var(--srow-gutter); text-align: right; }
+.srow-pane-mark { position: absolute; right: var(--nav-pad-x); bottom: var(--space-1); color: var(--faint); font-family: var(--font-mono); font-size: var(--fs-8); letter-spacing: var(--tracking-wide); }
+.srow-actions { display: none; align-items: center; gap: var(--space-1); position: absolute; z-index: 2; right: var(--nav-pad-x); top: 50%; transform: translateY(-50%); }
 .srow:hover .srow-actions, .srow:focus-within .srow-actions { display: flex; }
 .srow:hover .srow-time, .srow:focus-within .srow-time, .srow:hover .srow-pane-mark, .srow:focus-within .srow-pane-mark { visibility: hidden; }
 .srow-act { display: flex; align-items: center; justify-content: center; padding: 3px; border-radius: var(--radius-sm); color: var(--faint); }
 .srow-act:hover { background: var(--bg-active); color: var(--text); }
 [data-density="compact"] .srow-meta { display: none; }
 @media (hover: none) {
-  .srow-actions { display: flex; position: static; transform: none; padding: 0 var(--space-2) 0 0; background: transparent; }
+  .srow-actions { display: flex; position: static; transform: none; padding: 0 var(--space-2) 0 0; }
   .srow-pane-mark { display: block; position: static; margin-left: auto; }
   .srow.visible .srow-time { display: none; }
 }
