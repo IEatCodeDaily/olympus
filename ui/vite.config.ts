@@ -21,7 +21,21 @@ export default defineConfig(({ mode, command }) => {
       host: "127.0.0.1",
       allowedHosts,
       proxy: {
-        "/api": { target: proxyTarget, changeOrigin: true },
+        // changeOrigin rewrites Host to the proxy target, which would make the
+        // Hall derive 127.0.0.1:8799 as its public base URL (breaks the
+        // enrollment installer). Forward the original host so derive_base_url
+        // sees the real external hostname.
+        "/api": {
+          target: proxyTarget,
+          changeOrigin: true,
+          configure: (proxy) => {
+            proxy.on("proxyReq", (proxyReq, req) => {
+              if (req.headers.host) {
+                proxyReq.setHeader("x-forwarded-host", req.headers.host);
+              }
+            });
+          },
+        },
         "/ws": { target: proxyTarget, changeOrigin: true, ws: true },
       },
     },

@@ -62,6 +62,12 @@ export function useResizable(opts: UseResizableOptions) {
 
   const [size, setSize] = useState<number>(loadInitial);
   const startRef = useRef<{ pos: number; size: number } | null>(null);
+  // Live mirror of `size` so onResizeStart never captures a stale closure.
+  // Without this, the memoized callback (deps: axis/direction/clamp) keeps the
+  // size from its creation render, and every drag after the first restarts
+  // from that stale value — the panel snaps back and resize appears broken.
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
 
   const clamp = useCallback(
     (n: number) => Math.max(min, Math.min(max, n)),
@@ -72,7 +78,7 @@ export function useResizable(opts: UseResizableOptions) {
     (e: React.MouseEvent) => {
       e.preventDefault();
       const pos = axis === "x" ? e.clientX : e.clientY;
-      startRef.current = { pos, size };
+      startRef.current = { pos, size: sizeRef.current };
 
       const onMove = (ev: MouseEvent) => {
         if (!startRef.current) return;

@@ -123,7 +123,9 @@ button {
 .srow { display: flex; align-items: stretch; border-radius: var(--radius); transition: background var(--dur) var(--ease); position: relative; }
 .srow:hover { background: var(--hover); }
 .srow.on, .srow[data-open="true"] { background: var(--silver-wash); }
-.srow.focused, .srow[data-focused="true"] { box-shadow: inset 2px 0 0 var(--accent); }
+/* Focused = stronger highlight INTENSITY (doctrine: no edge bars, no badges). */
+.srow.focused, .srow[data-focused="true"] { background: var(--accent-wash-2); }
+.srow.focused .srow-title, .srow[data-focused="true"] .srow-title { color: var(--silver); }
 .srow-main { display: flex; min-width: 0; flex: 1; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); text-align: left; color: inherit; }
 .srow-icon { display: flex; align-items: center; justify-content: center; width: 12px; flex-shrink: 0; }
 .srow-spinner { width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: var(--radius-full); animation: olympus-spin var(--loop-spin) linear infinite; }
@@ -820,7 +822,7 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   .vault-file-tree { min-height: 0; overflow: auto; margin: 0 calc(var(--space-2) * -1); }
   .vault-file-row { display: flex; align-items: center; min-height: 28px; border-radius: var(--radius-sm); color: var(--dim); }
   .vault-file-row:hover, .vault-file-row.on { background: var(--elev); color: var(--text); }
-  .vault-file-row.on { box-shadow: inset 2px 0 0 var(--accent); }
+  .vault-file-row.on { background: var(--accent-wash-2); }
   .vault-file-open { display: flex; min-width: 0; flex: 1; align-items: center; gap: var(--space-2); padding: var(--space-2); border: 0; background: transparent; color: inherit; text-align: left; }
   .vault-file-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
   .vault-file-menu { display: grid; width: 26px; height: 24px; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: transparent; }
@@ -845,7 +847,7 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   .vault-folder-tree { display: flex; max-height: 180px; flex-direction: column; gap: var(--space-1); overflow-y: auto; padding: var(--space-2); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
   .vault-folder-option { display: flex; align-items: center; gap: var(--space-2); min-height: 26px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--dim); font-size: var(--fs-12); text-align: left; }
   .vault-folder-option:hover, .vault-folder-option[aria-pressed="true"] { background: var(--elev); color: var(--text); }
-  .vault-folder-option[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--accent); }
+  .vault-folder-option[aria-pressed="true"] { background: var(--accent-wash-2); }
   .vault-form-error { padding: var(--space-3) var(--space-4); border: var(--border-w) solid var(--danger); border-radius: var(--radius-sm); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); font-size: var(--fs-11); }
   .vault-dialog-error { margin: 0 var(--space-5); }
   .btn.danger { color: var(--danger); border-color: var(--danger); }
