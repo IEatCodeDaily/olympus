@@ -3,7 +3,6 @@ import { Crepe, CrepeFeature } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import { replaceRange } from "@milkdown/kit/utils";
 import "@milkdown/crepe/theme/common/style.css";
-import "@milkdown/crepe/theme/frame-dark.css";
 import {
   findVaultSuggestion,
   fromRichMarkdown,
