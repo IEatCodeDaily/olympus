@@ -1036,10 +1036,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn three_missed_heartbeat_acks_cause_a_fresh_hello() {
         let dir = tempfile::tempdir().unwrap();
-        let table = Arc::new(RuntimeTable::new(dir.path().join("runtime")));
-        let spool = Arc::new(EventSpool::open(dir.path().join("spool"), 1024).unwrap());
-        let jobs = Arc::new(JobTable::new());
-        let pty = Arc::new(PtyTable::new());
+        let table = Arc::new(RuntimeTable::with_factory(Arc::new(|_| {
+            MockAgentRuntime::new_arc() as Arc<dyn AgentRuntime>
+        })));
+        let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
+        let jobs = Arc::new(JobTable::new(dir.path().join("jobs")).unwrap());
         let (envoy, hall) = tokio::io::duplex(64 * 1024);
         let (envoy_reader, envoy_writer) = tokio::io::split(envoy);
         let (hall_reader, _hall_writer) = tokio::io::split(hall);
@@ -1047,12 +1048,12 @@ mod tests {
             envoy_reader,
             envoy_writer,
             table,
-            spool,
-            jobs,
-            pty,
             "self-heal",
             "host",
-            2,
+            vec![],
+            spool,
+            jobs,
+            vec![],
         ));
         let mut lines = tokio::io::BufReader::new(hall_reader).lines();
         let first: EnvoyFrame =
