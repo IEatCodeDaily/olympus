@@ -343,6 +343,44 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn startup_timeout_retries_once_and_reports_both_stderr_tails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-acp.sh");
+        let counter = dir.path().join("attempts");
+        std::fs::write(
+            &script,
+            "#!/usr/bin/env bash\nn=0\n[ ! -f \"$1\" ] || n=$(cat \"$1\")\nn=$((n + 1))\necho $n > \"$1\"\necho attempt-$n >&2\nsleep 300\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = HermesAgentRuntime::new_arc(HermesRuntimeConfig {
+            command: vec![
+                script.to_string_lossy().into_owned(),
+                counter.to_string_lossy().into_owned(),
+            ],
+            cwd: dir.path().to_string_lossy().into_owned(),
+            session_source: None,
+            event_buffer: 8,
+            start_timeout_secs: 1,
+            mcp_servers: Vec::new(),
+            env: Vec::new(),
+            framing: AcpFraming::NewlineJson,
+            ..Default::default()
+        });
+
+        let error = runtime.start(None).await.unwrap_err().to_string();
+
+        assert_eq!(std::fs::read_to_string(counter).unwrap().trim(), "2");
+        assert!(error.contains("attempt 1"), "{error}");
+        assert!(error.contains("attempt-1"), "{error}");
+        assert!(error.contains("attempt 2"), "{error}");
+        assert!(error.contains("attempt-2"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn startup_timeout_reaps_the_adapter_process_tree() {
         use std::os::unix::fs::PermissionsExt;
 
