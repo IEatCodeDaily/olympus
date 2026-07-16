@@ -1022,7 +1022,7 @@ async fn reregister_hello(
         node_id,
         hostname,
         slots_total,
-        build_version,
+        version: build_version,
         protocol_version,
         agents,
         roles,
@@ -1034,20 +1034,14 @@ async fn reregister_hello(
     if protocol_version != PROTOCOL_VERSION {
         return false;
     }
-    let version = if build_version.git_sha.is_empty() {
-        build_version.semver
+    let version = if build_version.git_hash != "unknown" {
+        format!("{} ({})", build_version.semver, build_version.git_hash)
     } else {
-        format!("{} ({})", build_version.semver, build_version.git_sha)
+        build_version.semver
     };
     let agents = agents
-        .into_iter()
-        .map(|a| AgentInfo {
-            name: a.name,
-            command: a.command,
-            version: a.version,
-            available: a.available,
-        })
-        .collect();
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
     let accepted = registry
         .register_connection(
             &node_id,
