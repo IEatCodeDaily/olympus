@@ -23,10 +23,26 @@ const CODEX_AGENT_ID: &str = "codex";
 /// `--model` with these slugs; the set is stable per release. (Approach
 /// borrowed from t3code/opencode-style tools which ship known harness
 /// catalogs instead of probing.)
-const CLAUDE_CODE_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
+const CLAUDE_CODE_MODELS: &[&str] = &[
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-fable-5",
+    "claude-haiku-4-5",
+];
 
 /// Curated model catalog for the Codex CLI harness (`-m/--model`).
 const CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5.5-codex", "gpt-5.4", "gpt-5.4-mini"];
+
+/// One selectable model in an agent's catalog, grouped by provider.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelEntry {
+    pub provider: String,
+    pub id: String,
+    /// True if this is the agent's default model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+}
 
 /// One drivable agent (Hermes profile or local CLI harness) as the UI consumes it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -39,6 +55,11 @@ pub struct AgentInfo {
     /// Configured default model. NEVER a version string — CLI versions go in
     /// `version`.
     pub model: Option<String>,
+    /// All selectable models this agent can run, grouped by provider. For
+    /// Hermes profiles this is the default + fallback_providers; for CLI
+    /// harnesses it's the curated catalog.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelEntry>,
     /// Discovered CLI version (CLI harnesses only, e.g. "codex-cli 0.133.0").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -176,17 +197,59 @@ fn is_valid_model_id(s: &str) -> bool {
         && s.chars().any(|c| c.is_alphanumeric())
 }
 
+/// Parse the full model catalog for a Hermes config: the default model from
+/// the `model:` block plus all entries from `fallback_providers:`. Each entry
+/// carries its provider so the UI can group them. The default model is marked.
+fn parse_all_models(yaml: &str) -> Vec<ModelEntry> {
+    let (default_model, default_provider, _) = parse_model_block(yaml);
+    let fallbacks = parse_fallback_models(yaml);
+
+    let mut entries = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    // Default model first, marked as default.
+    if let (Some(ref m), Some(ref p)) = (&default_model, &default_provider) {
+        if is_valid_model_id(m) && seen.insert(m.clone()) {
+            entries.push(ModelEntry {
+                provider: p.clone(),
+                id: m.clone(),
+                default: Some(true),
+            });
+        }
+    }
+
+    // Fallback models (deduped, not marked default).
+    for (m, p) in &fallbacks {
+        if seen.insert(m.clone()) {
+            entries.push(ModelEntry {
+                provider: p.clone(),
+                id: m.clone(),
+                default: None,
+            });
+        }
+    }
+
+    entries
+}
+
 /// One agent built from a config file path. `id`/`is_default` are supplied by
-/// the caller; provider/model are parsed from the file (missing file → Nones).
+/// the caller; provider/model/models are parsed from the file (missing file → empty).
 fn agent_from_config(id: &str, path: &PathBuf, is_default: bool) -> AgentInfo {
-    let (model, provider, _base_url) = std::fs::read_to_string(path)
-        .ok()
-        .map(|y| parse_model_block(&y))
-        .unwrap_or((None, None, None));
+    let (yaml, parsed) = match std::fs::read_to_string(path) {
+        Ok(y) => {
+            let (model, provider, _) = parse_model_block(&y);
+            let models = parse_all_models(&y);
+            (Some(y), (model, provider, models))
+        }
+        Err(_) => (None, (None, None, Vec::new())),
+    };
+    let (model, provider, models) = parsed;
+    let _ = yaml; // already consumed inside parse_all_models
     AgentInfo {
         id: id.to_string(),
         provider,
         model,
+        models,
         version: None,
         kind: "hermes".to_string(),
         is_default,
@@ -292,6 +355,7 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
             // version string goes in `version`, NOT `model` (it used to leak
             // into the model picker as "codex-cli 0.133.0").
             model: CLAUDE_CODE_MODELS.first().map(|s| s.to_string()),
+            models: catalog_entries(CLAUDE_CODE_AGENT_ID, CLAUDE_CODE_MODELS),
             version: command_version_with_timeout(&claude, Duration::from_secs(2)),
             kind: CLAUDE_CODE_AGENT_ID.to_string(),
             is_default: false,
@@ -303,6 +367,7 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
             id: CODEX_AGENT_ID.to_string(),
             provider: Some("openai-codex".to_string()),
             model: CODEX_MODELS.first().map(|s| s.to_string()),
+            models: catalog_entries("openai-codex", CODEX_MODELS),
             version: command_version_with_timeout(&codex, Duration::from_secs(2)),
             kind: CODEX_AGENT_ID.to_string(),
             is_default: false,
@@ -310,6 +375,19 @@ fn discover_cli_harnesses(path_env: &str) -> Vec<AgentInfo> {
         });
     }
     out
+}
+
+/// Build ModelEntry list from a flat catalog constant. The first entry is the default.
+fn catalog_entries(provider: &str, catalog: &[&str]) -> Vec<ModelEntry> {
+    catalog
+        .iter()
+        .enumerate()
+        .map(|(i, m)| ModelEntry {
+            provider: provider.to_string(),
+            id: m.to_string(),
+            default: if i == 0 { Some(true) } else { None },
+        })
+        .collect()
 }
 
 /// Probe the local host's PATH for CLI harnesses (claude, codex), fresh each
@@ -490,6 +568,46 @@ mod tests {
         let yaml =
             "fallback_providers:\n  - model: codex-cli 0.133.0\n    provider: openai-codex\n";
         assert!(parse_fallback_models(yaml).is_empty());
+    }
+
+    #[test]
+    fn parse_all_models_groups_default_plus_fallbacks() {
+        let yaml = "model:\n  default: glm-5.2\n  provider: zai\nfallback_providers:\n  - model: glm-5v-turbo\n    provider: zai\n  - model: gpt-5.5\n    provider: openai-codex\n";
+        let models = parse_all_models(yaml);
+        assert_eq!(models.len(), 3);
+        // Default first, marked.
+        assert_eq!(models[0].id, "glm-5.2");
+        assert_eq!(models[0].provider, "zai");
+        assert_eq!(models[0].default, Some(true));
+        // Fallbacks after, unmarked.
+        assert_eq!(models[1].id, "glm-5v-turbo");
+        assert_eq!(models[1].provider, "zai");
+        assert_eq!(models[1].default, None);
+        assert_eq!(models[2].id, "gpt-5.5");
+        assert_eq!(models[2].provider, "openai-codex");
+    }
+
+    #[test]
+    fn parse_all_models_dedupes() {
+        let yaml = "model:\n  default: glm-5.2\n  provider: zai\nfallback_providers:\n  - model: glm-5.2\n    provider: zai\n";
+        let models = parse_all_models(yaml);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "glm-5.2");
+    }
+
+    #[test]
+    fn claude_code_catalog_includes_fable() {
+        assert!(
+            CLAUDE_CODE_MODELS.contains(&"claude-fable-5"),
+            "claude-code catalog must include claude-fable-5"
+        );
+        let entries = catalog_entries("claude-code", CLAUDE_CODE_MODELS);
+        assert!(entries.iter().any(|e| e.id == "claude-fable-5"));
+        // First entry is the default.
+        assert_eq!(entries[0].default, Some(true));
+        // The fable entry is not the default (opus is first).
+        let fable = entries.iter().find(|e| e.id == "claude-fable-5").unwrap();
+        assert_eq!(fable.default, None);
     }
 
     #[test]
