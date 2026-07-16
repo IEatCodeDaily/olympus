@@ -412,6 +412,28 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn startup_early_exit_reports_status_and_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-acp.sh");
+        std::fs::write(&script, "#!/bin/sh\necho adapter-broke >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = HermesAgentRuntime::new_arc(HermesRuntimeConfig {
+            command: vec![script.to_string_lossy().into_owned()],
+            cwd: dir.path().to_string_lossy().into_owned(),
+            start_timeout_secs: 1,
+            ..Default::default()
+        });
+
+        let error = runtime.start(None).await.unwrap_err().to_string();
+
+        assert!(error.contains("process exited early"), "{error}");
+        assert!(error.contains("adapter-broke"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn startup_timeout_retries_once_and_reports_both_stderr_tails() {
         use std::os::unix::fs::PermissionsExt;
 
