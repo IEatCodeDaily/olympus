@@ -14,10 +14,11 @@
  *   shows "steer running turn" so the user knows what Enter will do.
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Icon } from "../../../components/Icon";
 import { BrandIcon, agentBrand } from "../../../components/BrandIcons";
-import { useAgents, useModels } from "../../../hooks/queries";
+import { useAgents } from "../../../hooks/queries";
+import type { ModelEntry } from "../../../types";
 
 const THINKING_KEY = "olympus-thinking";
 
@@ -64,7 +65,7 @@ export function Composer({
   const { data: agentsData } = useAgents();
   const agents = agentsData?.agents ?? [];
 
-  // The agent is locked from the session — find it for icon + provider.
+  // The agent is locked from the session — find it for icon + provider + models.
   const lockedAgent = agents.find(
     (a) => a.id === sessionAgent || (sessionAgent == null && a.isDefault),
   );
@@ -73,32 +74,35 @@ export function Composer({
   // The main in-process node reports as "local"; show it as "olympus".
   const nodeLabel = !sessionNode || sessionNode === "local" ? "olympus" : sessionNode;
 
-  // Models are AGENT-SPECIFIC: only what this agent's provider can serve.
-  const { data: modelsData } = useModels(lockedAgent?.id ?? sessionAgent);
-  const models = modelsData?.models ?? [];
+  // Models come from the agent itself (populated by discovery). Grouped by
+  // provider so the selector shows provider → model sections.
+  const agentModels = lockedAgent?.models ?? [];
+  const modelsByProvider = useMemo(() => {
+    const map = new Map<string, ModelEntry[]>();
+    for (const m of agentModels) {
+      const key = m.provider || "—";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(m);
+    }
+    return map;
+  }, [agentModels]);
 
   const [modelOpen, setModelOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [thinking, setThinking] = useState<ThinkingLevel>(loadThinking);
-  const [selectedModel, setSelectedModel] = useState<string>(
-    sessionModel ?? lockedAgent?.model ?? "",
-  );
+  // Local override when the user picks a different model for the next send.
+  // Falls back to session truth (Hall-authoritative), then the agent default.
+  const [modelOverride, setModelOverride] = useState<string | null>(null);
   const modelRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
 
-  // Keep the selected model valid for the agent: prefer session model, else the
-  // agent's default, else the first model the provider offers.
+  // Reset the override when switching sessions or agents.
   useEffect(() => {
-    if (sessionModel) {
-      setSelectedModel(sessionModel);
-      return;
-    }
-    const valid = models.some((m) => m.id === selectedModel);
-    if (!valid) {
-      setSelectedModel(lockedAgent?.model ?? models[0]?.id ?? "");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionModel, lockedAgent?.id, models.length]);
+    setModelOverride(null);
+  }, [sessionAgent]);
+
+  // The displayed/selected model: local override → session truth → agent default.
+  const selectedModel = modelOverride ?? sessionModel ?? lockedAgent?.model ?? "";
 
   // Close popups on outside click.
   useEffect(() => {
@@ -189,27 +193,32 @@ export function Composer({
 
               {modelOpen && (
                 <div className="menu selpop" style={{ display: "flex" }}>
-                  <div className="gk" style={{ padding: "5px 8px 2px" }}>
-                    model · {lockedAgent?.provider ?? "—"}
-                  </div>
-                  {models.length === 0 && (
+                  {modelsByProvider.size === 0 && (
                     <div className="gk" style={{ padding: "4px 8px", opacity: 0.6 }}>
-                      no models for this provider
+                      no models for this agent
                     </div>
                   )}
-                  {models.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`mi${selectedModel === m.id ? " on" : ""}`}
-                      onClick={() => {
-                        setSelectedModel(m.id);
-                        setModelOpen(false);
-                      }}
-                    >
-                      <span>{m.id}</span>
-                      {selectedModel === m.id && <span className="mk2">✓</span>}
-                    </button>
+                  {[...modelsByProvider.entries()].map(([provider, models]) => (
+                    <React.Fragment key={provider}>
+                      <div className="gk" style={{ padding: "5px 8px 2px" }}>
+                        {provider}
+                      </div>
+                      {models.map((m) => (
+                        <button
+                          key={`${provider}-${m.id}`}
+                          type="button"
+                          className={`mi${selectedModel === m.id ? " on" : ""}`}
+                          onClick={() => {
+                            setModelOverride(m.id);
+                            setModelOpen(false);
+                          }}
+                        >
+                          <span>{m.id}</span>
+                          {m.default && <span className="mk2" style={{ opacity: 0.4, fontSize: 9 }}>★</span>}
+                          {selectedModel === m.id && <span className="mk2">✓</span>}
+                        </button>
+                      ))}
+                    </React.Fragment>
                   ))}
 
                   <div className="cp-div" />

@@ -99,12 +99,22 @@ export interface ModelInfo {
   provider: string | null;
 }
 
+/** A selectable model in an agent's catalog, with its provider. */
+export interface ModelEntry {
+  provider: string;
+  id: string;
+  /** True if this is the agent's default model. */
+  default?: boolean;
+}
+
 /** A drivable agent with its configured provider + model/version. */
 export interface AgentInfo {
   /** Agent id passed to POST /api/sessions { agent }. */
   id: string;
   provider: string | null;
   model: string | null;
+  /** All selectable models this agent can run, grouped by provider. */
+  models?: ModelEntry[];
   kind: "hermes" | "claude-code" | "codex";
   /** CLI harness auth readiness: true = credentials found, false = needs login, undefined = n/a (hermes profiles). */
   ready?: boolean;
