@@ -193,10 +193,26 @@ impl HermesAgentRuntime {
         Ok(())
     }
 
-    async fn failure_report(&self, error: anyhow::Error) -> String {
+    async fn failure_report(&self, error: anyhow::Error, timed_out: bool) -> String {
         let tail = self.stderr_tail().await;
+        let probe = if timed_out {
+            let (started, exit) = {
+                let mut state = self.state.lock().await;
+                match state.child.as_mut() {
+                    Some(child) => (true, child.early_exit()),
+                    None => (false, None),
+                }
+            };
+            Some(classify_startup_probe(started, exit.as_deref(), &tail))
+        } else {
+            None
+        };
         let cleanup_error = self.cleanup_runtime().await.err();
-        let mut message = format!("{error:#}\n{}", diagnostic_tail(&tail));
+        let mut message = format!("{error:#}");
+        if let Some(probe) = probe {
+            message.push_str(&format!("\nstartup probe: {probe}"));
+        }
+        message.push_str(&format!("\n{}", diagnostic_tail(&tail)));
         if let Some(cleanup_error) = cleanup_error {
             message.push_str(&format!("\ncleanup failed: {cleanup_error:#}"));
         }
@@ -204,15 +220,35 @@ impl HermesAgentRuntime {
     }
 
     async fn fail_start(&self, error: anyhow::Error) -> anyhow::Error {
-        anyhow::anyhow!(self.failure_report(error).await)
+        anyhow::anyhow!(self.failure_report(error, false).await)
     }
 }
 
 fn diagnostic_tail(tail: &str) -> String {
     if tail.is_empty() {
-        "(no stderr captured)".into()
+        "stderr: <empty; process produced no stderr>".into()
     } else {
         format!("stderr:\n{tail}")
+    }
+}
+
+fn classify_startup_probe(started: bool, exit: Option<&str>, tail: &str) -> String {
+    if !started {
+        return "process did not start".into();
+    }
+    if let Some(exit) = exit {
+        return format!("process exited early ({exit})");
+    }
+    let tail = tail.to_ascii_lowercase();
+    if ["resolving", "download", "installing", "saved lockfile"]
+        .iter()
+        .any(|marker| tail.contains(marker))
+    {
+        "slow cold start (npm/bun dependency cache activity detected)".into()
+    } else if tail.is_empty() {
+        "process alive but silent".into()
+    } else {
+        "process alive without ACP response".into()
     }
 }
 
@@ -236,7 +272,7 @@ impl AgentRuntime for HermesAgentRuntime {
                     );
                     failures.push(format!(
                         "attempt {attempt}:\n{}",
-                        self.failure_report(error).await
+                        self.failure_report(error, true).await
                     ));
                 }
             }
