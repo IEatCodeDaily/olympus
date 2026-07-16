@@ -114,9 +114,9 @@ async fn enrolled_node_survives_restart_and_appears_offline_in_nodes_api() {
         .await
         .unwrap();
     let nodes: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(nodes.as_array().unwrap().len(), 1);
-    assert_eq!(nodes[0]["nodeId"], "durable");
-    assert_eq!(nodes[0]["status"], "offline");
+    assert_eq!(nodes["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(nodes["nodes"][0]["nodeId"], "durable");
+    assert_eq!(nodes["nodes"][0]["status"], "offline");
 }
 
 fn package_manifest(id: &str, activity_id: Option<&str>) -> String {
