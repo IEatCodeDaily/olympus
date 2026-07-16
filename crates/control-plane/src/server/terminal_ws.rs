@@ -16,7 +16,11 @@
 //!
 //! Client→server WS text frames (JSON): `{kind:"input",dataB64}`,
 //! `{kind:"resize",cols,rows}`. Server→client: `{kind:"output",dataB64}`,
-//! `{kind:"exited",exitCode}`. Closing the socket closes the shell.
+//! `{kind:"exited",exitCode}`, `{kind:"attached",persistent:bool}`.
+//!
+//! WebSocket close with code 1000/1001 (normal/going-away) detaches the PTY
+//! reader but leaves the tmux session alive for reattach. Close with code 4000
+//! (explicit close) kills the tmux session permanently.
 //!
 //! This is operator-only: the route sits behind the same auth gate as `/ws`
 //! and is never exposed to an agent runtime.
@@ -106,7 +110,7 @@ impl HallTerminals {
     }
 
     fn drop_terminal(&self, terminal_id: &str) {
-        self.channels.lock().unwrap().remove(terminal_id);
+        self.channels.lock().unwrap().remove(&terminal_id);
     }
 
     pub fn manager(&self) -> Arc<PtyManager> {
@@ -137,6 +141,10 @@ enum ClientTerm {
     Resize { cols: u16, rows: u16 },
 }
 
+/// Custom close code: client signals "I'm closing this tab permanently — kill
+/// the session." Normal close (1000/1001) just detaches.
+const CLOSE_CODE_EXPLICIT: u16 = 4000;
+
 /// `GET /ws/operator/terminals/:terminalId`.
 pub async fn terminal_ws_handler(
     State(state): State<AppState>,
@@ -145,8 +153,6 @@ pub async fn terminal_ws_handler(
     headers: axum::http::HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    // Operator authorization: same session-token/installation-token path the
-    // main /ws uses. (The Origin check already ran in the auth middleware.)
     if !super::ws::authorize_operator(&state, q.token.as_deref(), &headers) {
         return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
@@ -182,39 +188,56 @@ async fn relay(
         }
     };
 
-    // Open the shell.
-    let open_ok = if node == "hall" {
-        state
-            .hall_pty
-            .manager()
-            .open(&terminal_id, cols, rows, None)
-            .await
-            .is_ok()
+    // Open the shell (or re-attach to existing tmux session).
+    let persistent = if node == "hall" {
+        match state.hall_pty.manager().open(&terminal_id, cols, rows, None).await {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = socket
+                    .send(Message::Text(
+                        "{\"kind\":\"exited\",\"error\":\"open failed\"}".into(),
+                    ))
+                    .await;
+                return;
+            }
+        }
     } else {
         match state.envoy_conns.get(&node).await {
-            Some(conn) => conn
-                .send_request(olympus_proto::frames::HallFrame::TerminalOpen {
-                    req_id: 0,
-                    terminal_id: terminal_id.clone(),
-                    cols,
-                    rows,
-                    cwd: None,
-                })
-                .await
-                .is_ok(),
+            Some(conn) => {
+                match conn
+                    .send_request(olympus_proto::frames::HallFrame::TerminalOpen {
+                        req_id: 0,
+                        terminal_id: terminal_id.clone(),
+                        cols,
+                        rows,
+                        cwd: None,
+                    })
+                    .await
+                {
+                    Ok(_) => true, // envoy persistence is its own concern
+                    Err(_) => {
+                        let _ = socket
+                            .send(Message::Text(
+                                "{\"kind\":\"exited\",\"error\":\"open failed\"}".into(),
+                            ))
+                            .await;
+                        return;
+                    }
+                }
+            }
             None => false,
         }
     };
-    if !open_ok {
-        let _ = socket
-            .send(Message::Text(
-                "{\"kind\":\"exited\",\"error\":\"open failed\"}".into(),
-            ))
-            .await;
-        return;
-    }
+
+    // Tell the client whether this session is persistent (tmux-backed).
+    let _ = socket
+        .send(Message::Text(
+            format!("{{\"kind\":\"attached\",\"persistent\":{persistent}}}").into(),
+        ))
+        .await;
 
     // Bidirectional relay.
+    let mut explicit_close = false;
     loop {
         tokio::select! {
             // PTY → browser.
@@ -251,7 +274,17 @@ async fn relay(
                             Err(_) => {}
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Close(code))) => {
+                        // Code 4000 = explicit tab close → kill session.
+                        // None / 1000 / 1001 = normal disconnect → detach only.
+                        if let Some(cf) = code {
+                            if cf.code == CLOSE_CODE_EXPLICIT {
+                                explicit_close = true;
+                            }
+                        }
+                        break;
+                    }
+                    None => break,
                     Some(Ok(_)) => {}
                     Some(Err(_)) => break,
                 }
@@ -259,8 +292,13 @@ async fn relay(
         }
     }
 
-    // Socket closed → close the shell.
-    close_terminal(&state, &node, &terminal_id).await;
+    // Socket closed. Explicit close → kill the session permanently.
+    // Normal close → detach (tmux session stays alive for reattach).
+    if explicit_close {
+        close_terminal(&state, &node, &terminal_id).await;
+    } else {
+        detach_terminal(&state, &node, &terminal_id).await;
+    }
     let _ = b64_encode(b""); // keep b64 import used if select above changes
 }
 
@@ -291,6 +329,17 @@ async fn send_resize(state: &AppState, node: &str, terminal_id: &str, cols: u16,
     }
 }
 
+/// Detach: abort the PTY reader but leave the tmux session alive.
+async fn detach_terminal(state: &AppState, node: &str, terminal_id: &str) {
+    if node == "hall" {
+        let _ = state.hall_pty.manager().detach(terminal_id).await;
+    }
+    // For envoy nodes: Hall can't detach on the remote — the envoy's PtyManager
+    // handles it when the TerminalOpen resp/reader EOFs. Just drop the channel.
+    state.hall_pty.drop_terminal(terminal_id);
+}
+
+/// Close permanently: kill the tmux session / bare shell.
 async fn close_terminal(state: &AppState, node: &str, terminal_id: &str) {
     if node == "hall" {
         let _ = state.hall_pty.manager().close(terminal_id).await;

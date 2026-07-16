@@ -53,16 +53,104 @@ function xtermThemeFromTokens(): { background: string; foreground: string } {
   return { background: bg, foreground: fg };
 }
 
+/** Custom WS close code: the client is closing the tab permanently — kill
+ *  the tmux session. Normal close (1000) just detaches. */
+const CLOSE_CODE_EXPLICIT = 4000;
+
+/** A stable terminalId stored in tab.state.terminalId. Survives page reload
+ *  so a persisted tab reattaches to the same tmux session. */
+function stableTerminalId(tab: CockpitTab): string {
+  const existing = tab.state?.terminalId as string | undefined;
+  if (existing) return existing;
+  // Fallback: the tab id itself is stable across reloads (persisted).
+  return tab.id;
+}
+
+type ConnState = "connecting" | "connected" | "reconnecting" | "disconnected";
+
 /** A single live terminal tab: xterm.js bound to the operator WS. Mounted for
  *  the tab's whole lifetime; the socket/term persist across tab switches and
- *  cockpit hide (only the container's display toggles). */
+ *  cockpit hide (only the container's display toggles).
+ *
+ *  Auto-reconnects with exponential backoff + jitter on socket close unless
+ *  the user explicitly closed the tab (code 4000). */
 function TerminalPane({ tab, visible }: { tab: CockpitTab; visible: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const closedRef = useRef(false); // explicit close → stop reconnecting
+  const backoffRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
 
-  // Mount xterm + socket ONCE per tab.
+  const [connState, setConnState] = useState<ConnState>("connecting");
+  const [persistent, setPersistent] = useState(true);
+  const updateTab = useCockpit((s) => s.updateTab);
+
+  const terminalId = stableTerminalId(tab);
+  const node = tab.target?.nodeId ?? "hall";
+
+  // Connect / reconnect to the WS. Called on mount and on socket close.
+  const connect = useCallback(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term) return;
+
+    const cols = term.cols || 80;
+    const rows = term.rows || 24;
+    const ws = new WebSocket(terminalWsUrl(terminalId, node, cols, rows));
+    wsRef.current = ws;
+
+    if (closedRef.current) return; // tab closed, don't reconnect
+    setConnState(backoffRef.current > 0 ? "reconnecting" : "connecting");
+
+    ws.onopen = () => {
+      backoffRef.current = 0;
+      setConnState("connected");
+    };
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data as string);
+        if (msg.kind === "output" && msg.dataB64) {
+          term.write(b64ToUint8(msg.dataB64));
+        } else if (msg.kind === "attached" && typeof msg.persistent === "boolean") {
+          setPersistent(msg.persistent);
+        } else if (msg.kind === "exited") {
+          const code = msg.exitCode ?? msg.error ?? "";
+          term.write(`\r\n\x1b[90m[process exited ${code}]\x1b[0m\r\n`);
+          closedRef.current = true; // shell is gone — don't reconnect
+          setConnState("disconnected");
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    ws.onclose = (e: CloseEvent) => {
+      if (closedRef.current) {
+        setConnState("disconnected");
+        return;
+      }
+      if (e.code === CLOSE_CODE_EXPLICIT) {
+        // Server killed it at our request — don't reconnect.
+        closedRef.current = true;
+        setConnState("disconnected");
+        return;
+      }
+      // Schedule reconnect with exponential backoff + jitter.
+      const attempt = backoffRef.current++;
+      const base = Math.min(1000 * 2 ** attempt, 10_000);
+      const jitter = Math.random() * 500;
+      const delay = base + jitter;
+      setConnState("reconnecting");
+      reconnectTimerRef.current = window.setTimeout(() => {
+        connect();
+      }, delay);
+    };
+  }, [terminalId, node]);
+
+  // Mount xterm ONCE per tab.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -85,58 +173,50 @@ function TerminalPane({ tab, visible }: { tab: CockpitTab; visible: boolean }) {
     termRef.current = term;
     fitRef.current = fit;
 
-    const cols = term.cols || 80;
-    const rows = term.rows || 24;
-    const node = tab.target?.nodeId ?? "hall";
-    const ws = new WebSocket(terminalWsUrl(tab.id, node, cols, rows));
-    wsRef.current = ws;
+    // Persist the terminalId so a page reload reattaches to the same session.
+    if (!tab.state?.terminalId) {
+      updateTab(tab.id, { state: { ...tab.state, terminalId } });
+    }
 
-    const enc = (bytes: string) => btoa(bytes);
-
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data as string);
-        if (msg.kind === "output" && msg.dataB64) {
-          term.write(b64ToUint8(msg.dataB64));
-        } else if (msg.kind === "exited") {
-          const code = msg.exitCode ?? msg.error ?? "";
-          term.write(`\r\n\x1b[90m[process exited ${code}]\x1b[0m\r\n`);
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    ws.onclose = () => {
-      term.write("\r\n\x1b[90m[disconnected]\x1b[0m\r\n");
-    };
+    connect();
 
     // Keystrokes → server (base64).
+    const enc = (bytes: string) => btoa(bytes);
     const dataSub = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ kind: "input", dataB64: enc(data) }));
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ kind: "input", dataB64: enc(data) }));
       }
     });
     // Resize → server.
     const resizeSub = term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ kind: "resize", cols, rows }));
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ kind: "resize", cols, rows }));
       }
     });
 
     return () => {
       dataSub.dispose();
       resizeSub.dispose();
-      ws.close();
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      // Send explicit close so the server kills the session.
+      closedRef.current = true;
+      if (wsRef.current) {
+        wsRef.current.close(CLOSE_CODE_EXPLICIT, "tab-closed");
+        wsRef.current = null;
+      }
       term.dispose();
       termRef.current = null;
-      wsRef.current = null;
+      fitRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
 
-  // Refit when this tab becomes visible or the window resizes.
+  // Refit when this tab becomes visible, and on ResizeObserver of the container.
   useEffect(() => {
     if (!visible) return;
+    const container = containerRef.current;
+    if (!container) return;
+
     const refit = () => {
       try {
         fitRef.current?.fit();
@@ -146,11 +226,41 @@ function TerminalPane({ tab, visible }: { tab: CockpitTab; visible: boolean }) {
       }
     };
     refit();
+
+    // Window resize (fallback for when RO isn't supported).
     window.addEventListener("resize", refit);
-    return () => window.removeEventListener("resize", refit);
+
+    // ResizeObserver: catches cockpit drag-resize that window resize misses.
+    let ro: ResizeObserver | null = null;
+    if ("ResizeObserver" in window) {
+      ro = new ResizeObserver(() => {
+        refit();
+      });
+      ro.observe(container);
+    }
+
+    return () => {
+      window.removeEventListener("resize", refit);
+      ro?.disconnect();
+    };
   }, [visible]);
 
-  return <div className="cockpit-term" ref={containerRef} />;
+  return (
+    <div className="cockpit-term-wrap" style={{ position: "relative", height: "100%" }}>
+      <div className="cockpit-term" ref={containerRef} />
+      {connState === "reconnecting" && (
+        <div className="cockpit-term-status reconnecting">Reconnecting…</div>
+      )}
+      {connState === "connecting" && (
+        <div className="cockpit-term-status">Connecting…</div>
+      )}
+      {!persistent && connState !== "disconnected" && (
+        <div className="cockpit-term-badge-nonpersistent" title="tmux not installed — shell won't survive disconnect">
+          non-persistent
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Decode base64 → Uint8Array for xterm.write (bytes, not UTF-8 string). */
@@ -166,7 +276,7 @@ function b64ToUint8(b64: string): Uint8Array {
 function normalizeUrl(raw: string): string {
   const t = raw.trim();
   if (!t) return "";
-  if (/^https?:\/\//i.test(t)) return t;
+  if (/^https?:\/\/i.test(t)) return t;
   return `https://${t}`;
 }
 
