@@ -542,6 +542,12 @@ and sets `scroll-behavior: auto`. Every animated state also has a text label.
 
 ## 11. Changelog
 
+### 2026-07-16 — Vault editor as a full-pane writing surface + quiet key hints
+
+- Retuned the Vault note surface around a centered ~72ch writing measure that owns the whole pane, with floating persistence chrome instead of a persistent card header and duplicated save/delete rows.
+- Bound Milkdown's frame palette to Olympus tokens instead of the package's dark-only theme file, so the rich editor now follows both obsidian and daybreak theme tokens.
+- Normalized keyboard hint chips to a quiet hairline style (`.kbd` / `.ol-kbd`) with no filled cap, matching the de-emphasized command-palette/search affordance.
+
 ### 2026-07-12 — Reinstate Milkdown without forced source ejection
 
 - Reversed postmortem 0018's editor resolution while retaining its QA and losslessness lessons: Milkdown/Crepe is again the default Vault note surface, with real-editor component and browser coverage required.

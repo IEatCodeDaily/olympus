@@ -53,27 +53,38 @@ export function VaultMarkdownEditor(props: VaultMarkdownEditorProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [conflicted]);
 
+  const editorLabel = conflicted ? "Conflict source" : mode === "rich" ? "Rich editor" : "Source editor";
+  const saveStateLabel = props.saving ? "Saving…" : props.dirty ? "Unsaved changes" : "Saved";
+  const saveStateTone = props.saving ? "saving" : props.dirty ? "dirty" : "saved";
+
   return (
     <div className="vault-markdown-editor">
       <div className="vault-note-mode-actions">
-        {props.onSave && <button type="button" className="btn pri" aria-label="Save note" disabled={props.saving || !props.dirty} onClick={props.onSave}>{props.saving ? "Saving…" : "Save"}</button>}
-        {props.onCancel && <button type="button" className="vault-toolbar-button" aria-label="Cancel edits" disabled={props.saving || !props.dirty} onClick={() => { props.onCancel?.(); setEditorGeneration((generation) => generation + 1); }}>Cancel</button>}
-        {props.onDelete && <button type="button" className="vault-toolbar-button danger" aria-label="Delete note" onClick={props.onDelete}>Delete</button>}
-        <button type="button" className="vault-toolbar-button" aria-label="Note actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>⋯</button>
-        {menuOpen && (
-          <div className="vault-note-menu" role="menu">
-            <button type="button" role="menuitem" onClick={() => { const next = mode === "rich" ? "source" : "rich"; setMode(next); props.onEditorModeChange?.(next); setMenuOpen(false); }} disabled={conflicted && mode === "source"}>
-              {mode === "rich" ? "Edit source" : "Edit rich"}
-            </button>
-          </div>
-        )}
+        <div className="vault-note-status" aria-live="polite">
+          <span className={`vault-note-status-dot ${saveStateTone}`} aria-hidden="true" />
+          <span className="vault-note-status-copy">{saveStateLabel}</span>
+          <span className="vault-note-mode-label">{editorLabel}</span>
+        </div>
+        <div className="vault-note-action-group">
+          {props.onSave && <button type="button" className="btn pri" aria-label="Save note" disabled={props.saving || !props.dirty} onClick={props.onSave}>{props.saving ? "Saving…" : "Save"}</button>}
+          {props.onCancel && <button type="button" className="vault-toolbar-button" aria-label="Cancel edits" disabled={props.saving || !props.dirty} onClick={() => { props.onCancel?.(); setEditorGeneration((generation) => generation + 1); }}>Cancel</button>}
+          {props.onDelete && <button type="button" className="vault-toolbar-button danger" aria-label="Delete note" onClick={props.onDelete}>Delete</button>}
+          <button type="button" className="vault-toolbar-button" aria-label="Note actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>⋯</button>
+          {menuOpen && (
+            <div className="vault-note-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => { const next = mode === "rich" ? "source" : "rich"; setMode(next); props.onEditorModeChange?.(next); setMenuOpen(false); }} disabled={conflicted && mode === "source"}>
+                {mode === "rich" ? "Edit source" : "Edit rich"}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       {props.saveError && <div className="vault-save-error" role="alert">{props.saveError}</div>}
       {mode === "rich" ? (
         <Suspense fallback={<div className="vault-editor-loading">Loading rich editor…</div>}>
           <MilkdownRichEditor key={editorGeneration} markdown={props.markdown} onChange={props.onChange} suggestions={props.suggestions} />
         </Suspense>
-      ) : <SourceMarkdownEditor {...props} onSave={undefined} onDelete={undefined} saveError={null} />}
+      ) : <SourceMarkdownEditor markdown={props.markdown} onChange={props.onChange} suggestions={props.suggestions} saveError={props.saveError} />}
     </div>
   );
 }
@@ -86,11 +97,7 @@ export function SourceMarkdownEditor({
   markdown,
   onChange,
   suggestions = EMPTY_SUGGESTIONS,
-  dirty = false,
-  saving = false,
   saveError = null,
-  onSave,
-  onDelete,
 }: VaultMarkdownEditorProps) {
   const editorRef = useRef<EditorView | null>(null);
   const conflicted = hasJjConflictMarkers(markdown);
@@ -129,43 +136,41 @@ export function SourceMarkdownEditor({
 
   return (
     <div className="vault-source-markdown-editor">
-      <div className="vault-note-toolbar" role="toolbar" aria-label="Note formatting">
-        <div className="vault-note-tools">
-          <ToolbarButton label="Undo" text="↶" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && undo(editorRef.current)} />
-          <ToolbarButton label="Redo" text="↷" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && redo(editorRef.current)} />
-          <span className="vault-toolbar-divider" aria-hidden="true" />
-          <ToolbarButton label="Heading" text="H" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("# ")} />
-          <ToolbarButton label="Bold" text="B" strong onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("**")} />
-          <ToolbarButton label="Italic" text="I" italic onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("*")} />
-          <ToolbarButton label="Strikethrough" text="S" strike onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("~~")} />
-          <ToolbarButton label="Inline code" text="<>" onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("`")} />
-          <ToolbarButton label="Insert link" text="Link" onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("[", "](url)")} />
-          <span className="vault-toolbar-divider" aria-hidden="true" />
-          <ToolbarButton label="Bulleted list" text="• List" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("- ")} />
-          <ToolbarButton label="Numbered list" text="1. List" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("1. ")} />
-          <ToolbarButton label="Blockquote" text="Quote" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("> ")} />
-        </div>
-        <div className="vault-note-actions">
-          {onSave && <button type="button" className="btn pri" aria-label="Save note" disabled={saving || !dirty} onClick={onSave}>{saving ? "Saving…" : "Save"}</button>}
-          {onDelete && <button type="button" className="vault-toolbar-button danger" aria-label="Delete note" onClick={onDelete}>Delete</button>}
-        </div>
-      </div>
       {conflicted && (
         <div className="vault-source-warning" data-testid="vault-source-warning">
           This note contains an unresolved jj conflict. Resolve the conflict markers before saving.
         </div>
       )}
       {saveError && <div className="vault-save-error" role="alert">{saveError}</div>}
-      <div className="vault-source-editor vault-editor-canvas" data-testid="vsrc">
-        <CodeMirror
-          value={markdown}
-          extensions={extensions}
-          height="100%"
-          onChange={onChange}
-          placeholder="Write Markdown…"
-          basicSetup={{ lineNumbers: false, foldGutter: false }}
-          onCreateEditor={(view) => { editorRef.current = view; }}
-        />
+      <div className="vault-source-editor-shell">
+        <div className="vault-note-toolbar" role="toolbar" aria-label="Note formatting">
+          <div className="vault-note-tools">
+            <ToolbarButton label="Undo" text="↶" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && undo(editorRef.current)} />
+            <ToolbarButton label="Redo" text="↷" onMouseDown={preventToolbarBlur} onClick={() => editorRef.current && redo(editorRef.current)} />
+            <span className="vault-toolbar-divider" aria-hidden="true" />
+            <ToolbarButton label="Heading" text="H" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("# ")} />
+            <ToolbarButton label="Bold" text="B" strong onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("**")} />
+            <ToolbarButton label="Italic" text="I" italic onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("*")} />
+            <ToolbarButton label="Strikethrough" text="S" strike onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("~~")} />
+            <ToolbarButton label="Inline code" text="<>" onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("`")} />
+            <ToolbarButton label="Insert link" text="Link" onMouseDown={preventToolbarBlur} onClick={() => wrapSelection("[", "](url)")} />
+            <span className="vault-toolbar-divider" aria-hidden="true" />
+            <ToolbarButton label="Bulleted list" text="• List" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("- ")} />
+            <ToolbarButton label="Numbered list" text="1. List" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("1. ")} />
+            <ToolbarButton label="Blockquote" text="Quote" onMouseDown={preventToolbarBlur} onClick={() => prefixLines("> ")} />
+          </div>
+        </div>
+        <div className="vault-source-editor vault-editor-canvas" data-testid="vsrc">
+          <CodeMirror
+            value={markdown}
+            extensions={extensions}
+            height="100%"
+            onChange={onChange}
+            placeholder="Write Markdown…"
+            basicSetup={{ lineNumbers: false, foldGutter: false }}
+            onCreateEditor={(view) => { editorRef.current = view; }}
+          />
+        </div>
       </div>
     </div>
   );

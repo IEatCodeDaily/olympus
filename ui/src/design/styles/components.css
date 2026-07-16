@@ -273,7 +273,7 @@
 .ol-toast-msg { font-size: var(--fs-11); color: var(--text-dim); margin-top: 2px; line-height: var(--lh-normal); }
 
 /* ─────────────────────────  KBD  ─────────────────────────
-   App: .kbd — mono 9px, bg canvas, hairline, radius 3. */
-.ol-kbd { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--text-faint); background: var(--bg);
+   App: .kbd — mono 9px, hairline, no filled cap. */
+.ol-kbd { font-family: var(--font-mono); font-size: var(--fs-9); color: var(--text-faint); background: transparent;
   border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); padding: 1px 5px; min-width: 16px;
   display: inline-flex; align-items: center; justify-content: center; }
