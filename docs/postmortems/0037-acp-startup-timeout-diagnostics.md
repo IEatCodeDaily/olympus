@@ -1,6 +1,6 @@
 # 0037 — ACP lazy startup timeout hid adapter state
 
-**Date:** 2026-07-16  
+**Date:** 2026-07-16
 **Status:** Fixed on `wt/t_c7e6b3d4`
 
 ## Impact
