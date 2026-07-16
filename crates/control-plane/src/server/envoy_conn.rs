@@ -468,14 +468,17 @@ impl EnvoyConnections {
         writer: BoxedWriter,
         epoch: u64,
         shutdown: tokio::sync::watch::Sender<bool>,
-    ) -> (Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>) {
+    ) -> Result<
+        (Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>),
+        Arc<EnvoyConnection>,
+    > {
         let conn = EnvoyConnection::new_with_epoch(writer, self.log.clone(), epoch, shutdown);
-        let old = self
-            .inner
-            .write()
-            .await
-            .insert(node_id.to_owned(), conn.clone());
-        (conn, old)
+        let mut inner = self.inner.write().await;
+        if inner.get(node_id).is_some_and(|old| old.epoch > epoch) {
+            return Err(conn);
+        }
+        let old = inner.insert(node_id.to_owned(), conn.clone());
+        Ok((conn, old))
     }
 
     /// Remove a connection (returns it so the caller can fail its pending reqs).
@@ -718,13 +721,17 @@ mod tests {
     /// Create a test EnvoyConnection backed by a real UDS socketpair (the
     /// write half goes to the conn; the read half is dropped — tests don't
     /// check the wire, only the in-memory event/pending maps).
-    fn test_conn() -> Arc<EnvoyConnection> {
+    fn test_writer() -> BoxedWriter {
         use std::os::unix::net::UnixStream as StdStream;
         let (s1, _s2) = StdStream::pair().unwrap();
         s1.set_nonblocking(true).unwrap();
         let stream = tokio::net::UnixStream::from_std(s1).unwrap();
         let (_reader, writer) = stream.into_split();
-        EnvoyConnection::new(Box::new(writer), None)
+        Box::new(writer)
+    }
+
+    fn test_conn() -> Arc<EnvoyConnection> {
+        EnvoyConnection::new(test_writer(), None)
     }
 
     #[tokio::test]
@@ -738,6 +745,22 @@ mod tests {
         assert!(conns.get("n1").await.is_some());
         conns.remove("n1").await;
         assert!(!conns.is_remote_node("n1").await);
+    }
+
+    #[tokio::test]
+    async fn older_epoch_cannot_replace_newer_connection() {
+        let conns = EnvoyConnections::new();
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        conns
+            .insert_epoch("n1", test_writer(), 2, shutdown)
+            .await
+            .unwrap();
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        assert!(conns
+            .insert_epoch("n1", test_writer(), 1, shutdown)
+            .await
+            .is_err());
+        assert_eq!(conns.get("n1").await.unwrap().epoch, 2);
     }
 
     #[tokio::test]

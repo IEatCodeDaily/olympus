@@ -317,14 +317,6 @@ impl NodeRegistry {
         epoch: Option<u64>,
     ) -> bool {
         let mut nodes = self.nodes.write().await;
-        if let (Some(new), Some(current)) = (
-            epoch,
-            nodes.get(node_id).and_then(|entry| entry.connection_epoch),
-        ) {
-            if new < current {
-                return false;
-            }
-        }
         let enrolled = iroh_node_id.as_ref().and_then(|key| {
             nodes
                 .iter()
@@ -335,17 +327,27 @@ impl NodeRegistry {
                         entry.enrolled_at,
                         entry.last_seen,
                         entry.persisted_last_seen,
+                        entry.connection_epoch,
                     )
                 })
         });
-        if let Some((old_id, _, _, _)) = &enrolled {
+        if let Some(new) = epoch {
+            let current = nodes
+                .get(node_id)
+                .and_then(|entry| entry.connection_epoch)
+                .or_else(|| enrolled.as_ref().and_then(|entry| entry.4));
+            if current.is_some_and(|current| new < current) {
+                return false;
+            }
+        }
+        if let Some((old_id, _, _, _, _)) = &enrolled {
             if old_id != node_id {
                 nodes.remove(old_id);
             }
         }
         let now = unix_now();
-        let (_, enrolled_at, previous_seen, persisted_last_seen) =
-            enrolled.unwrap_or_else(|| (node_id.to_owned(), None, None, 0));
+        let (_, enrolled_at, previous_seen, persisted_last_seen, _) =
+            enrolled.unwrap_or_else(|| (node_id.to_owned(), None, None, 0, None));
         nodes.insert(
             node_id.to_owned(),
             NodeEntry {
@@ -980,9 +982,16 @@ async fn handle_envoy_hello(
     registry.set_roles(&node_id, roles).await;
 
     // Publish the new epoch before closing the superseded connection.
-    let (conn, old) = envoy_conns
+    let (conn, old) = match envoy_conns
         .insert_epoch(&node_id, writer, epoch, shutdown)
-        .await;
+        .await
+    {
+        Ok(inserted) => inserted,
+        Err(stale) => {
+            stale.close().await;
+            return HelloOutcome::Rejected;
+        }
+    };
     if let Some(old) = old {
         old.close().await;
     }
@@ -1340,11 +1349,15 @@ mod tests {
     async fn stale_connection_death_does_not_deregister_newer_epoch() {
         let reg = NodeRegistry::new();
         assert!(
-            reg.register_connection("node", "old", 4, "v1", NodeTransport::Iroh, None, vec![], 1)
+            reg.register_connection("node", "old", 4, "v1", NodeTransport::Iroh, Some("key".into()), vec![], 1)
                 .await
         );
         assert!(
-            reg.register_connection("node", "new", 4, "v2", NodeTransport::Iroh, None, vec![], 2)
+            reg.register_connection("node", "new", 4, "v2", NodeTransport::Iroh, Some("key".into()), vec![], 2)
+                .await
+        );
+        assert!(
+            !reg.register_connection("renamed", "old", 4, "v1", NodeTransport::Iroh, Some("key".into()), vec![], 1)
                 .await
         );
 

@@ -61,7 +61,11 @@ Frame families:
   key); `runtimes {[{sessionId, hermesId, state, resumable, lastSeq}]}` in
   hello and on change.
 - Hall→Envoy: `ack {sessionId, seq}` (spool truncation watermark),
-  `resume_from {sessionId, seq}` (replay cursor at reconnect).
+  `resume_from {sessionId, seq}` (replay cursor at reconnect),
+  `heartbeat_ack`, and `re_register`. Hall acknowledges every known-node
+  heartbeat and requests a fresh hello when the authenticated connection is
+  alive but its registry entry is missing. Envoy also re-sends hello after
+  three consecutive unacknowledged heartbeats.
 
 Hello carries **two version fields with distinct jobs**:
 - `protocolVersion: u32` — frame-schema compat gate. Unparseable version →
@@ -69,6 +73,10 @@ Hello carries **two version fields with distinct jobs**:
 - `version: {semver, gitHash, builtAt}` — envoy **build identity**. This is
   what drain/evict decisions key on and what the Nodes UI shows. Protocol
   version does not solve "which envoy is outdated"; build version does.
+
+Protocol version 3 adds `heartbeat_ack` and `re_register`. Hall rejects older
+protocol versions at hello rather than silently running without the repair
+handshake.
 
 ### 2. Envoy autonomy across Hall downtime (#5)
 
