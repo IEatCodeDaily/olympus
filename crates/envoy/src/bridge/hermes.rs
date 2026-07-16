@@ -140,6 +140,23 @@ impl HermesAgentRuntime {
         Ok(client)
     }
 
+    async fn start_once(&self, session_id: Option<&str>) -> Result<()> {
+        let client = self.spawn_client().await?;
+        client.initialize().await?;
+        match session_id {
+            Some(session_id) => {
+                client
+                    .session_resume(session_id, &self.config.cwd, &self.config.mcp_servers)
+                    .await
+            }
+            None => {
+                client
+                    .session_new(&self.config.cwd, &self.config.mcp_servers)
+                    .await
+            }
+        }
+    }
+
     async fn stderr_tail(&self) -> String {
         let buffer = self
             .state
@@ -176,61 +193,100 @@ impl HermesAgentRuntime {
         Ok(())
     }
 
-    async fn fail_start(&self, error: anyhow::Error) -> anyhow::Error {
+    async fn failure_report(&self, error: anyhow::Error, timed_out: bool) -> String {
+        let (started, exit) = {
+            let mut state = self.state.lock().await;
+            match state.child.as_mut() {
+                Some(child) => {
+                    let exit = child.early_exit();
+                    if exit.is_some() {
+                        child.finish_stderr().await;
+                    }
+                    (true, exit)
+                }
+                None => (false, None),
+            }
+        };
         let tail = self.stderr_tail().await;
+        let probe = if timed_out || exit.is_some() {
+            Some(classify_startup_probe(started, exit.as_deref(), &tail))
+        } else {
+            None
+        };
         let cleanup_error = self.cleanup_runtime().await.err();
-        let mut message = format!("{error:#}\n{}", diagnostic_tail(&tail));
+        let mut message = format!("{error:#}");
+        if let Some(probe) = probe {
+            message.push_str(&format!("\nstartup probe: {probe}"));
+        }
+        message.push_str(&format!("\n{}", diagnostic_tail(&tail)));
         if let Some(cleanup_error) = cleanup_error {
             message.push_str(&format!("\ncleanup failed: {cleanup_error:#}"));
         }
-        anyhow::anyhow!(message)
+        message
+    }
+
+    async fn fail_start(&self, error: anyhow::Error) -> anyhow::Error {
+        anyhow::anyhow!(self.failure_report(error, false).await)
     }
 }
 
 fn diagnostic_tail(tail: &str) -> String {
     if tail.is_empty() {
-        "(no stderr captured)".into()
+        "stderr: <empty; process produced no stderr>".into()
     } else {
         format!("stderr:\n{tail}")
+    }
+}
+
+fn classify_startup_probe(started: bool, exit: Option<&str>, tail: &str) -> String {
+    if !started {
+        return "process did not start".into();
+    }
+    if let Some(exit) = exit {
+        return format!("process exited early ({exit})");
+    }
+    let tail = tail.to_ascii_lowercase();
+    if ["resolving", "download", "installing", "saved lockfile"]
+        .iter()
+        .any(|marker| tail.contains(marker))
+    {
+        "slow cold start (npm/bun dependency cache activity detected)".into()
+    } else if tail.is_empty() {
+        "process alive but silent".into()
+    } else {
+        "process alive without ACP response".into()
     }
 }
 
 #[async_trait::async_trait]
 impl AgentRuntime for HermesAgentRuntime {
     async fn start(&self, session_id: Option<&str>) -> Result<()> {
-        let handshake = async {
-            let client = self.spawn_client().await?;
-            client.initialize().await?;
-            match session_id {
-                Some(session_id) => {
-                    client
-                        .session_resume(session_id, &self.config.cwd, &self.config.mcp_servers)
-                        .await?
+        let mut failures = Vec::with_capacity(2);
+        for attempt in 1..=2 {
+            match tokio::time::timeout(
+                Duration::from_secs(self.config.start_timeout_secs),
+                self.start_once(session_id),
+            )
+            .await
+            {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(error)) => return Err(self.fail_start(error).await),
+                Err(_) => {
+                    let error = anyhow::anyhow!(
+                        "timed out after {}s waiting for ACP initialize/session response",
+                        self.config.start_timeout_secs
+                    );
+                    failures.push(format!(
+                        "attempt {attempt}:\n{}",
+                        self.failure_report(error, true).await
+                    ));
                 }
-                None => {
-                    client
-                        .session_new(&self.config.cwd, &self.config.mcp_servers)
-                        .await?
-                }
-            }
-            Ok(())
-        };
-        match tokio::time::timeout(
-            Duration::from_secs(self.config.start_timeout_secs),
-            handshake,
-        )
-        .await
-        {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(self.fail_start(error).await),
-            Err(_) => {
-                let error = anyhow::anyhow!(
-                    "timed out after {}s waiting for ACP initialize/session response",
-                    self.config.start_timeout_secs
-                );
-                Err(self.fail_start(error).await)
             }
         }
+        anyhow::bail!(
+            "ACP startup timed out after 2 attempts with fresh processes\n{}",
+            failures.join("\n")
+        )
     }
 
     async fn fork_session(&self, session_id: &str) -> Result<()> {
@@ -337,8 +393,87 @@ mod tests {
 
     #[test]
     fn diagnostic_tail_surfaces_child_failure_context() {
-        assert_eq!(diagnostic_tail(""), "(no stderr captured)");
+        assert_eq!(
+            diagnostic_tail(""),
+            "stderr: <empty; process produced no stderr>"
+        );
         assert_eq!(diagnostic_tail("missing dep"), "stderr:\nmissing dep");
+    }
+
+    #[test]
+    fn startup_probe_distinguishes_exit_silence_and_cold_cache() {
+        assert_eq!(
+            classify_startup_probe(true, Some("child exited: status 1"), "boom"),
+            "process exited early (child exited: status 1)"
+        );
+        assert_eq!(
+            classify_startup_probe(true, None, ""),
+            "process alive but silent"
+        );
+        assert_eq!(
+            classify_startup_probe(true, None, "Resolving dependencies\nDownloading packages"),
+            "slow cold start (npm/bun dependency cache activity detected)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_early_exit_reports_status_and_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-acp.sh");
+        std::fs::write(&script, "#!/bin/sh\necho adapter-broke >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = HermesAgentRuntime::new_arc(HermesRuntimeConfig {
+            command: vec![script.to_string_lossy().into_owned()],
+            cwd: dir.path().to_string_lossy().into_owned(),
+            start_timeout_secs: 1,
+            ..Default::default()
+        });
+
+        let error = runtime.start(None).await.unwrap_err().to_string();
+
+        assert!(error.contains("process exited early"), "{error}");
+        assert!(error.contains("adapter-broke"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_timeout_retries_once_and_reports_both_stderr_tails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-acp.sh");
+        let counter = dir.path().join("attempts");
+        std::fs::write(
+            &script,
+            "#!/usr/bin/env bash\nn=0\n[ ! -f \"$1\" ] || n=$(cat \"$1\")\nn=$((n + 1))\necho $n > \"$1\"\necho attempt-$n >&2\nsleep 300\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = HermesAgentRuntime::new_arc(HermesRuntimeConfig {
+            command: vec![
+                script.to_string_lossy().into_owned(),
+                counter.to_string_lossy().into_owned(),
+            ],
+            cwd: dir.path().to_string_lossy().into_owned(),
+            session_source: None,
+            event_buffer: 8,
+            start_timeout_secs: 1,
+            mcp_servers: Vec::new(),
+            env: Vec::new(),
+            framing: AcpFraming::NewlineJson,
+            ..Default::default()
+        });
+
+        let error = runtime.start(None).await.unwrap_err().to_string();
+
+        assert_eq!(std::fs::read_to_string(counter).unwrap().trim(), "2");
+        assert!(error.contains("attempt 1"), "{error}");
+        assert!(error.contains("attempt-1"), "{error}");
+        assert!(error.contains("attempt 2"), "{error}");
+        assert!(error.contains("attempt-2"), "{error}");
     }
 
     #[cfg(unix)]
@@ -370,7 +505,7 @@ mod tests {
             ..Default::default()
         });
 
-        let outcome = tokio::time::timeout(Duration::from_secs(3), runtime.start(None)).await;
+        let outcome = tokio::time::timeout(Duration::from_secs(5), runtime.start(None)).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let pids = std::fs::read_to_string(&pidfile)
             .unwrap_or_default()

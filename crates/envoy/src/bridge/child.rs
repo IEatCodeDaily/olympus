@@ -144,6 +144,18 @@ impl ChildHandle {
         Arc::clone(&self.stderr)
     }
 
+    pub async fn finish_stderr(&mut self) {
+        if let Some(mut task) = self.stderr_task.take() {
+            if tokio::time::timeout(std::time::Duration::from_millis(100), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
+
     /// Close stdio, terminate, and reap the process.
     pub async fn reap(&mut self) -> Result<()> {
         self.writer.take();
