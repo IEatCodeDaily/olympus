@@ -108,6 +108,8 @@ export interface AgentInfo {
   kind: "hermes" | "claude-code" | "codex";
   /** CLI harness auth readiness: true = credentials found, false = needs login, undefined = n/a (hermes profiles). */
   ready?: boolean;
+  /** Discovered CLI/adapter version (CLI harnesses only). */
+  version?: string;
   /** True for the implicit root profile the server runs as by default. */
   isDefault: boolean;
 }
