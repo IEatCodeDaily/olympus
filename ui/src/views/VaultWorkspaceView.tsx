@@ -131,9 +131,18 @@ export function VaultWorkspaceView() {
     setMutationError(null);
     try {
       const markdown = `---\ntitle: ${yamlString(title)}\n---\n\n# ${title}\n`;
-      const document = await putVaultNote(activeVaultId, path, { markdown, createOnly: true });
-      await invalidateVault(activeVaultId);
+      queryClient.setQueryData(qk.vaultNote(activeVaultId, path), {
+        path,
+        title,
+        markdown,
+        frontmatter: { title },
+        linkedNotes: [],
+      });
       setNewNoteFolder(null);
+      openTab(noteTab(activeVaultId, path, title));
+      const document = await putVaultNote(activeVaultId, path, { markdown, createOnly: true });
+      queryClient.setQueryData(qk.vaultNote(activeVaultId, document.path), document);
+      await invalidateVault(activeVaultId);
       openTab(noteTab(activeVaultId, document.path, document.title));
     } catch (error) {
       setMutationError(errorMessage(error));
@@ -254,7 +263,7 @@ export function VaultWorkspaceView() {
         )}
       </div>
       {createVaultOpen && <CreateVaultDialog busy={busy} error={mutationError} onClose={() => setCreateVaultOpen(false)} onCreate={handleCreateVault} />}
-      {newNoteFolder !== null && <NewNoteDialog folder={newNoteFolder || null} busy={busy} error={mutationError} onClose={() => setNewNoteFolder(null)} onCreate={handleCreateNote} />}
+      {newNoteFolder !== null && <NewNoteDialog folder={newNoteFolder || null} notes={notes} busy={busy} error={mutationError} onClose={() => setNewNoteFolder(null)} onCreate={handleCreateNote} />}
       {renameEntry && <RenameNoteDialog key={renameEntry.path} currentPath={renameEntry.path} busy={busy} error={mutationError} onClose={() => setRenameEntry(null)} onRename={handleRename} />}
       <DeleteNoteDialog path={deleteEntry?.path ?? null} busy={busy} error={mutationError} onClose={() => setDeleteEntry(null)} onDelete={handleDelete} />
     </>
