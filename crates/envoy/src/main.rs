@@ -374,13 +374,15 @@ where
                     node_id: hb_node.clone(),
                     slots_used: 0,
                 };
+                hb_conn
+                    .unacked_heartbeats
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if hb_conn.send_frame(&hb).await.is_err() {
                     break;
                 }
                 let unacked = hb_conn
                     .unacked_heartbeats
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    + 1;
+                    .load(std::sync::atomic::Ordering::SeqCst);
                 if unacked >= HEARTBEAT_REREGISTER_AFTER {
                     tracing::warn!(
                         unacked,
@@ -538,12 +540,12 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
     match frame {
         HallFrame::HeartbeatAck => {
             conn.unacked_heartbeats
-                .store(0, std::sync::atomic::Ordering::Relaxed);
+                .store(0, std::sync::atomic::Ordering::SeqCst);
         }
         HallFrame::ReRegister => {
             tracing::warn!("Hall requested re-registration");
             conn.unacked_heartbeats
-                .store(0, std::sync::atomic::Ordering::Relaxed);
+                .store(0, std::sync::atomic::Ordering::SeqCst);
             conn.send_hello().await?;
         }
         HallFrame::EnsureRuntime {
