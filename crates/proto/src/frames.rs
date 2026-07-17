@@ -534,6 +534,25 @@ mod tests {
                 job_id: "j-1".into(),
                 attempt_epoch: 2,
             },
+            HallFrame::TerminalOpen {
+                req_id: 9,
+                terminal_id: "term-1".into(),
+                cols: 80,
+                rows: 24,
+                cwd: None,
+            },
+            HallFrame::TerminalInput {
+                terminal_id: "term-1".into(),
+                data_b64: "YQ==".into(),
+            },
+            HallFrame::TerminalResize {
+                terminal_id: "term-1".into(),
+                cols: 120,
+                rows: 40,
+            },
+            HallFrame::TerminalClose {
+                terminal_id: "term-1".into(),
+            },
             HallFrame::Drain {
                 req_id: 7,
                 to_node: Some("envoy-2".into()),
@@ -622,6 +641,30 @@ mod tests {
             },
             EnvoyFrame::Runtimes {
                 runtimes: vec![sample_runtime_status()],
+            },
+            EnvoyFrame::JobOutput {
+                job_id: "j-1".into(),
+                attempt_epoch: 3,
+                seq: 1,
+                stream: JobStream::Stdout,
+                data: "ok".into(),
+            },
+            EnvoyFrame::JobResult {
+                job_id: "j-1".into(),
+                attempt_epoch: 3,
+                seq: 2,
+                exit_code: Some(0),
+                truncated: false,
+                timed_out: false,
+                cancelled: false,
+            },
+            EnvoyFrame::TerminalOutput {
+                terminal_id: "term-1".into(),
+                data_b64: "b2s=".into(),
+            },
+            EnvoyFrame::TerminalExited {
+                terminal_id: "term-1".into(),
+                exit_code: Some(0),
             },
         ];
         for f in &frames {

@@ -8,11 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Oldest frame schema Hall accepts during rolling upgrades. v2 remains
-/// compatible for session operations; callers must gate v4 job frames.
-pub const MIN_PROTOCOL_VERSION: u32 = 2;
-/// Current frame-schema version. v4 adds durable job-attempt frames.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// Current frame-schema version. Hall accepts this exact version only.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Build identity: which build of the binary is speaking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,8 +50,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn job_attempt_frames_require_protocol_v4() {
-        assert_eq!(PROTOCOL_VERSION, 4);
+    fn complete_frame_set_uses_protocol_v1() {
+        assert_eq!(PROTOCOL_VERSION, 1);
     }
 
     #[test]

@@ -43,7 +43,6 @@ pub struct EnvoyResp {
 /// event channels.
 pub struct EnvoyConnection {
     pub(crate) epoch: u64,
-    protocol_version: u32,
     shutdown: tokio::sync::watch::Sender<bool>,
     /// Buffered writer to the transport stream (UDS or iroh QUIC). Guarded so
     /// Hall can send from any task. Transport-agnostic via [`BoxedWriter`].
@@ -87,14 +86,7 @@ impl EnvoyConnection {
         jobs: Option<Arc<crate::jobs::JobService>>,
     ) -> Arc<Self> {
         let (shutdown, _) = tokio::sync::watch::channel(false);
-        Self::new_with_epoch(
-            writer,
-            log,
-            jobs,
-            0,
-            olympus_proto::version::PROTOCOL_VERSION,
-            shutdown,
-        )
+        Self::new_with_epoch(writer, log, jobs, 0, shutdown)
     }
 
     fn new_with_epoch(
@@ -102,12 +94,10 @@ impl EnvoyConnection {
         log: Option<Arc<crate::log::Log>>,
         jobs: Option<Arc<crate::jobs::JobService>>,
         epoch: u64,
-        protocol_version: u32,
         shutdown: tokio::sync::watch::Sender<bool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             epoch,
-            protocol_version,
             shutdown,
             writer: Mutex::new(tokio::io::BufWriter::new(writer)),
             pending: Mutex::new(HashMap::new()),
@@ -131,16 +121,6 @@ impl EnvoyConnection {
         &self,
         frame: HallFrame,
     ) -> Result<Option<tokio::sync::oneshot::Receiver<EnvoyResp>>> {
-        let durable_job_frame = matches!(
-            &frame,
-            HallFrame::DispatchJob { .. } | HallFrame::CancelJob { .. }
-        ) || matches!(
-            &frame,
-            HallFrame::ResumeFrom { session_id, .. } if session_id.starts_with("job:")
-        );
-        if durable_job_frame && !self.supports_durable_jobs() {
-            anyhow::bail!("envoy protocol does not support durable jobs");
-        }
         match &frame {
             HallFrame::EnsureRuntime { .. }
             | HallFrame::Prompt { .. }
@@ -449,14 +429,6 @@ impl EnvoyConnection {
         self.fail_all().await;
         let _ = self.writer.lock().await.shutdown().await;
     }
-
-    pub(crate) fn supports_heartbeat_repair(&self) -> bool {
-        self.protocol_version >= 3
-    }
-
-    pub(crate) fn supports_durable_jobs(&self) -> bool {
-        self.protocol_version >= 4
-    }
 }
 
 /// Inject a Hall-assigned reqId into a request frame (overwriting whatever was
@@ -595,7 +567,6 @@ impl EnvoyConnections {
         node_id: &str,
         writer: BoxedWriter,
         epoch: u64,
-        protocol_version: u32,
         shutdown: tokio::sync::watch::Sender<bool>,
     ) -> Result<(Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>), Arc<EnvoyConnection>> {
         let conn = EnvoyConnection::new_with_epoch(
@@ -603,7 +574,6 @@ impl EnvoyConnections {
             self.log.clone(),
             self.jobs.clone(),
             epoch,
-            protocol_version,
             shutdown,
         );
         let mut inner = self.inner.write().await;
@@ -868,32 +838,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_jobs_require_protocol_v4() {
-        let connection = |protocol_version| {
-            let (shutdown, _) = tokio::sync::watch::channel(false);
-            EnvoyConnection::new_with_epoch(
-                test_writer(),
-                None,
-                None,
-                1,
-                protocol_version,
-                shutdown,
-            )
-        };
-        let v3 = connection(3);
-        assert!(!v3.supports_durable_jobs());
-        assert!(v3
-            .send_request(HallFrame::CancelJob {
-                req_id: 0,
-                job_id: "j".into(),
-                attempt_epoch: 1,
-            })
-            .await
-            .is_err());
-        assert!(connection(4).supports_durable_jobs());
-    }
-
-    #[tokio::test]
     async fn envoy_connections_insert_get_remove() {
         let conns = EnvoyConnections::new();
         assert!(!conns.is_remote_node("n1").await);
@@ -911,24 +855,12 @@ mod tests {
         let conns = EnvoyConnections::new();
         let (shutdown, _) = tokio::sync::watch::channel(false);
         assert!(conns
-            .insert_epoch(
-                "n1",
-                test_writer(),
-                2,
-                olympus_proto::version::PROTOCOL_VERSION,
-                shutdown,
-            )
+            .insert_epoch("n1", test_writer(), 2, shutdown,)
             .await
             .is_ok());
         let (shutdown, _) = tokio::sync::watch::channel(false);
         assert!(conns
-            .insert_epoch(
-                "n1",
-                test_writer(),
-                1,
-                olympus_proto::version::PROTOCOL_VERSION,
-                shutdown,
-            )
+            .insert_epoch("n1", test_writer(), 1, shutdown,)
             .await
             .is_err());
         assert_eq!(conns.get("n1").await.unwrap().epoch, 2);

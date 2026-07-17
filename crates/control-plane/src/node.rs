@@ -753,13 +753,8 @@ pub async fn run_uds_listener(
 
 /// Handle a single UDS connection (one envoy's lifecycle).
 ///
-/// Supports two protocol generations on the same socket:
-/// - **v2 (ADR 0008):** `EnvoyFrame`-tagged JSON-lines (hello/heartbeat/bye/
-///   resp/event/runtimes). On hello, validates `protocol_version == 2` (fail
-///   closed) and registers an `EnvoyConnection` so RemoteRuntime can drive
-///   sessions on this envoy.
-/// - **v1 (legacy):** `NodeMessage`-tagged JSON-lines (hello/heartbeat/bye).
-///   Kept for backward compatibility with old envoys.
+/// Supports the protocol-v1 `EnvoyFrame` wire contract and the unversioned legacy
+/// `NodeMessage` registration frames kept for old local envoys.
 ///
 /// The dispatch tries `EnvoyFrame` first; if the `kind` field doesn't match
 /// any EnvoyFrame variant, it falls back to `NodeMessage`.
@@ -802,7 +797,7 @@ pub async fn handle_envoy_conn<R, W>(
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let mut connected_node: Option<String> = None;
     // The EnvoyConnection (set on hello). All writes to the envoy go through
-    // its buffered writer. For legacy v1 connections, we fall back to writing
+    // its buffered writer. For legacy connections, we fall back to writing
     // directly via the raw writer.
     let mut conn: Option<Arc<crate::server::envoy_conn::EnvoyConnection>> = None;
     let mut legacy_writer: Option<crate::server::envoy_conn::BoxedWriter> = Some(Box::new(writer));
@@ -822,7 +817,7 @@ pub async fn handle_envoy_conn<R, W>(
             continue;
         }
 
-        // Try parsing as EnvoyFrame (v2 protocol) first. EnvoyFrame and
+        // Try parsing as EnvoyFrame first. EnvoyFrame and
         // NodeMessage share `kind`-tagged JSON, but their variant names differ
         // (EnvoyFrame uses snake_case: hello, heartbeat, bye, resp, event,
         // runtimes). NodeMessage uses lowercase: hello, heartbeat, bye.
@@ -976,7 +971,7 @@ enum HelloOutcome {
     Rejected,
 }
 
-/// Handle a v2 EnvoyFrame::Hello: validate protocol version, register the node,
+/// Handle an EnvoyFrame::Hello: validate protocol version, register the node,
 /// create the EnvoyConnection with the writer, and return the connection.
 #[allow(clippy::too_many_arguments)]
 async fn handle_envoy_hello(
@@ -991,7 +986,7 @@ async fn handle_envoy_hello(
     shutdown: tokio::sync::watch::Sender<bool>,
 ) -> HelloOutcome {
     use olympus_proto::frames::EnvoyFrame;
-    use olympus_proto::version::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION};
+    use olympus_proto::version::PROTOCOL_VERSION;
 
     let EnvoyFrame::Hello {
         node_id,
@@ -1008,12 +1003,11 @@ async fn handle_envoy_hello(
         unreachable!("handle_envoy_hello called with non-Hello frame")
     };
 
-    if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol_version) {
+    if protocol_version != PROTOCOL_VERSION {
         tracing::warn!(
             node = %node_id,
             got = protocol_version,
-            min = MIN_PROTOCOL_VERSION,
-            max = PROTOCOL_VERSION,
+            expected = PROTOCOL_VERSION,
             "rejecting envoy: protocol version mismatch"
         );
         // We can't write to the writer anymore (it's consumed by insert).
@@ -1026,7 +1020,7 @@ async fn handle_envoy_hello(
         hostname = %hostname,
         version = %build_version.semver,
         git = %build_version.git_hash,
-        "envoy registered (v2)"
+        "envoy registered"
     );
 
     // Parse the agents JSON into AgentInfo (best-effort; the envoy sends
@@ -1061,7 +1055,7 @@ async fn handle_envoy_hello(
 
     // Publish the new epoch before closing the superseded connection.
     let (conn, old) = match envoy_conns
-        .insert_epoch(&node_id, writer, epoch, protocol_version, shutdown)
+        .insert_epoch(&node_id, writer, epoch, shutdown)
         .await
     {
         Ok(inserted) => inserted,
@@ -1073,30 +1067,28 @@ async fn handle_envoy_hello(
     if let Some(old) = old {
         tokio::spawn(async move { old.close().await });
     }
-    if conn.supports_durable_jobs() {
-        let pending_dispatches = conn
-            .pending_job_dispatches(&node_id, &job_attempts)
-            .unwrap_or_default();
-        if let Err(error) = conn.reconcile_jobs(&node_id, &job_attempts) {
-            tracing::error!(node = %node_id, %error, "reconciling durable job attempts");
+    let pending_dispatches = conn
+        .pending_job_dispatches(&node_id, &job_attempts)
+        .unwrap_or_default();
+    if let Err(error) = conn.reconcile_jobs(&node_id, &job_attempts) {
+        tracing::error!(node = %node_id, %error, "reconciling durable job attempts");
+    }
+    for frame in pending_dispatches {
+        if let Err(error) = conn.send_request(frame).await {
+            tracing::error!(node = %node_id, %error, "replaying durable job dispatch intent");
         }
-        for frame in pending_dispatches {
-            if let Err(error) = conn.send_request(frame).await {
-                tracing::error!(node = %node_id, %error, "replaying durable job dispatch intent");
-            }
-        }
-        for attempt in &job_attempts {
-            let identity = crate::jobs::wire_id(&attempt.job_id, attempt.attempt_epoch);
-            let watermark = conn.watermark(&identity).ok().flatten().unwrap_or(u64::MAX);
-            if let Err(error) = conn
-                .send_request(olympus_proto::frames::HallFrame::ResumeFrom {
-                    session_id: identity,
-                    seq: watermark,
-                })
-                .await
-            {
-                tracing::error!(job = %attempt.job_id, %error, "requesting durable job spool replay");
-            }
+    }
+    for attempt in &job_attempts {
+        let identity = crate::jobs::wire_id(&attempt.job_id, attempt.attempt_epoch);
+        let watermark = conn.watermark(&identity).ok().flatten().unwrap_or(u64::MAX);
+        if let Err(error) = conn
+            .send_request(olympus_proto::frames::HallFrame::ResumeFrom {
+                session_id: identity,
+                seq: watermark,
+            })
+            .await
+        {
+            tracing::error!(job = %attempt.job_id, %error, "requesting durable job spool replay");
         }
     }
     for runtime in runtimes {
@@ -1131,7 +1123,7 @@ async fn reregister_hello(
     epoch: u64,
 ) -> bool {
     use olympus_proto::frames::EnvoyFrame;
-    use olympus_proto::version::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION};
+    use olympus_proto::version::PROTOCOL_VERSION;
 
     let EnvoyFrame::Hello {
         node_id,
@@ -1146,7 +1138,7 @@ async fn reregister_hello(
     else {
         return false;
     };
-    if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol_version)
+    if protocol_version != PROTOCOL_VERSION
         || !registry.iroh_peer_is_allowlisted(peer_iroh_id.as_deref())
     {
         return false;
@@ -1177,7 +1169,7 @@ async fn reregister_hello(
     accepted
 }
 
-/// Dispatch a parsed EnvoyFrame (ADR 0008 v2 protocol) — all variants except
+/// Dispatch a parsed EnvoyFrame (ADR 0008 protocol v1) — all variants except
 /// the initial Hello. Resp and Event frames route through `conn`.
 async fn handle_envoy_frame(
     frame: olympus_proto::frames::EnvoyFrame,
@@ -1204,14 +1196,8 @@ async fn handle_envoy_frame(
                 return FrameOutcome::Disconnect;
             };
             let reply = match registry.heartbeat(&node_id, slots_used, Some(epoch)).await {
-                Ok(()) if conn.supports_heartbeat_repair() => {
-                    olympus_proto::frames::HallFrame::HeartbeatAck
-                }
-                Ok(()) => return FrameOutcome::Continue,
-                Err(e)
-                    if !conn.supports_heartbeat_repair()
-                        || !registry.iroh_peer_is_allowlisted(peer_iroh_id.as_deref()) =>
-                {
+                Ok(()) => olympus_proto::frames::HallFrame::HeartbeatAck,
+                Err(e) if !registry.iroh_peer_is_allowlisted(peer_iroh_id.as_deref()) => {
                     tracing::warn!(node = %node_id, error = %e, "closing unrepairable envoy heartbeat");
                     return FrameOutcome::Disconnect;
                 }
@@ -1716,39 +1702,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_hello_is_accepted_during_rolling_upgrade() {
-        let registry = NodeRegistry::new();
-        let conns = crate::server::envoy_conn::EnvoyConnections::new();
-        let (hall, mut envoy) = tokio::io::duplex(4096);
-        let (reader, writer) = tokio::io::split(hall);
-        let task = tokio::spawn(handle_envoy_conn(
-            reader,
-            writer,
-            registry.clone(),
-            conns,
-            NodeTransport::Uds,
-            None,
-        ));
-        envoy
-            .write_all(
-                format!(
-                    "{}\n",
-                    serde_json::to_string(&hello_version("node", 2)).unwrap()
+    async fn hello_rejects_non_v1_protocols() {
+        for protocol_version in [0, 2] {
+            let registry = NodeRegistry::new();
+            let conns = crate::server::envoy_conn::EnvoyConnections::new();
+            let (hall, mut envoy) = tokio::io::duplex(4096);
+            let (reader, writer) = tokio::io::split(hall);
+            let task = tokio::spawn(handle_envoy_conn(
+                reader,
+                writer,
+                registry.clone(),
+                conns,
+                NodeTransport::Uds,
+                None,
+            ));
+            envoy
+                .write_all(
+                    format!(
+                        "{}\n",
+                        serde_json::to_string(&hello_version("node", protocol_version)).unwrap()
+                    )
+                    .as_bytes(),
                 )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while registry.get("node").await.is_none() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("v2 envoy should remain available during a Hall-first upgrade");
-        drop(envoy);
-        task.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .expect("protocol mismatch must close the connection")
+                .unwrap();
+            assert!(registry.get("node").await.is_none());
+        }
     }
 
     #[test]
