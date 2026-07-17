@@ -1478,6 +1478,7 @@ mod tests {
             agents: None,
             runtimes: vec![],
             roles: vec![],
+            job_attempts: vec![],
         }
     }
 
