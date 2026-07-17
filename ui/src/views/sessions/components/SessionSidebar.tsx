@@ -61,25 +61,29 @@ export function SessionSidebar({
   const recent = sessions.filter((s) => !s.pinned).slice(0, RECENT_LIMIT);
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   // Bug 10: open agent picker instead of creating immediately
   const handleNewSession = useCallback(() => {
+    setPickerError(null);
     setPickerOpen(true);
   }, []);
 
   const handlePickAgent = useCallback(
     async (agentId: string, nodeId: string) => {
-      setPickerOpen(false);
+      setPickerError(null);
       try {
         const session = await createSession({ agent: agentId, node: nodeId });
+        setPickerOpen(false);
         if (session?.id) {
           void navigate({
             to: "/sessions/$sessionId",
             params: { sessionId: session.id },
           });
         }
-      } catch {
-        // sessions list will refetch
+      } catch (error) {
+        setPickerOpen(true);
+        setPickerError(error instanceof Error ? error.message : `Could not create session on ${nodeId}`);
       }
     },
     [navigate],
@@ -130,6 +134,7 @@ export function SessionSidebar({
         open={pickerOpen}
         onSelect={handlePickAgent}
         onCancel={() => setPickerOpen(false)}
+        error={pickerError}
       />
     </>
   );

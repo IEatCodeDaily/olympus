@@ -54,27 +54,36 @@ export function AgentPicker({
   open,
   onSelect,
   onCancel,
+  error,
   nodesOverride,
   sessionsOverride,
 }: {
   open: boolean;
   onSelect: (agentId: string, nodeId: string) => void;
   onCancel: () => void;
+  error?: string | null;
   nodesOverride?: NodeInfo[];
   sessionsOverride?: Session[];
 }) {
-  const { data: catalog, isLoading } = useAgentCatalog();
-  const { data: sessionData } = useSessions({ managed: true, archived: false, limit: 50 });
+  const { data: catalog, isLoading } = useAgentCatalog(open && !nodesOverride);
+  const { data: sessionData } = useSessions({ managed: true, archived: false, limit: 50, enabled: open && !sessionsOverride });
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
 
   const nodes = nodesOverride ?? catalog?.nodes ?? [];
   const sessions = sessionsOverride ?? sessionData?.sessions ?? [];
   const rows = useMemo(() => nodeAgentRows(nodes, query), [nodes, query]);
-  const selectable = rows.filter((row) => row.node.status === "online");
   const often = useMemo(
     () => deriveOftenSelectedPairs(sessions, nodes).filter((row) => nodeAgentRows([row.node], query).some((r) => r.agent.id === row.agent.id)),
     [sessions, nodes, query],
+  );
+  const grouped = useMemo(() => nodes.map((node) => ({
+    node,
+    rows: rows.filter((row) => row.node.nodeId === node.nodeId),
+  })), [nodes, rows]);
+  const selectable = useMemo(
+    () => [...often, ...grouped.flatMap(({ node, rows }) => node.status === "online" ? rows : [])],
+    [often, grouped],
   );
 
   useEffect(() => setActive(0), [query, open]);
@@ -102,11 +111,6 @@ export function AgentPicker({
 
   if (!open) return null;
 
-  const grouped = nodes.map((node) => ({
-    node,
-    rows: rows.filter((row) => row.node.nodeId === node.nodeId),
-  }));
-
   return (
     <div className="ol-overlay" role="dialog" aria-modal="true" aria-label="Start new session" onClick={onCancel}>
       <div className="ol-dialog" style={{ maxWidth: 560, width: "92vw" }} onClick={(e) => e.stopPropagation()}>
@@ -131,26 +135,34 @@ export function AgentPicker({
               style={{ width: "100%" }}
             />
           </div>
+          {error && <div role="alert" style={{ padding: 12, color: "var(--err)", fontSize: 12 }}>{error}</div>}
           {isLoading && !nodesOverride && <div style={{ padding: 12, color: "var(--dim)", fontSize: 12 }}>Loading agents…</div>}
           {!isLoading && rows.length === 0 && <div style={{ padding: 12, color: "var(--dim)", fontSize: 12 }}>No matching agents.</div>}
           <div style={{ maxHeight: 440, overflowY: "auto" }}>
             {often.length > 0 && (
               <section aria-label="Often selected">
                 <div className="gk" style={{ padding: "10px 12px 4px" }}>often selected</div>
-                {often.map((row) => <AgentButton key={`often:${row.node.nodeId}:${row.agent.id}`} row={row} onSelect={onSelect} />)}
+                {often.map((row, index) => (
+                  <AgentButton key={`often:${row.node.nodeId}:${row.agent.id}`} row={row} active={active === index} onSelect={onSelect} />
+                ))}
               </section>
             )}
             {grouped.map(({ node, rows: nodeRows }) => {
               if (nodeRows.length === 0) return null;
               const online = node.status === "online";
+              let offset = often.length;
+              for (const group of grouped) {
+                if (group.node.nodeId === node.nodeId) break;
+                if (group.node.status === "online") offset += group.rows.length;
+              }
               return (
                 <section key={node.nodeId} aria-label={`${node.hostname} ${node.status}`}>
                   <div className="gk" style={{ padding: "12px 12px 4px", display: "flex", gap: 8, alignItems: "center" }}>
                     <span>{node.hostname || node.nodeId}</span>
-                    <span className="tag" style={{ color: online ? "var(--success)" : "var(--dim)" }}>{node.status}</span>
+                    <span className="tag" style={{ color: online ? "var(--ok)" : "var(--dim)" }}>{node.status}</span>
                   </div>
-                  {online ? nodeRows.map((row) => (
-                    <AgentButton key={`${row.node.nodeId}:${row.agent.id}`} row={row} onSelect={onSelect} />
+                  {online ? nodeRows.map((row, index) => (
+                    <AgentButton key={`${row.node.nodeId}:${row.agent.id}`} row={row} active={active === offset + index} onSelect={onSelect} />
                   )) : (
                     <div style={{ padding: "4px 12px 12px", color: "var(--dim)", fontSize: 12 }}>
                       {nodeRows.length} agent{nodeRows.length === 1 ? "" : "s"} hidden while this node is {node.status}.
@@ -167,14 +179,15 @@ export function AgentPicker({
   );
 }
 
-function AgentButton({ row, onSelect }: { row: PickRow; onSelect: (agentId: string, nodeId: string) => void }) {
+function AgentButton({ row, active, onSelect }: { row: PickRow; active: boolean; onSelect: (agentId: string, nodeId: string) => void }) {
   const label = `${row.agent.id} on ${row.node.nodeId}`;
   return (
     <button
       type="button"
       className="ol-menu-item"
+      data-active={active ? "true" : undefined}
       aria-label={label}
-      style={{ width: "100%", border: "none", background: "none", cursor: "pointer", textAlign: "left" }}
+      style={{ width: "100%", border: "none", background: active ? "var(--bg-hover)" : "none", cursor: "pointer", textAlign: "left", color: active ? "var(--text)" : undefined }}
       onClick={() => onSelect(row.agent.id, row.node.nodeId)}
     >
       <BrandIcon name={agentBrand(row.agent.kind, row.agent.provider)} size={15} />

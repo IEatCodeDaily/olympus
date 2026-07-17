@@ -119,4 +119,45 @@ describe("AgentPicker", () => {
     expect(within(offline).queryByRole("button", { name: /tester/i })).toBeNull();
     expect(within(offline).getAllByText(/offline/i).length).toBeGreaterThan(0);
   });
+
+  it("shows create errors without closing the picker", () => {
+    renderWithQuery(
+      <AgentPicker
+        open
+        error="Node edge-mini is Offline; choose an online node"
+        onSelect={() => {}}
+        onCancel={() => {}}
+        nodesOverride={[node("local", "online", [agent("default")])]}
+        sessionsOverride={[]}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: /start new session/i })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/edge-mini is Offline/i);
+  });
+
+  it("highlights keyboard selection in rendered order, including often-selected", () => {
+    const onSelect = vi.fn();
+    renderWithQuery(
+      <AgentPicker
+        open
+        onSelect={onSelect}
+        onCancel={() => {}}
+        nodesOverride={[
+          node("local", "online", [agent("default")]),
+          node("fx-zephyrus", "online", [agent("codex", "openai-codex")]),
+        ]}
+        sessionsOverride={[session("recent", "codex", "fx-zephyrus", 60)]}
+      />,
+    );
+
+    const buttons = screen.getAllByRole("button", { name: / on /i });
+    expect(buttons[0]).toHaveAttribute("data-active", "true");
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(buttons[1]).toHaveAttribute("data-active", "true");
+
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith("default", "local");
+  });
 });

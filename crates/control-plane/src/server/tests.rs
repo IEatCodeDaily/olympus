@@ -942,6 +942,18 @@ async fn post_sessions_creates_managed_olympus_session() {
     assert_eq!(v["hermesId"], "");
 }
 
+fn test_agent(id: &str) -> crate::server::agents::AgentInfo {
+    crate::server::agents::AgentInfo {
+        id: id.to_string(),
+        provider: Some("test".into()),
+        model: Some("test-model".into()),
+        version: None,
+        kind: "hermes".into(),
+        is_default: false,
+        ready: None,
+    }
+}
+
 #[tokio::test]
 async fn post_sessions_with_agent_binds_it_at_creation() {
     // POST /api/sessions {agent, node} → the draft carries the binding.
@@ -956,7 +968,7 @@ async fn post_sessions_with_agent_binds_it_at_creation() {
             true,
             crate::node::NodeTransport::Local,
             None,
-            vec![],
+            vec![test_agent("coding-agent")],
         )
         .await;
     let app = build_router(state);
@@ -979,6 +991,90 @@ async fn post_sessions_with_agent_binds_it_at_creation() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["agent"], "coding-agent");
     assert_eq!(v["node"], "local");
+}
+
+#[tokio::test]
+async fn post_sessions_rejects_unknown_node() {
+    let (state, _d) = test_state();
+    let app = build_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"agent":"coding-agent","node":"missing"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn post_sessions_rejects_unavailable_node() {
+    let (state, _d) = test_state();
+    state
+        .nodes
+        .register(
+            "local",
+            "localhost",
+            4,
+            "0.1",
+            true,
+            crate::node::NodeTransport::Local,
+            None,
+            vec![test_agent("coding-agent")],
+        )
+        .await;
+    state.nodes.set_draining("local").await.unwrap();
+    let app = build_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"agent":"coding-agent","node":"local"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn post_sessions_rejects_agent_missing_from_node() {
+    let (state, _d) = test_state();
+    state
+        .nodes
+        .register(
+            "local",
+            "localhost",
+            4,
+            "0.1",
+            true,
+            crate::node::NodeTransport::Local,
+            None,
+            vec![test_agent("other-agent")],
+        )
+        .await;
+    let app = build_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("authorization", "Bearer testtoken")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"agent":"coding-agent","node":"local"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

@@ -439,7 +439,21 @@ pub(crate) async fn create_session(
     let body = body.map(|Json(b)| b).unwrap_or_default();
     if let Some(node_id) = body.node.as_deref() {
         match state.nodes.get(node_id).await {
-            Some(node) if node.status == crate::node::NodeStatus::Online => {}
+            Some(node) if node.status == crate::node::NodeStatus::Online => {
+                // Advisory UX check only: the node can still disappear before first send.
+                if let Some(agent_id) = body.agent.as_deref() {
+                    if !node.agents.iter().any(|agent| agent.id == agent_id) {
+                        return (
+                            StatusCode::CONFLICT,
+                            Json(json!({
+                                "error": "agent_unavailable",
+                                "message": format!("Agent {agent_id} is not available on node {node_id}"),
+                            })),
+                        )
+                            .into_response();
+                    }
+                }
+            }
             Some(node) => {
                 return (
                     StatusCode::CONFLICT,

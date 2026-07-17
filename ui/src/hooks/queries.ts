@@ -44,6 +44,7 @@ export function useSessions(params?: {
   sort?: string;
   limit?: number;
   node?: string;
+  enabled?: boolean;
 }) {
   return useQuery({
     queryKey: qk.sessions(params),
@@ -57,6 +58,7 @@ export function useSessions(params?: {
       }),
     refetchInterval: 10_000,
     staleTime: 5_000,
+    enabled: params?.enabled ?? true,
   });
 }
 
@@ -86,12 +88,13 @@ export function useAgents() {
 }
 
 /** Per-node agent availability for new-session routing. */
-export function useAgentCatalog() {
+export function useAgentCatalog(enabled = true) {
   return useQuery({
     queryKey: qk.agentCatalog(),
     queryFn: fetchAgentCatalog,
     refetchInterval: 10_000,
     staleTime: 5_000,
+    enabled,
   });
 }
 
