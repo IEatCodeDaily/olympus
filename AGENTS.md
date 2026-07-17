@@ -55,6 +55,11 @@ cargo test --workspace
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cd ui && bun run typecheck && bun run build && bun run test:e2e
+
+# fxcompute-01 / worktree Rust checks MUST share artifacts + serialization:
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+export CARGO_TARGET_DIR="$HOME/.cache/olympus-cargo-target"
+flock "$HOME/.cache/olympus-cargo.lock" cargo test -j2 -p <crate>
 ```
 
 There is no `bun run lint` / Convex command — those were the old TS scaffold
@@ -85,6 +90,9 @@ symlinks (`olympus-hall` / `olympus-envoy`) as the deploy pointer. The
   sides. The DTO layer (`server/dto.rs`) is the only place view rows become wire
   JSON (camelCase).
 - `make verify` must be green before a PR.
+- On fxcompute-01, never create a separate multi-GB Rust `target/` per worktree.
+  Use the shared `CARGO_TARGET_DIR` + `flock` command above. Before deleting any
+  reproducible build target, verify no live `cargo` or `rustc` command references it.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
