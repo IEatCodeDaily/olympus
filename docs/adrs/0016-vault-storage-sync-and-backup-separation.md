@@ -4,6 +4,16 @@
 - Date: 2026-07-13
 - Relates to: ADR 0004 (Markdown + jj), ADR 0012 (programmable environment), Vault workspace
 
+> **Amended by ADR 0026 (2026-07-17).** The authoritative working Vault now may
+> contain project descriptors, Markdown, and native board structured artifacts.
+> jj remains the editable synchronization path for Markdown/descriptors only;
+> logical cr-sqlite replication is a separate structured adapter and live
+> `board.db`/WAL/SHM files are excluded from jj and file-copy adapters. Backup
+> bindings must create coherent per-board SQLite snapshots plus a sovereign
+> export and record their version vectors beside the Vault jj revision. The
+> encryption, content-addressing, binding-deletion, and restore-test rules below
+> remain intact.
+
 ## Context
 
 The first Vault implementation modeled GitHub as a required `VaultBackend` and nested `jj-git` inside that descriptor. This collapses three different concerns:

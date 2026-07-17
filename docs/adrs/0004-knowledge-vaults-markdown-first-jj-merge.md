@@ -6,6 +6,16 @@
   separate subsystem with the **opposite** writer model), Epic K (vaults),
   Epic P (local-first content plane — partially resolved by this ADR)
 
+> **Amended by ADR 0026 (2026-07-17).** Native project boards are a named
+> structured-vault use case. Their structured fields and comments are
+> authoritative in one board-local cr-sqlite database, while project context
+> and card descriptions remain authoritative Markdown. The prohibition on
+> blind SQLite file synchronization remains in force: `board.db`, WAL, and SHM
+> are excluded from jj/file adapters; Olympus owns logical replication,
+> admission, schema coordination, invariant repair, and coherent snapshots.
+> The earlier “DB is local + link file in the vault” example is superseded for
+> this board-specific layout only.
+
 ## Context
 
 Epic K specifies knowledge vaults as "text = jj, binaries = blobref +

@@ -4,6 +4,14 @@
 - Date: 2026-07-10
 - Relates to: ADR 0005 (organization ownership), ADR 0008 (Hall/Envoy split)
 
+> **Amended by ADR 0024 (2026-07-17).** `~/.olympus/auth.sqlite` remains the
+> transactional authority for Hall users, memberships, roles, and login
+> sessions. It may store external connection/credential metadata, grants,
+> revocation, and audit references, but not external secret payloads. Encrypted
+> payloads live in the separate Secret Store and are usable only through the
+> Auth Broker. Installed-client refresh credentials remain in the client's OS
+> credential store as specified below.
+
 ## Context
 
 Olympus currently protects every API request with one installation-wide bearer token compiled into the Web UI. It has a hard-coded `default` organization and no user, membership, login-session, or client-connection model. This is sufficient for a loopback prototype but cannot safely support a remotely served Hall or multiple organizations.
@@ -28,7 +36,7 @@ Each Hall owns:
 
 There is no global Olympus account, cross-Hall session, or organization spanning multiple Halls in v1.
 
-The credential store is `~/.olympus/auth.sqlite`. It is operational/security truth, separate from the business event log: password hashes and revocable login-session records are not replayable domain events and must not be copied into projections or search. Organization resource records remain Hall business truth and follow ADR 0005.
+The Hall identity and authorization store is `~/.olympus/auth.sqlite`. It is operational/security truth, separate from the business event log: password hashes and revocable login-session records are not replayable domain events and must not be copied into projections or search. Organization resource records remain Hall business truth and follow ADR 0005. External secret payloads are governed separately by ADR 0024.
 
 The existing installation bearer token remains supported for native/operator automation and migration. Browser login uses an opaque random session token in an HttpOnly cookie; only a BLAKE3 hash is persisted. Passwords use Argon2id.
 

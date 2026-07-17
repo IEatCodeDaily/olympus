@@ -17,6 +17,16 @@
 > in full before writing any Olympus code that touches paths, sessions, repos,
 > or node sync.
 
+> **Partially superseded by ADRs 0024–0026 (2026-07-17).** Organization remains
+> the hard ownership/isolation boundary and Project, Repo, Vault, and Session
+> remain distinct resources. ADR 0024 now owns external connections,
+> credentials, grants, and Secret Store boundaries. ADR 0025 makes Repo a
+> durable provider-bound resource. ADR 0026 requires each Project to reference
+> one same-org home Vault, makes Board durable, and replaces the “project has no
+> working files,” optional-vault, and “two databases” summaries with its
+> normative project-content layout and authority matrix. A Project references
+> its home Vault; it does not own or delete the Vault.
+
 ## 1. Why this supersedes §3 and §5
 
 ADR 0002 introduced a **"context"** isolation layer ("personal / noovoleum-rde /

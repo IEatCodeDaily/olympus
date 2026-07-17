@@ -3,6 +3,14 @@
 Status: accepted · Date: 2026-07-10
 Related: ADR 0002 (§2.4 — event-sourced projections), ADR 0008 (Hall/Envoy split)
 
+> **Amended by ADR 0026 (2026-07-17).** This ADR remains authoritative for
+> Hall's SQLite event/projection store and memory strategy. Its central `cards`
+> table and card-event write path are superseded as canonical card state:
+> native structured card state moves to board-local cr-sqlite and GitHub-backed
+> state remains in GitHub. Hall retains registration, number allocation,
+> operation/saga audit, and rebuildable cross-board projections. “One `.db`
+> file” applies to Hall, not to Olympus's complete storage topology.
+
 ## Context
 
 Olympus Hall currently uses 1.4 GB of RAM on a 7.7 GB VPS. The host runs
