@@ -13,7 +13,7 @@
  *  - Pin/archive hover actions actually PATCH the session now.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Icon } from "../../../components/Icon";
 import { useSessions, useUpdateSession } from "../../../hooks/queries";
@@ -47,12 +47,16 @@ export function SessionSidebar({
   width,
   activeSessionId,
   openSessionIds = new Set(),
+  paneMarks = new Map(),
+  onOpenSession,
   onResizeStart,
   onResizeKeyDown,
 }: {
   width: number;
   activeSessionId: string | null;
   openSessionIds?: ReadonlySet<string>;
+  paneMarks?: ReadonlyMap<string, string>;
+  onOpenSession?: (id: string, split?: "right" | "below") => void;
   onResizeStart?: (e: React.MouseEvent) => void;
   onResizeKeyDown?: (e: React.KeyboardEvent) => void;
 }) {
@@ -143,8 +147,10 @@ export function SessionSidebar({
               sessions={pinned}
               activeSessionId={activeSessionId}
               openSessionIds={openSessionIds}
+              paneMarks={paneMarks}
               metadataFields={metadataFields}
               onSelect={handleSelectSession}
+              onOpenSession={onOpenSession}
             />
           )}
           <SessionSection
@@ -152,8 +158,10 @@ export function SessionSidebar({
             sessions={recent}
             activeSessionId={activeSessionId}
             openSessionIds={openSessionIds}
+            paneMarks={paneMarks}
             metadataFields={metadataFields}
             onSelect={handleSelectSession}
+            onOpenSession={onOpenSession}
           />
         </div>
       </aside>
@@ -200,15 +208,19 @@ function SessionSection({
   sessions,
   activeSessionId,
   openSessionIds,
+  paneMarks,
   metadataFields,
   onSelect,
+  onOpenSession,
 }: {
   label: string;
   sessions: Session[];
   activeSessionId: string | null;
   openSessionIds: ReadonlySet<string>;
+  paneMarks: ReadonlyMap<string, string>;
   metadataFields: ReadonlySet<SessionMetadataField>;
   onSelect: (id: string) => void;
+  onOpenSession?: (id: string, split?: "right" | "below") => void;
 }) {
   if (sessions.length === 0) return null;
   return (
@@ -225,8 +237,10 @@ function SessionSection({
             session={s}
             active={activeSessionId === s.id}
             open={openSessionIds.has(s.id)}
+            paneMark={paneMarks.get(s.id)}
             metadataFields={metadataFields}
             onSelect={onSelect}
+            onOpenSession={onOpenSession}
           />
         ))}
       </div>
@@ -236,19 +250,24 @@ function SessionSection({
 
 /** A clean session row: title left, time right, hover reveals pin/archive.
  *  Status icon (left): spinner when agent running, orange ! when waiting for
- *  input, nothing when idle. */
+ *  input, nothing when idle. Right-click or ... button reveals context menu
+ *  with Open / Open Right / Open Below. */
 function SessionRow({
   session,
   active,
   open,
+  paneMark,
   metadataFields,
   onSelect,
+  onOpenSession,
 }: {
   session: Session;
   active: boolean;
   open: boolean;
+  paneMark?: string;
   metadataFields: ReadonlySet<SessionMetadataField>;
   onSelect: (id: string) => void;
+  onOpenSession?: (id: string, split?: "right" | "below") => void;
 }) {
   const title = session.title || "Untitled";
   const time = timeAgo(session.lastActivity);
@@ -259,8 +278,38 @@ function SessionRow({
   const needsInput = session.liveness === "input-required";
   const showIcon = isRunning || needsInput;
 
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  const openMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const fireOpen = useCallback((split?: "right" | "below") => {
+    setMenu(null);
+    if (onOpenSession) onOpenSession(session.id, split);
+    else onSelect(session.id);
+  }, [onOpenSession, onSelect, session.id]);
+
   return (
     <div
+      ref={rowRef}
       className={`srow ${active ? "on focused" : ""}`}
       data-session-id={session.id}
       data-managed={session.managed ? "true" : "false"}
@@ -276,6 +325,7 @@ function SessionRow({
         );
       }}
       onClick={() => onSelect(session.id)}
+      onContextMenu={openMenu}
     >
       {/* Instant hover card: node · agent · model (native title is too slow) */}
       <span className="srow-hovercard" role="tooltip">
@@ -296,9 +346,18 @@ function SessionRow({
         <span className="srow-title">{title}</span>
         {metadata.length > 0 && <span className="srow-meta">{metadata.join(" · ")}</span>}
       </span>
+      {paneMark && <span className="srow-pane-mark">{paneMark}</span>}
       <span className="srow-time">{time}</span>
       {/* Hover actions */}
       <span className="srow-actions">
+        <button
+          type="button"
+          className="srow-act"
+          title="Open menu"
+          onClick={openMenu}
+        >
+          <Icon name="ellipsis" size={11} />
+        </button>
         <button
           type="button"
           className="srow-act"
@@ -322,6 +381,46 @@ function SessionRow({
           <Icon name="archive" size={11} />
         </button>
       </span>
+      {menu && (
+        <div
+          className="ctx-menu"
+          role="menu"
+          style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 1000 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button type="button" className="ctx-item" role="menuitem" onClick={() => fireOpen()}>
+            <Icon name="message-square" size={12} />
+            Open
+          </button>
+          <button type="button" className="ctx-item" role="menuitem" onClick={() => fireOpen("right")}>
+            <Icon name="panel-right" size={12} />
+            Open Right
+          </button>
+          <button type="button" className="ctx-item" role="menuitem" onClick={() => fireOpen("below")}>
+            <Icon name="panel-bottom" size={12} />
+            Open Below
+          </button>
+          <div className="ctx-sep" />
+          <button
+            type="button"
+            className="ctx-item"
+            role="menuitem"
+            onClick={(e) => { e.stopPropagation(); setMenu(null); update.mutate({ id: session.id, patch: { pinned: !session.pinned } }); }}
+          >
+            <Icon name="pin" size={12} />
+            {session.pinned ? "Unpin" : "Pin"}
+          </button>
+          <button
+            type="button"
+            className="ctx-item"
+            role="menuitem"
+            onClick={(e) => { e.stopPropagation(); setMenu(null); update.mutate({ id: session.id, patch: { archived: true } }); }}
+          >
+            <Icon name="archive" size={12} />
+            Archive
+          </button>
+        </div>
+      )}
     </div>
   );
 }
