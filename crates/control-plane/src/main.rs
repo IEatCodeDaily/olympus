@@ -152,6 +152,10 @@ async fn main() -> Result<()> {
     let (deltas, _rx) = broadcast::channel(1024);
     // `log` is already an Arc<Log> (opened at the top); reuse it directly.
     let log_arc = log;
+    let jobs = Arc::new(
+        olympus_control_plane::jobs::JobService::open(log_arc.clone())
+            .context("replaying durable jobs")?,
+    );
     let bridge = std::sync::Arc::new(
         olympus_control_plane::server::bridge_mgr::BridgeManager::with_factory(
             log_arc.clone(),
@@ -231,12 +235,14 @@ async fn main() -> Result<()> {
         snapshot_sessions: snap_sessions,
         snapshot_messages: snap_messages,
         log: log_arc.clone(),
+        jobs: jobs.clone(),
         bridge,
         sync_connected: sync_connected.clone(),
         irc: olympus_control_plane::irc::IrcBus::new(),
         nodes: node_registry.clone(),
-        envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::with_log(
+        envoy_conns: olympus_control_plane::server::envoy_conn::EnvoyConnections::with_log_and_jobs(
             log_arc.clone(),
+            jobs,
         ),
         hall_pty: olympus_control_plane::server::terminal_ws::HallTerminals::new(),
         proxy: olympus_control_plane::proxy::ProxyTable::new(),

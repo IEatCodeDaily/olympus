@@ -12,6 +12,7 @@ pub mod enroll;
 pub mod event;
 pub mod import;
 pub mod irc;
+pub mod jobs;
 pub mod log;
 pub mod node;
 pub mod package;

@@ -91,6 +91,35 @@ impl Log {
         Ok(seq)
     }
 
+    /// Persist a sequenced Envoy frame and advance its watermark atomically.
+    pub fn append_envoy_event(&self, identity: &str, seq: u64, event: &Event) -> Result<bool> {
+        let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+        let tx = conn.transaction()?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT seq FROM envoy_watermarks WHERE session_id=?1",
+                [identity],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.is_some_and(|watermark| seq <= watermark as u64) {
+            return Ok(false);
+        }
+        let expected = current.map_or(0, |watermark| watermark as u64 + 1);
+        anyhow::ensure!(
+            seq == expected,
+            "envoy event sequence gap for {identity}: expected {expected}, got {seq}"
+        );
+        append_in_tx(&tx, event)?;
+        tx.execute(
+            "INSERT INTO envoy_watermarks(session_id,seq) VALUES(?1,?2)
+             ON CONFLICT(session_id) DO UPDATE SET seq=excluded.seq",
+            params![identity, seq as i64],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn append_batch(&self, events: &[Event]) -> Result<Option<u64>> {
         if events.is_empty() {
             return Ok(None);
@@ -124,6 +153,22 @@ impl Log {
         Ok(conn.query_row("SELECT COUNT(*) FROM events", [], |row| {
             row.get::<_, i64>(0)
         })? as usize)
+    }
+
+    pub fn delete_job_history(&self, seqs: &[u64], identities: &[String]) -> Result<()> {
+        let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+        let tx = conn.transaction()?;
+        for seq in seqs {
+            tx.execute("DELETE FROM events WHERE seq=?1", [*seq as i64])?;
+        }
+        for identity in identities {
+            tx.execute(
+                "DELETE FROM envoy_watermarks WHERE session_id=?1",
+                [identity],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Durably advance the per-session Envoy transport watermark. Returns
@@ -563,6 +608,10 @@ fn migrate_event_payloads_to_json(conn: &mut Connection) -> Result<()> {
 
 fn apply_projection(tx: &Transaction<'_>, event: &Event) -> Result<()> {
     match event {
+        Event::JobDispatchIntent { .. }
+        | Event::JobOutputPersisted { .. }
+        | Event::JobTerminal { .. }
+        | Event::JobReconciled { .. } => {}
         Event::SessionCreated {
             session_id,
             hermes_id,
@@ -900,6 +949,10 @@ fn json_vec(raw: String) -> Vec<String> {
 }
 fn event_type(event: &Event) -> &'static str {
     match event {
+        Event::JobDispatchIntent { .. } => "job.dispatch_intent",
+        Event::JobOutputPersisted { .. } => "job.output_persisted",
+        Event::JobTerminal { .. } => "job.terminal",
+        Event::JobReconciled { .. } => "job.reconciled",
         Event::SessionCreated { .. } => "session.created",
         Event::SessionUpdated { .. } => "session.updated",
         Event::MessageAppended { .. } => "message.appended",
@@ -935,6 +988,10 @@ fn event_type(event: &Event) -> &'static str {
 }
 fn event_time(event: &Event) -> f64 {
     match event {
+        Event::JobDispatchIntent { created_at, .. } => *created_at,
+        Event::JobOutputPersisted { persisted_at, .. } => *persisted_at,
+        Event::JobTerminal { completed_at, .. } => *completed_at,
+        Event::JobReconciled { reconciled_at, .. } => *reconciled_at,
         Event::SessionCreated { started_at, .. } => *started_at,
         Event::MessageAppended { timestamp, .. } => *timestamp,
         Event::CardCreated { created_at, .. } => *created_at,
@@ -1078,7 +1135,7 @@ fn card_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
 }
 
 const SCHEMA: &str = r#"
-PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-4096; PRAGMA temp_store=MEMORY;
+PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-4096; PRAGMA temp_store=MEMORY;
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT NOT NULL,payload BLOB NOT NULL,created_at REAL NOT NULL,session_id TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
@@ -1119,6 +1176,19 @@ mod tests {
             agent: None,
             node: None,
         }
+    }
+
+    #[test]
+    fn envoy_ack_durability_uses_full_synchronous_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Log::open(&dir.path().join("olympus.db")).unwrap();
+        let mode: i64 = log
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, 2, "ACKed WAL commits must survive power loss");
     }
 
     #[test]

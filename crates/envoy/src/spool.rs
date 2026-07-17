@@ -53,7 +53,7 @@ impl EventSpool {
     /// filesystem failure cannot create a permanent hole in Hall's stream.
     pub fn append_next(&self, frame: &mut EnvoyFrame) -> Result<u64> {
         let session_id = event_identity(frame)
-            .map(|(session_id, _)| session_id.to_owned())
+            .map(|(session_id, _)| session_id)
             .context("only event frames are spoolable")?;
         let mut next = self.next_seq.lock().expect("spool sequence mutex poisoned");
         let value = self.next_value(&session_id, &next)?;
@@ -68,7 +68,7 @@ impl EventSpool {
     pub fn append(&self, frame: &EnvoyFrame) -> Result<()> {
         let (session_id, seq) = event_identity(frame).context("only event frames are spoolable")?;
         let bytes = serde_json::to_vec(frame).context("serializing spooled event")?;
-        let path = self.path(session_id);
+        let path = self.path(&session_id);
         let current = fs::metadata(&path).map_or(0, |meta| meta.len());
         let projected = current
             .checked_add(bytes.len() as u64 + 1)
@@ -88,7 +88,7 @@ impl EventSpool {
         file.write_all(b"\n")?;
         file.sync_data()?;
         self.persist_counter(
-            session_id,
+            &session_id,
             seq.checked_add(1).context("event sequence exhausted")?,
         )?;
         Ok(())
@@ -120,6 +120,9 @@ impl EventSpool {
 
     /// Atomically retain only records above Hall's acknowledged watermark.
     pub fn acknowledge(&self, session_id: &str, watermark: u64) -> Result<()> {
+        // Serialize rewrite with append_next so an ACK cannot rename a stale
+        // snapshot over a concurrently appended durable frame.
+        let _sequence_guard = self.next_seq.lock().expect("spool sequence mutex poisoned");
         let retained = self.read(session_id, Some(watermark))?;
         let path = self.path(session_id);
         if retained.is_empty() {
@@ -238,17 +241,26 @@ impl EventSpool {
     }
 }
 
-fn event_identity(frame: &EnvoyFrame) -> Option<(&str, u64)> {
+fn event_identity(frame: &EnvoyFrame) -> Option<(String, u64)> {
     match frame {
         EnvoyFrame::Event {
             session_id, seq, ..
         }
         | EnvoyFrame::Observed {
             session_id, seq, ..
-        } => Some((session_id, *seq)),
-        EnvoyFrame::JobOutput { job_id, seq, .. } | EnvoyFrame::JobResult { job_id, seq, .. } => {
-            Some((job_id, *seq))
+        } => Some((session_id.clone(), *seq)),
+        EnvoyFrame::JobOutput {
+            job_id,
+            attempt_epoch,
+            seq,
+            ..
         }
+        | EnvoyFrame::JobResult {
+            job_id,
+            attempt_epoch,
+            seq,
+            ..
+        } => Some((format!("job:{job_id}:{attempt_epoch}"), *seq)),
         _ => None,
     }
 }

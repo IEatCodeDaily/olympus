@@ -1,43 +1,17 @@
-//! Remote job dispatch REST surface (ADR 0011 phase 1).
-
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+//! Durable remote job dispatch REST surface (ADR 0017 §5).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use olympus_proto::frames::{HallFrame, JobStream, NodeRole};
-use serde::{Deserialize, Serialize};
+use olympus_proto::frames::{HallFrame, NodeRole};
+use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::RwLock;
 
+use crate::event::Event;
+use crate::server::principal::Principal;
 use crate::server::AppState;
-
-static JOBS: OnceLock<RwLock<HashMap<String, JobRecord>>> = OnceLock::new();
-static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
-fn jobs() -> &'static RwLock<HashMap<String, JobRecord>> {
-    JOBS.get_or_init(Default::default)
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JobRecord {
-    pub job_id: String,
-    pub node_id: String,
-    pub argv: Vec<String>,
-    pub provider_package: String,
-    pub provider_version: String,
-    pub provider_digest: String,
-    pub status: String,
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub truncated: bool,
-    pub timed_out: bool,
-    pub cancelled: bool,
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,11 +21,14 @@ struct DispatchBody {
     #[serde(default)]
     env_allowlist: Vec<String>,
     cwd: Option<String>,
+    initiating_session: Option<String>,
+    organization_id: Option<String>,
     #[serde(default = "default_timeout")]
     timeout_secs: u64,
     #[serde(default = "default_output")]
     max_output_bytes: u64,
 }
+
 fn default_timeout() -> u64 {
     3600
 }
@@ -65,7 +42,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/jobs/{id}", get(get_job).delete(cancel))
 }
 
-async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>) -> Response {
+async fn dispatch(
+    State(state): State<AppState>,
+    principal: Principal,
+    Json(body): Json<DispatchBody>,
+) -> Response {
     if body.argv.first().is_none_or(String::is_empty) {
         return (
             StatusCode::BAD_REQUEST,
@@ -73,6 +54,14 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
         )
             .into_response();
     }
+    let Principal::Operator = principal else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let principal = "operator".to_string();
+    let organization_id = body
+        .organization_id
+        .clone()
+        .unwrap_or_else(|| "default".into());
     let provider = {
         let views = state.views.read().await;
         views.registry.resolve_activity("job.run")
@@ -92,7 +81,7 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
     {
         return (
             StatusCode::NOT_IMPLEMENTED,
-            Json(json!({"error":"selected job.run provider is not JOBS-1-backed"})),
+            Json(json!({"error":"selected job.run provider is not jobs-backed"})),
         )
             .into_response();
     }
@@ -114,68 +103,105 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
         )
             .into_response();
     };
-    let job_id = format!(
-        "job-{}-{}",
-        std::process::id(),
-        NEXT_JOB.fetch_add(1, Ordering::Relaxed)
-    );
-    let record = JobRecord {
+
+    let job_id = format!("job-{}", uuid::Uuid::new_v4());
+    let attempt_epoch = 1;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64());
+    let intent = Event::JobDispatchIntent {
         job_id: job_id.clone(),
-        node_id: body.node_id.clone(),
+        attempt_epoch,
+        organization_id,
+        initiating_principal: principal,
+        initiating_session: body.initiating_session,
+        node_id: body.node_id,
+        package_id: provider.package_id.clone(),
+        package_version: provider.package_version.clone(),
+        package_digest: provider.package_digest.clone(),
+        activity: "job.run".into(),
         argv: body.argv.clone(),
-        provider_package: provider.package_id,
-        provider_version: provider.package_version,
-        provider_digest: provider.package_digest,
-        status: "running".into(),
-        output: String::new(),
-        exit_code: None,
-        truncated: false,
-        timed_out: false,
-        cancelled: false,
+        cwd: body.cwd.clone(),
+        env_allowlist: body.env_allowlist.clone(),
+        timeout_secs: body.timeout_secs,
+        max_output_bytes: body.max_output_bytes,
+        created_at,
     };
-    jobs().write().await.insert(job_id.clone(), record);
+    if let Err(error) = state.jobs.create(intent) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":error.to_string()})),
+        )
+            .into_response();
+    }
+
     let frame = HallFrame::DispatchJob {
         req_id: 0,
         job_id: job_id.clone(),
+        attempt_epoch,
+        package_id: provider.package_id,
+        package_version: provider.package_version,
+        package_digest: provider.package_digest,
+        activity: "job.run".into(),
         argv: body.argv,
         env_allowlist: body.env_allowlist,
         cwd: body.cwd,
         timeout_secs: body.timeout_secs,
         max_output_bytes: body.max_output_bytes,
     };
-    match conn.send_request(frame).await {
-        Ok(Some(rx)) => match rx.await {
-            Ok(resp) if resp.ok => {
-                (StatusCode::ACCEPTED, Json(json!({"jobId":job_id}))).into_response()
-            }
-            Ok(resp) => {
-                jobs().write().await.remove(&job_id);
-                (StatusCode::BAD_GATEWAY, Json(json!({"error":resp.error}))).into_response()
-            }
-            Err(_) => (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error":"envoy disconnected"})),
-            )
-                .into_response(),
-        },
-        Ok(None) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error":error.to_string()})),
+    let response = match conn.send_request(frame).await {
+        Ok(Some(rx)) => rx.await.ok(),
+        _ => None,
+    };
+    if response.as_ref().is_some_and(|response| response.ok) {
+        (
+            StatusCode::ACCEPTED,
+            Json(json!({"jobId":job_id, "attemptEpoch":attempt_epoch})),
         )
-            .into_response(),
+            .into_response()
+    } else {
+        let acknowledgement_unknown = response.is_none();
+        let reason = response
+            .and_then(|response| response.error)
+            .unwrap_or_else(|| "envoy disconnected before dispatch acknowledgement".into());
+        let _ = if acknowledgement_unknown {
+            state.jobs.dispatch_indeterminate(
+                &job_id,
+                attempt_epoch,
+                "dispatch_acknowledgement_unknown".into(),
+            )
+        } else {
+            state
+                .jobs
+                .dispatch_failed(&job_id, attempt_epoch, reason.clone())
+        };
+        (StatusCode::BAD_GATEWAY, Json(json!({"error":reason}))).into_response()
     }
 }
 
-async fn get_job(Path(id): Path<String>) -> Response {
-    match jobs().read().await.get(&id).cloned() {
-        Some(job) => Json(job).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+async fn get_job(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<String>,
+) -> Response {
+    if !matches!(principal, Principal::Operator) {
+        return StatusCode::FORBIDDEN.into_response();
     }
+    state.jobs.get(&id).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |job| Json(job).into_response(),
+    )
 }
 
-async fn cancel(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(job) = jobs().read().await.get(&id).cloned() else {
+async fn cancel(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<String>,
+) -> Response {
+    if !matches!(principal, Principal::Operator) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(job) = state.jobs.get(&id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(conn) = state.envoy_conns.get(&job.node_id).await else {
@@ -185,6 +211,7 @@ async fn cancel(State(state): State<AppState>, Path(id): Path<String>) -> Respon
         .send_request(HallFrame::CancelJob {
             req_id: 0,
             job_id: id,
+            attempt_epoch: job.attempt_epoch,
         })
         .await
     else {
@@ -194,33 +221,5 @@ async fn cancel(State(state): State<AppState>, Path(id): Path<String>) -> Respon
         StatusCode::ACCEPTED.into_response()
     } else {
         StatusCode::BAD_GATEWAY.into_response()
-    }
-}
-
-pub async fn apply_output(job_id: &str, stream: JobStream, data: String) {
-    if let Some(job) = jobs().write().await.get_mut(job_id) {
-        if stream == JobStream::Stderr {
-            job.output.push_str("[stderr] ");
-        }
-        job.output.push_str(&data);
-        if job.output.len() > 65_536 {
-            job.output.drain(..job.output.len() - 65_536);
-        }
-    }
-}
-
-pub async fn apply_result(
-    job_id: &str,
-    exit_code: Option<i32>,
-    truncated: bool,
-    timed_out: bool,
-    cancelled: bool,
-) {
-    if let Some(job) = jobs().write().await.get_mut(job_id) {
-        job.status = "completed".into();
-        job.exit_code = exit_code;
-        job.truncated = truncated;
-        job.timed_out = timed_out;
-        job.cancelled = cancelled;
     }
 }

@@ -121,6 +121,7 @@ async fn iroh_envoy_hello_registers_in_registry() {
         agents: None,
         runtimes: vec![],
         roles: vec![olympus_proto::frames::NodeRole::AgentRuntime],
+        job_attempts: vec![],
     };
     let mut line = serde_json::to_string(&hello).unwrap();
     line.push('\n');
@@ -197,6 +198,7 @@ async fn iroh_ensure_runtime_round_trip() {
         agents: None,
         runtimes: vec![],
         roles: vec![olympus_proto::frames::NodeRole::AgentRuntime],
+        job_attempts: vec![],
     };
     let mut line = serde_json::to_string(&hello).unwrap();
     line.push('\n');

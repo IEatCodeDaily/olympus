@@ -358,6 +358,7 @@ where
         agents: Some(agents_json),
         runtimes,
         roles,
+        job_attempts: conn.jobs.inventory().await,
     };
     *conn.hello.lock().await = Some(hello);
     conn.send_hello().await?;
@@ -643,18 +644,32 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
         HallFrame::DispatchJob {
             req_id,
             job_id,
+            attempt_epoch,
+            package_id,
+            package_version,
+            package_digest,
+            activity,
             argv,
             env_allowlist,
             cwd,
             timeout_secs,
             max_output_bytes,
         } => {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(16);
             let output_conn = conn.clone();
+            let loss_job_id = job_id.clone();
             tokio::spawn(async move {
                 while let Some(mut frame) = rx.recv().await {
-                    if output_conn.spool.append_next(&mut frame).is_ok() {
-                        let _ = output_conn.send_frame(&frame).await;
+                    if let Err(error) = output_conn.spool.append_next(&mut frame) {
+                        tracing::error!(job = %loss_job_id, attempt_epoch, %error, "job spool failed; stopping output producer");
+                        let _ = output_conn
+                            .jobs
+                            .mark_indeterminate(&loss_job_id, attempt_epoch, "output_spool_loss")
+                            .await;
+                        break;
+                    }
+                    if output_conn.send_frame(&frame).await.is_err() {
+                        break;
                     }
                 }
             });
@@ -663,6 +678,11 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
                 .spawn(
                     JobSpec {
                         job_id,
+                        attempt_epoch,
+                        package_id,
+                        package_version,
+                        package_digest,
+                        activity,
                         argv,
                         env_allowlist,
                         cwd,
@@ -680,7 +700,11 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
                 }
             }
         }
-        HallFrame::CancelJob { req_id, job_id } => match conn.jobs.cancel(&job_id).await {
+        HallFrame::CancelJob {
+            req_id,
+            job_id,
+            attempt_epoch,
+        } => match conn.jobs.cancel(&job_id, attempt_epoch).await {
             Ok(()) => conn.send_resp(req_id, true, None).await,
             Err(error) => {
                 conn.send_resp(req_id, false, Some(&format!("{error:#}")))

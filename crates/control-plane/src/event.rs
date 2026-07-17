@@ -9,6 +9,55 @@ use crate::server::capability::CapabilitySet;
 /// Events (v1 — MVP-scoped) that the log stores.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Event {
+    /// Durable job dispatch intent. Appended before DispatchJob is sent.
+    JobDispatchIntent {
+        job_id: String,
+        attempt_epoch: u64,
+        organization_id: String,
+        initiating_principal: String,
+        initiating_session: Option<String>,
+        node_id: String,
+        package_id: String,
+        package_version: String,
+        package_digest: String,
+        activity: String,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        env_allowlist: Vec<String>,
+        timeout_secs: u64,
+        max_output_bytes: u64,
+        created_at: f64,
+    },
+    JobOutputPersisted {
+        job_id: String,
+        attempt_epoch: u64,
+        seq: u64,
+        stream: olympus_proto::frames::JobStream,
+        data: String,
+        persisted_at: f64,
+    },
+    JobTerminal {
+        job_id: String,
+        attempt_epoch: u64,
+        seq: Option<u64>,
+        exit_code: Option<i32>,
+        truncated: bool,
+        timed_out: bool,
+        cancelled: bool,
+        terminal_reason: String,
+        completed_at: f64,
+    },
+    JobReconciled {
+        job_id: String,
+        attempt_epoch: u64,
+        status: String,
+        exit_code: Option<i32>,
+        truncated: bool,
+        timed_out: bool,
+        cancelled: bool,
+        terminal_reason: Option<String>,
+        reconciled_at: f64,
+    },
     /// A session was imported or created.
     SessionCreated {
         session_id: String,
@@ -634,6 +683,54 @@ mod tests {
     /// mechanism.
     fn all_event_variant_instances() -> Vec<Event> {
         vec![
+            Event::JobDispatchIntent {
+                job_id: "j".into(),
+                attempt_epoch: 1,
+                organization_id: "o".into(),
+                initiating_principal: "p".into(),
+                initiating_session: None,
+                node_id: "n".into(),
+                package_id: "pkg".into(),
+                package_version: "1".into(),
+                package_digest: "d".into(),
+                activity: "job.run".into(),
+                argv: vec!["true".into()],
+                cwd: None,
+                env_allowlist: vec![],
+                timeout_secs: 1,
+                max_output_bytes: 10,
+                created_at: 1.0,
+            },
+            Event::JobOutputPersisted {
+                job_id: "j".into(),
+                attempt_epoch: 1,
+                seq: 0,
+                stream: olympus_proto::frames::JobStream::Stdout,
+                data: "ok".into(),
+                persisted_at: 2.0,
+            },
+            Event::JobTerminal {
+                job_id: "j".into(),
+                attempt_epoch: 1,
+                seq: Some(1),
+                exit_code: Some(0),
+                truncated: false,
+                timed_out: false,
+                cancelled: false,
+                terminal_reason: "succeeded".into(),
+                completed_at: 3.0,
+            },
+            Event::JobReconciled {
+                job_id: "j".into(),
+                attempt_epoch: 1,
+                status: "running".into(),
+                exit_code: None,
+                truncated: false,
+                timed_out: false,
+                cancelled: false,
+                terminal_reason: None,
+                reconciled_at: 4.0,
+            },
             Event::SessionCreated {
                 session_id: "sc-1".into(),
                 hermes_id: "h-1".into(),
@@ -849,6 +946,10 @@ mod tests {
     #[allow(dead_code)]
     fn _exhaustive_variant_guard(e: &Event) {
         match e {
+            Event::JobDispatchIntent { .. } => {}
+            Event::JobOutputPersisted { .. } => {}
+            Event::JobTerminal { .. } => {}
+            Event::JobReconciled { .. } => {}
             Event::SessionCreated { .. } => {}
             Event::MessageAppended { .. } => {}
             Event::MessageRemoved { .. } => {}

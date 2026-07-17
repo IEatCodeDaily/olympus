@@ -97,6 +97,8 @@ pub struct AppState {
     /// The durable event log — sole source of truth. Appended to on new
     /// session creation and message events.
     pub log: Arc<Log>,
+    /// Event-backed durable job records and reconciliation state.
+    pub jobs: Arc<crate::jobs::JobService>,
     /// Bridge manager: owns agent runtimes for managed (olympus-source) sessions.
     pub bridge: Arc<BridgeManager>,
     /// Whether the live `state.db` sync worker has successfully connected.

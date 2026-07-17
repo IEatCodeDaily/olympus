@@ -183,6 +183,15 @@ pub enum HallFrame {
         req_id: u64,
         #[serde(rename = "jobId")]
         job_id: String,
+        #[serde(rename = "attemptEpoch")]
+        attempt_epoch: u64,
+        #[serde(rename = "packageId")]
+        package_id: String,
+        #[serde(rename = "packageVersion")]
+        package_version: String,
+        #[serde(rename = "packageDigest")]
+        package_digest: String,
+        activity: String,
         argv: Vec<String>,
         #[serde(default, rename = "envAllowlist")]
         env_allowlist: Vec<String>,
@@ -198,6 +207,8 @@ pub enum HallFrame {
         req_id: u64,
         #[serde(rename = "jobId")]
         job_id: String,
+        #[serde(rename = "attemptEpoch")]
+        attempt_epoch: u64,
     },
     /// Open an operator terminal (PTY) on this node (ADR 0021 cockpit).
     /// `terminal_id` is Hall-issued and stable for the terminal's lifetime.
@@ -259,6 +270,32 @@ pub enum HallFrame {
     ReRegister,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobAttemptState {
+    Running,
+    Completed,
+    StepIndeterminate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobAttemptStatus {
+    pub job_id: String,
+    pub attempt_epoch: u64,
+    pub state: JobAttemptState,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub timed_out: bool,
+    #[serde(default)]
+    pub cancelled: bool,
+    #[serde(default)]
+    pub terminal_reason: Option<String>,
+}
+
 /// Envoy→Hall frames.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -285,6 +322,9 @@ pub enum EnvoyFrame {
         runtimes: Vec<RuntimeStatus>,
         #[serde(default)]
         roles: Vec<NodeRole>,
+        /// Durable attempts retained for restart reconciliation.
+        #[serde(default, rename = "jobAttempts")]
+        job_attempts: Vec<JobAttemptStatus>,
     },
     /// Liveness beat.
     Heartbeat {
@@ -331,6 +371,8 @@ pub enum EnvoyFrame {
     JobOutput {
         #[serde(rename = "jobId")]
         job_id: String,
+        #[serde(rename = "attemptEpoch")]
+        attempt_epoch: u64,
         seq: u64,
         stream: JobStream,
         data: String,
@@ -338,6 +380,8 @@ pub enum EnvoyFrame {
     JobResult {
         #[serde(rename = "jobId")]
         job_id: String,
+        #[serde(rename = "attemptEpoch")]
+        attempt_epoch: u64,
         seq: u64,
         #[serde(rename = "exitCode")]
         exit_code: Option<i32>,
@@ -468,6 +512,25 @@ mod tests {
                 request_id: "9".into(),
                 option_id: Some("allow-once".into()),
             },
+            HallFrame::DispatchJob {
+                req_id: 7,
+                job_id: "j-1".into(),
+                attempt_epoch: 2,
+                package_id: "core.jobs".into(),
+                package_version: "0.1".into(),
+                package_digest: "builtin:jobs-v1".into(),
+                activity: "job.run".into(),
+                argv: vec!["true".into()],
+                env_allowlist: vec![],
+                cwd: None,
+                timeout_secs: 30,
+                max_output_bytes: 1024,
+            },
+            HallFrame::CancelJob {
+                req_id: 8,
+                job_id: "j-1".into(),
+                attempt_epoch: 2,
+            },
             HallFrame::Drain {
                 req_id: 7,
                 to_node: Some("envoy-2".into()),
@@ -501,6 +564,16 @@ mod tests {
                 agents: Some(json!([{"id": "default", "kind": "hermes"}])),
                 runtimes: vec![sample_runtime_status()],
                 roles: vec![NodeRole::AgentRuntime, NodeRole::JobRunner],
+                job_attempts: vec![JobAttemptStatus {
+                    job_id: "j-1".into(),
+                    attempt_epoch: 3,
+                    state: JobAttemptState::Running,
+                    exit_code: None,
+                    truncated: false,
+                    timed_out: false,
+                    cancelled: false,
+                    terminal_reason: None,
+                }],
             },
             EnvoyFrame::Heartbeat {
                 node_id: "envoy-1".into(),

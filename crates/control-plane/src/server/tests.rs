@@ -61,6 +61,7 @@ fn test_state() -> (AppState, tempfile::TempDir) {
         snapshot_sessions: 1,
         snapshot_messages: 1,
         log: log_arc.clone(),
+        jobs: Arc::new(crate::jobs::JobService::open(log_arc.clone()).unwrap()),
         bridge: Arc::new(BridgeManager::with_factory(
             log_arc.clone(),
             test_support::mock_factory(),
@@ -276,6 +277,38 @@ async fn login_cookie_authenticates_session_and_organization_routes() {
         .await
         .unwrap();
     assert_eq!(current_session.status(), StatusCode::OK);
+
+    let job = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/jobs")
+                .header("cookie", cookie)
+                .header("sec-fetch-site", "same-origin")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"nodeId":"hall","argv":["true"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.status(), StatusCode::FORBIDDEN);
+    for method in ["GET", "DELETE"] {
+        let job = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri("/api/jobs/private-job")
+                    .header("cookie", cookie)
+                    .header("sec-fetch-site", "same-origin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(job.status(), StatusCode::FORBIDDEN);
+    }
 
     let organizations = app
         .clone()
@@ -623,6 +656,7 @@ async fn sort_by_message_count_orders_descending() {
     let mut search = SearchIndex::open(&dir.path().join("idx")).unwrap();
     search.build_from_log(&log).unwrap();
     let (tx, _rx) = broadcast::channel(64);
+    let log = Arc::new(log);
     let state = AppState {
         views: Arc::new(RwLock::new(views)),
         search: Arc::new(RwLock::new(search)),
@@ -636,7 +670,8 @@ async fn sort_by_message_count_orders_descending() {
         deltas: tx,
         snapshot_sessions: 3,
         snapshot_messages: 0,
-        log: Arc::new(log),
+        log: log.clone(),
+        jobs: Arc::new(crate::jobs::JobService::open(log.clone()).unwrap()),
         bridge: Arc::new(BridgeManager::with_factory(
             Arc::new(Log::open(&dir.path().join("bridge-log.redb")).unwrap()),
             test_support::mock_factory(),

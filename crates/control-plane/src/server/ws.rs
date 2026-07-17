@@ -1030,6 +1030,7 @@ mod tests {
             snapshot_sessions: 0,
             snapshot_messages: 0,
             log: log.clone(),
+            jobs: Arc::new(crate::jobs::JobService::open(log.clone()).unwrap()),
             bridge: Arc::new(crate::server::bridge_mgr::BridgeManager::with_factory(
                 log,
                 crate::server::test_support::mock_factory(),

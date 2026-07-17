@@ -1002,6 +1002,7 @@ async fn handle_envoy_hello(
         agents,
         runtimes,
         roles,
+        job_attempts,
     } = frame
     else {
         unreachable!("handle_envoy_hello called with non-Hello frame")
@@ -1071,6 +1072,30 @@ async fn handle_envoy_hello(
     };
     if let Some(old) = old {
         tokio::spawn(async move { old.close().await });
+    }
+    let pending_dispatches = conn
+        .pending_job_dispatches(&node_id, &job_attempts)
+        .unwrap_or_default();
+    if let Err(error) = conn.reconcile_jobs(&node_id, &job_attempts) {
+        tracing::error!(node = %node_id, %error, "reconciling durable job attempts");
+    }
+    for frame in pending_dispatches {
+        if let Err(error) = conn.send_request(frame).await {
+            tracing::error!(node = %node_id, %error, "replaying durable job dispatch intent");
+        }
+    }
+    for attempt in &job_attempts {
+        let identity = crate::jobs::wire_id(&attempt.job_id, attempt.attempt_epoch);
+        let watermark = conn.watermark(&identity).ok().flatten().unwrap_or(u64::MAX);
+        if let Err(error) = conn
+            .send_request(olympus_proto::frames::HallFrame::ResumeFrom {
+                session_id: identity,
+                seq: watermark,
+            })
+            .await
+        {
+            tracing::error!(job = %attempt.job_id, %error, "requesting durable job spool replay");
+        }
     }
     for runtime in runtimes {
         let watermark = match conn.watermark(&runtime.session_id) {
@@ -1247,22 +1272,23 @@ async fn handle_envoy_frame(
         }
         EnvoyFrame::JobOutput {
             job_id,
+            attempt_epoch,
             seq,
             stream,
             data,
         } => {
             if let Some(c) = conn {
-                crate::server::routes::jobs::apply_output(&job_id, stream, data).await;
-                let _ = c
-                    .send_request(olympus_proto::frames::HallFrame::Ack {
-                        session_id: job_id,
-                        seq,
-                    })
-                    .await;
+                if let Err(error) = c
+                    .apply_job_output(&job_id, attempt_epoch, seq, stream, data)
+                    .await
+                {
+                    tracing::warn!(job = %job_id, attempt_epoch, seq, %error, "job output rejected; leaving unacked");
+                }
             }
         }
         EnvoyFrame::JobResult {
             job_id,
+            attempt_epoch,
             seq,
             exit_code,
             truncated,
@@ -1270,16 +1296,20 @@ async fn handle_envoy_frame(
             cancelled,
         } => {
             if let Some(c) = conn {
-                crate::server::routes::jobs::apply_result(
-                    &job_id, exit_code, truncated, timed_out, cancelled,
-                )
-                .await;
-                let _ = c
-                    .send_request(olympus_proto::frames::HallFrame::Ack {
-                        session_id: job_id,
+                if let Err(error) = c
+                    .apply_job_result(
+                        &job_id,
+                        attempt_epoch,
                         seq,
-                    })
-                    .await;
+                        exit_code,
+                        truncated,
+                        timed_out,
+                        cancelled,
+                    )
+                    .await
+                {
+                    tracing::warn!(job = %job_id, attempt_epoch, seq, %error, "job result rejected; leaving unacked");
+                }
             }
         }
         EnvoyFrame::TerminalOutput {
