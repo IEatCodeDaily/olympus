@@ -24,7 +24,8 @@ No behavior change.
   respond_permission/drain/probe/resp/event/runtimes/ack/resume_from).
   Serde derives only; deps: serde, serde_json. camelCase wire naming to match
   the existing node protocol.
-- `protocolVersion: u32 = 2` const; `BuildVersion {semver, gitHash, builtAt}`
+- Exact `protocolVersion: u32 = 1` const with no compatibility negotiation;
+  `BuildVersion {semver, gitHash, builtAt}`
   struct (populated via `env!("CARGO_PKG_VERSION")` + build script git hash).
 - Round-trip serde tests for every frame; unknown-field tolerance tests
   (`#[serde(default)]` discipline).

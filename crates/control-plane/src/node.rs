@@ -2,15 +2,8 @@
 //!
 //! The control plane listens on a Unix domain socket
 //! (`~/.olympus/control.sock`). Each node (envoy) connects and speaks a
-//! JSON-lines protocol:
-//!
-//! ```text
-//! → {"kind":"hello","nodeId":"worker-1","hostname":"talos","slotsTotal":4,"version":"0.1"}
-//! ← {"kind":"welcome","status":"ok"}
-//! → {"kind":"heartbeat","nodeId":"worker-1","slotsUsed":2}
-//! ← {"kind":"ack","status":"ok"}
-//! → {"kind":"bye","nodeId":"worker-1"}
-//! ```
+//! JSON-lines using the exact-v1 `EnvoyFrame` contract. The first frame must be
+//! a versioned `Hello`; heartbeats and `Bye` follow on the same connection.
 //!
 //! Liveness: a node that misses heartbeats for `HEARTBEAT_TIMEOUT` (30s)
 //! transitions to `offline` and is evicted after `EVICTION_TIMEOUT` (60s).
@@ -672,55 +665,12 @@ impl std::fmt::Display for NodeError {
 
 impl std::error::Error for NodeError {}
 
-// ── UDS Protocol Messages ──────────────────────────
-
-/// Inbound message from an envoy over the UDS.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum NodeMessage {
-    Hello {
-        #[serde(rename = "nodeId")]
-        node_id: String,
-        hostname: String,
-        #[serde(default = "default_slots", rename = "slotsTotal")]
-        slots_total: u32,
-        #[serde(default)]
-        version: String,
-    },
-    Heartbeat {
-        #[serde(rename = "nodeId")]
-        node_id: String,
-        #[serde(default, rename = "slotsUsed")]
-        slots_used: u32,
-    },
-    Bye {
-        #[serde(rename = "nodeId")]
-        node_id: String,
-    },
-}
-
-/// Outbound response from the control plane.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum NodeResponse {
-    Welcome { status: &'static str },
-    Ack { status: &'static str },
-    Error { message: String },
-}
-
-fn default_slots() -> u32 {
-    4
-}
-
 /// Bind and run the UDS listener. Each accepted connection speaks JSON-lines
 /// (one message per line, newline-delimited). The connection stays open for
 /// the lifetime of the envoy — heartbeats arrive on the same socket.
 ///
-/// ADR 0008 S3: connections now speak the `EnvoyFrame` protocol (hello/resp/
-/// event/heartbeat/bye/runtimes). Old envoys that still send legacy
-/// `NodeMessage` (hello/heartbeat/bye-only) are handled by falling back to
-/// the legacy dispatch. On disconnect, the node is deregistered and its
-/// EnvoyConnection (if any) is removed.
+/// Connections speak the exact-v1 `EnvoyFrame` protocol. On disconnect, the
+/// node is deregistered and its EnvoyConnection (if any) is removed.
 ///
 /// `envoy_conns` holds the per-node write halves for RemoteRuntime; `registry`
 /// holds the node metadata. Both are shared clones.
@@ -753,11 +703,7 @@ pub async fn run_uds_listener(
 
 /// Handle a single UDS connection (one envoy's lifecycle).
 ///
-/// Supports the protocol-v1 `EnvoyFrame` wire contract and the unversioned legacy
-/// `NodeMessage` registration frames kept for old local envoys.
-///
-/// The dispatch tries `EnvoyFrame` first; if the `kind` field doesn't match
-/// any EnvoyFrame variant, it falls back to `NodeMessage`.
+/// The first frame must be an exact-v1 `EnvoyFrame::Hello`.
 async fn handle_uds_conn(
     stream: tokio::net::UnixStream,
     registry: NodeRegistry,
@@ -790,17 +736,15 @@ pub async fn handle_envoy_conn<R, W>(
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
 {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     let mut lines = BufReader::new(reader).lines();
     let epoch = envoy_conns.allocate_epoch();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let mut connected_node: Option<String> = None;
-    // The EnvoyConnection (set on hello). All writes to the envoy go through
-    // its buffered writer. For legacy connections, we fall back to writing
-    // directly via the raw writer.
+    // The EnvoyConnection is set only after an accepted exact-v1 Hello.
     let mut conn: Option<Arc<crate::server::envoy_conn::EnvoyConnection>> = None;
-    let mut legacy_writer: Option<crate::server::envoy_conn::BoxedWriter> = Some(Box::new(writer));
+    let mut writer: Option<crate::server::envoy_conn::BoxedWriter> = Some(Box::new(writer));
 
     loop {
         let next = tokio::select! {
@@ -817,132 +761,48 @@ pub async fn handle_envoy_conn<R, W>(
             continue;
         }
 
-        // Try parsing as EnvoyFrame first. EnvoyFrame and
-        // NodeMessage share `kind`-tagged JSON, but their variant names differ
-        // (EnvoyFrame uses snake_case: hello, heartbeat, bye, resp, event,
-        // runtimes). NodeMessage uses lowercase: hello, heartbeat, bye.
-        let parsed_envoy: Result<olympus_proto::frames::EnvoyFrame, _> =
-            serde_json::from_str(&line);
-        if let Ok(frame) = parsed_envoy {
-            // On the first Hello, move the writer into an EnvoyConnection.
-            if matches!(frame, olympus_proto::frames::EnvoyFrame::Hello { .. }) {
-                if let Some(w) = legacy_writer.take() {
-                    let hello_frame = match frame {
-                        olympus_proto::frames::EnvoyFrame::Hello { .. } => frame,
-                        _ => unreachable!(),
-                    };
-                    let new_conn = handle_envoy_hello(
-                        hello_frame,
-                        &registry,
-                        &envoy_conns,
-                        w,
-                        &mut connected_node,
-                        transport,
-                        peer_iroh_id.clone(),
-                        epoch,
-                        shutdown_tx.clone(),
-                    )
-                    .await;
-                    match new_conn {
-                        HelloOutcome::Accepted(c) => {
-                            conn = Some(c);
-                        }
-                        HelloOutcome::Rejected => break, // protocol mismatch → disconnect
-                    }
-                    continue;
-                }
+        let frame = match serde_json::from_str::<olympus_proto::frames::EnvoyFrame>(&line) {
+            Ok(frame) => frame,
+            Err(error) => {
+                tracing::warn!(%error, "rejecting malformed envoy frame");
+                break;
             }
-            let outcome = handle_envoy_frame(
+        };
+        if conn.is_none() {
+            if !matches!(frame, olympus_proto::frames::EnvoyFrame::Hello { .. }) {
+                break;
+            }
+            let new_conn = handle_envoy_hello(
                 frame,
                 &registry,
                 &envoy_conns,
-                &mut conn,
+                writer.take().expect("writer exists before hello"),
+                &mut connected_node,
                 transport,
                 peer_iroh_id.clone(),
                 epoch,
+                shutdown_tx.clone(),
             )
             .await;
-            if outcome == FrameOutcome::Disconnect {
-                break;
+            match new_conn {
+                HelloOutcome::Accepted(c) => conn = Some(c),
+                HelloOutcome::Rejected => break,
             }
             continue;
         }
-
-        // Fall back to legacy NodeMessage (v1 protocol).
-        let msg: NodeMessage = match serde_json::from_str(&line) {
-            Ok(m) => m,
-            Err(e) => {
-                if let Some(ref mut w) = legacy_writer {
-                    let resp = NodeResponse::Error {
-                        message: format!("bad json: {e}"),
-                    };
-                    let _ = w
-                        .write_all(
-                            format!("{}\n", serde_json::to_string(&resp).unwrap()).as_bytes(),
-                        )
-                        .await;
-                }
-                continue;
-            }
-        };
-
-        let response = match msg {
-            NodeMessage::Hello {
-                node_id,
-                hostname,
-                slots_total,
-                version,
-            } => {
-                tracing::info!(node = %node_id, hostname = %hostname, "node registered (legacy v1)");
-                if !registry
-                    .register_connection(
-                        &node_id,
-                        &hostname,
-                        slots_total,
-                        &version,
-                        transport,
-                        peer_iroh_id.clone(),
-                        Vec::new(),
-                        epoch,
-                    )
-                    .await
-                {
-                    break;
-                }
-                connected_node = Some(node_id);
-                NodeResponse::Welcome { status: "ok" }
-            }
-            NodeMessage::Heartbeat {
-                node_id,
-                slots_used,
-            } => {
-                if let Err(e) = registry.heartbeat(&node_id, slots_used, Some(epoch)).await {
-                    NodeResponse::Error {
-                        message: e.to_string(),
-                    }
-                } else {
-                    NodeResponse::Ack { status: "ok" }
-                }
-            }
-            NodeMessage::Bye { node_id } => {
-                tracing::info!(node = %node_id, "node deregistered (bye)");
-                registry.deregister_connection(&node_id, epoch).await;
-                if let Some(ref mut w) = legacy_writer {
-                    let resp = NodeResponse::Ack { status: "ok" };
-                    let _ = w
-                        .write_all(
-                            format!("{}\n", serde_json::to_string(&resp).unwrap()).as_bytes(),
-                        )
-                        .await;
-                }
-                break;
-            }
-        };
-
-        if let Some(ref mut w) = legacy_writer {
-            let _ = w
-                .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
-                .await;
+        if handle_envoy_frame(
+            frame,
+            &registry,
+            &envoy_conns,
+            &mut conn,
+            transport,
+            peer_iroh_id.clone(),
+            epoch,
+        )
+        .await
+            == FrameOutcome::Disconnect
+        {
+            break;
         }
     }
 
@@ -1735,6 +1595,52 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn transport_rejects_unversioned_legacy_hello() {
+        let registry = NodeRegistry::new();
+        let (hall, mut envoy) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(hall);
+        let task = tokio::spawn(handle_envoy_conn(
+            reader,
+            writer,
+            registry.clone(),
+            crate::server::envoy_conn::EnvoyConnections::new(),
+            NodeTransport::Iroh,
+            Some("key".into()),
+        ));
+        envoy
+            .write_all(b"{\"kind\":\"hello\",\"nodeId\":\"legacy\",\"hostname\":\"host\"}\n")
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("unversioned hello must close the transport")
+            .unwrap();
+        assert!(registry.get("legacy").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn uds_rejects_unversioned_legacy_hello() {
+        let registry = NodeRegistry::new();
+        let (hall, mut envoy) = tokio::net::UnixStream::pair().unwrap();
+        let task = tokio::spawn(handle_uds_conn(
+            hall,
+            registry.clone(),
+            crate::server::envoy_conn::EnvoyConnections::new(),
+        ));
+        envoy
+            .write_all(b"{\"kind\":\"hello\",\"nodeId\":\"legacy\",\"hostname\":\"host\"}\n")
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("unversioned hello must close the UDS")
+            .unwrap();
+        assert!(registry.get("legacy").await.is_none());
+    }
+
     #[test]
     fn corrupt_inventory_is_quarantined_instead_of_bricking_startup() {
         let dir = tempfile::tempdir().unwrap();
@@ -1981,85 +1887,5 @@ mod tests {
         assert_eq!(node.hostname, "h1");
 
         assert!(reg.get("ghost").await.is_none());
-    }
-
-    #[tokio::test]
-    async fn message_deserialize_hello() {
-        let json =
-            r#"{"kind":"hello","nodeId":"w1","hostname":"talos","slotsTotal":4,"version":"0.1"}"#;
-        let msg: NodeMessage = serde_json::from_str(json).unwrap();
-        match msg {
-            NodeMessage::Hello {
-                node_id,
-                hostname,
-                slots_total,
-                version,
-            } => {
-                assert_eq!(node_id, "w1");
-                assert_eq!(hostname, "talos");
-                assert_eq!(slots_total, 4);
-                assert_eq!(version, "0.1");
-            }
-            _ => panic!("expected Hello"),
-        }
-    }
-
-    #[tokio::test]
-    async fn message_deserialize_heartbeat() {
-        let json = r#"{"kind":"heartbeat","nodeId":"w1","slotsUsed":2}"#;
-        let msg: NodeMessage = serde_json::from_str(json).unwrap();
-        match msg {
-            NodeMessage::Heartbeat {
-                node_id,
-                slots_used,
-            } => {
-                assert_eq!(node_id, "w1");
-                assert_eq!(slots_used, 2);
-            }
-            _ => panic!("expected Heartbeat"),
-        }
-    }
-
-    #[tokio::test]
-    async fn message_deserialize_bye() {
-        let json = r#"{"kind":"bye","nodeId":"w1"}"#;
-        let msg: NodeMessage = serde_json::from_str(json).unwrap();
-        match msg {
-            NodeMessage::Bye { node_id } => assert_eq!(node_id, "w1"),
-            _ => panic!("expected Bye"),
-        }
-    }
-
-    #[tokio::test]
-    async fn message_deserialize_defaults() {
-        // Missing optional fields should use defaults.
-        let json = r#"{"kind":"hello","nodeId":"w1","hostname":"talos"}"#;
-        let msg: NodeMessage = serde_json::from_str(json).unwrap();
-        match msg {
-            NodeMessage::Hello {
-                slots_total,
-                version,
-                ..
-            } => {
-                assert_eq!(slots_total, 4); // default
-                assert_eq!(version, ""); // default
-            }
-            _ => panic!("expected Hello"),
-        }
-    }
-
-    #[tokio::test]
-    async fn message_response_serialize() {
-        let welcome = NodeResponse::Welcome { status: "ok" };
-        let json = serde_json::to_string(&welcome).unwrap();
-        assert!(json.contains("\"kind\":\"welcome\""));
-        assert!(json.contains("\"status\":\"ok\""));
-
-        let err = NodeResponse::Error {
-            message: "bad request".into(),
-        };
-        let json = serde_json::to_string(&err).unwrap();
-        assert!(json.contains("\"kind\":\"error\""));
-        assert!(json.contains("\"message\":\"bad request\""));
     }
 }

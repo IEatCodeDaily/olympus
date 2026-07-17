@@ -71,6 +71,8 @@ Implemented in `wt/t_09d1531b` through `3b0bde9`:
 - Protocol v3 adds `heartbeat_ack` and `re_register`. Hall requests repair for
   an authenticated unknown-node heartbeat; Envoy re-sends Hello on that frame
   or after three consecutive missed acknowledgements.
+  This was pre-release numbering; the complete wire contract was subsequently
+  collapsed into exact protocol v1 with no compatibility negotiation.
 - Enrolled identity is persisted atomically in `nodes.json`, including iroh
   key, enrollment/last-seen timestamps, and last version. `/api/nodes` projects
   enrolled disconnected nodes as `offline`.
