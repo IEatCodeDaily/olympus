@@ -1073,28 +1073,30 @@ async fn handle_envoy_hello(
     if let Some(old) = old {
         tokio::spawn(async move { old.close().await });
     }
-    let pending_dispatches = conn
-        .pending_job_dispatches(&node_id, &job_attempts)
-        .unwrap_or_default();
-    if let Err(error) = conn.reconcile_jobs(&node_id, &job_attempts) {
-        tracing::error!(node = %node_id, %error, "reconciling durable job attempts");
-    }
-    for frame in pending_dispatches {
-        if let Err(error) = conn.send_request(frame).await {
-            tracing::error!(node = %node_id, %error, "replaying durable job dispatch intent");
+    if conn.supports_durable_jobs() {
+        let pending_dispatches = conn
+            .pending_job_dispatches(&node_id, &job_attempts)
+            .unwrap_or_default();
+        if let Err(error) = conn.reconcile_jobs(&node_id, &job_attempts) {
+            tracing::error!(node = %node_id, %error, "reconciling durable job attempts");
         }
-    }
-    for attempt in &job_attempts {
-        let identity = crate::jobs::wire_id(&attempt.job_id, attempt.attempt_epoch);
-        let watermark = conn.watermark(&identity).ok().flatten().unwrap_or(u64::MAX);
-        if let Err(error) = conn
-            .send_request(olympus_proto::frames::HallFrame::ResumeFrom {
-                session_id: identity,
-                seq: watermark,
-            })
-            .await
-        {
-            tracing::error!(job = %attempt.job_id, %error, "requesting durable job spool replay");
+        for frame in pending_dispatches {
+            if let Err(error) = conn.send_request(frame).await {
+                tracing::error!(node = %node_id, %error, "replaying durable job dispatch intent");
+            }
+        }
+        for attempt in &job_attempts {
+            let identity = crate::jobs::wire_id(&attempt.job_id, attempt.attempt_epoch);
+            let watermark = conn.watermark(&identity).ok().flatten().unwrap_or(u64::MAX);
+            if let Err(error) = conn
+                .send_request(olympus_proto::frames::HallFrame::ResumeFrom {
+                    session_id: identity,
+                    seq: watermark,
+                })
+                .await
+            {
+                tracing::error!(job = %attempt.job_id, %error, "requesting durable job spool replay");
+            }
         }
     }
     for runtime in runtimes {

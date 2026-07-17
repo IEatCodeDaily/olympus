@@ -103,6 +103,13 @@ async fn dispatch(
         )
             .into_response();
     };
+    if !conn.supports_durable_jobs() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"node protocol does not support durable jobs"})),
+        )
+            .into_response();
+    }
 
     let job_id = format!("job-{}", uuid::Uuid::new_v4());
     let attempt_epoch = 1;
@@ -207,6 +214,9 @@ async fn cancel(
     let Some(conn) = state.envoy_conns.get(&job.node_id).await else {
         return StatusCode::CONFLICT.into_response();
     };
+    if !conn.supports_durable_jobs() {
+        return StatusCode::CONFLICT.into_response();
+    }
     let Ok(Some(rx)) = conn
         .send_request(HallFrame::CancelJob {
             req_id: 0,

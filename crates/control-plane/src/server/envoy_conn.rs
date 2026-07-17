@@ -131,6 +131,16 @@ impl EnvoyConnection {
         &self,
         frame: HallFrame,
     ) -> Result<Option<tokio::sync::oneshot::Receiver<EnvoyResp>>> {
+        let durable_job_frame = matches!(
+            &frame,
+            HallFrame::DispatchJob { .. } | HallFrame::CancelJob { .. }
+        ) || matches!(
+            &frame,
+            HallFrame::ResumeFrom { session_id, .. } if session_id.starts_with("job:")
+        );
+        if durable_job_frame && !self.supports_durable_jobs() {
+            anyhow::bail!("envoy protocol does not support durable jobs");
+        }
         match &frame {
             HallFrame::EnsureRuntime { .. }
             | HallFrame::Prompt { .. }
@@ -442,6 +452,10 @@ impl EnvoyConnection {
 
     pub(crate) fn supports_heartbeat_repair(&self) -> bool {
         self.protocol_version >= 3
+    }
+
+    pub(crate) fn supports_durable_jobs(&self) -> bool {
+        self.protocol_version >= 4
     }
 }
 
@@ -851,6 +865,32 @@ mod tests {
 
     fn test_conn() -> Arc<EnvoyConnection> {
         EnvoyConnection::new(test_writer(), None, None)
+    }
+
+    #[tokio::test]
+    async fn durable_jobs_require_protocol_v4() {
+        let connection = |protocol_version| {
+            let (shutdown, _) = tokio::sync::watch::channel(false);
+            EnvoyConnection::new_with_epoch(
+                test_writer(),
+                None,
+                None,
+                1,
+                protocol_version,
+                shutdown,
+            )
+        };
+        let v3 = connection(3);
+        assert!(!v3.supports_durable_jobs());
+        assert!(v3
+            .send_request(HallFrame::CancelJob {
+                req_id: 0,
+                job_id: "j".into(),
+                attempt_epoch: 1,
+            })
+            .await
+            .is_err());
+        assert!(connection(4).supports_durable_jobs());
     }
 
     #[tokio::test]
