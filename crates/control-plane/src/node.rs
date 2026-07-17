@@ -1333,11 +1333,15 @@ mod tests {
     use tokio::time::sleep;
 
     fn hello(node_id: &str) -> olympus_proto::frames::EnvoyFrame {
+        hello_version(node_id, PROTOCOL_VERSION)
+    }
+
+    fn hello_version(node_id: &str, protocol_version: u32) -> olympus_proto::frames::EnvoyFrame {
         olympus_proto::frames::EnvoyFrame::Hello {
             node_id: node_id.into(),
             hostname: "host".into(),
             slots_total: 4,
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version,
             version: BuildVersion::for_binary("test"),
             agents: None,
             runtimes: vec![],
@@ -1484,6 +1488,99 @@ mod tests {
         ));
         drop(envoy_writer);
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn stale_connection_heartbeat_does_not_mutate_newer_registration() {
+        let registry = NodeRegistry::new();
+        for epoch in [1, 2] {
+            assert!(
+                registry
+                    .register_connection(
+                        "node",
+                        "host",
+                        4,
+                        "v3",
+                        NodeTransport::Iroh,
+                        Some("key".into()),
+                        vec![],
+                        epoch,
+                    )
+                    .await
+            );
+        }
+
+        let error = registry.heartbeat("node", 3, Some(1)).await.unwrap_err();
+        assert_eq!(error, NodeError::StaleConnection("node".into()));
+        assert_eq!(registry.get("node").await.unwrap().slots_used, 0);
+    }
+
+    #[tokio::test]
+    async fn revoked_iroh_connection_cannot_reregister() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320";
+        crate::enroll::allowlist_add(dir.path(), key).unwrap();
+        let registry = NodeRegistry::with_inventory(dir.path()).unwrap();
+        registry.enroll("node", key).await.unwrap();
+        crate::enroll::allowlist_remove(dir.path(), key).unwrap();
+        registry.deregister("node").await;
+
+        assert!(
+            !reregister_hello(
+                hello("node"),
+                &registry,
+                NodeTransport::Iroh,
+                Some(key.into()),
+                1,
+            )
+            .await
+        );
+        assert!(registry.get("node").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn v2_hello_is_accepted_during_rolling_upgrade() {
+        let registry = NodeRegistry::new();
+        let conns = crate::server::envoy_conn::EnvoyConnections::new();
+        let (hall, mut envoy) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(hall);
+        let task = tokio::spawn(handle_envoy_conn(
+            reader,
+            writer,
+            registry.clone(),
+            conns,
+            NodeTransport::Uds,
+            None,
+        ));
+        envoy
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&hello_version("node", 2)).unwrap()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while registry.get("node").await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("v2 envoy should remain available during a Hall-first upgrade");
+        drop(envoy);
+        task.await.unwrap();
+    }
+
+    #[test]
+    fn corrupt_inventory_is_quarantined_instead_of_bricking_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("nodes.json"), b"not json").unwrap();
+
+        NodeRegistry::with_inventory(dir.path()).expect("rebuildable inventory must fail open");
+        assert!(dir.path().join("nodes.json.corrupt").exists());
     }
 
     #[tokio::test]
