@@ -1768,7 +1768,10 @@ mod tests {
 
         registry.enroll("talos", key).await.unwrap();
         assert!(registry.get(key).await.is_none());
-        assert_eq!(registry.get("talos").await.unwrap().iroh_node_id.as_deref(), Some(key));
+        assert_eq!(
+            registry.get("talos").await.unwrap().iroh_node_id.as_deref(),
+            Some(key)
+        );
         drop(registry);
 
         let restarted = NodeRegistry::with_inventory(dir.path()).unwrap();
