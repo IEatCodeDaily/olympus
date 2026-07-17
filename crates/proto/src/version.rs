@@ -8,9 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Frame-schema compatibility version. v1 was the hello/heartbeat/bye-only
-/// node protocol; v2 adds session frames; v3 adds heartbeat acknowledgement
-/// and explicit re-registration repair.
+/// Oldest frame schema Hall accepts during rolling upgrades. v2 remains
+/// compatible as long as Hall does not send v3-only repair frames to it.
+pub const MIN_PROTOCOL_VERSION: u32 = 2;
+/// Current frame-schema version.
 pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Build identity: which build of the binary is speaking.

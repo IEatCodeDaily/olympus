@@ -43,6 +43,7 @@ pub struct EnvoyResp {
 /// event channels.
 pub struct EnvoyConnection {
     pub(crate) epoch: u64,
+    protocol_version: u32,
     shutdown: tokio::sync::watch::Sender<bool>,
     /// Buffered writer to the transport stream (UDS or iroh QUIC). Guarded so
     /// Hall can send from any task. Transport-agnostic via [`BoxedWriter`].
@@ -81,17 +82,25 @@ pub enum TerminalFrame {
 impl EnvoyConnection {
     fn new(writer: BoxedWriter, log: Option<Arc<crate::log::Log>>) -> Arc<Self> {
         let (shutdown, _) = tokio::sync::watch::channel(false);
-        Self::new_with_epoch(writer, log, 0, shutdown)
+        Self::new_with_epoch(
+            writer,
+            log,
+            0,
+            olympus_proto::version::PROTOCOL_VERSION,
+            shutdown,
+        )
     }
 
     fn new_with_epoch(
         writer: BoxedWriter,
         log: Option<Arc<crate::log::Log>>,
         epoch: u64,
+        protocol_version: u32,
         shutdown: tokio::sync::watch::Sender<bool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             epoch,
+            protocol_version,
             shutdown,
             writer: Mutex::new(tokio::io::BufWriter::new(writer)),
             pending: Mutex::new(HashMap::new()),
@@ -352,6 +361,10 @@ impl EnvoyConnection {
         self.fail_all().await;
         let _ = self.writer.lock().await.shutdown().await;
     }
+
+    pub(crate) fn supports_heartbeat_repair(&self) -> bool {
+        self.protocol_version >= 3
+    }
 }
 
 /// Inject a Hall-assigned reqId into a request frame (overwriting whatever was
@@ -467,9 +480,16 @@ impl EnvoyConnections {
         node_id: &str,
         writer: BoxedWriter,
         epoch: u64,
+        protocol_version: u32,
         shutdown: tokio::sync::watch::Sender<bool>,
     ) -> Result<(Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>), Arc<EnvoyConnection>> {
-        let conn = EnvoyConnection::new_with_epoch(writer, self.log.clone(), epoch, shutdown);
+        let conn = EnvoyConnection::new_with_epoch(
+            writer,
+            self.log.clone(),
+            epoch,
+            protocol_version,
+            shutdown,
+        );
         let mut inner = self.inner.write().await;
         if inner.get(node_id).is_some_and(|old| old.epoch > epoch) {
             return Err(conn);
@@ -749,12 +769,24 @@ mod tests {
         let conns = EnvoyConnections::new();
         let (shutdown, _) = tokio::sync::watch::channel(false);
         assert!(conns
-            .insert_epoch("n1", test_writer(), 2, shutdown)
+            .insert_epoch(
+                "n1",
+                test_writer(),
+                2,
+                olympus_proto::version::PROTOCOL_VERSION,
+                shutdown,
+            )
             .await
             .is_ok());
         let (shutdown, _) = tokio::sync::watch::channel(false);
         assert!(conns
-            .insert_epoch("n1", test_writer(), 1, shutdown)
+            .insert_epoch(
+                "n1",
+                test_writer(),
+                1,
+                olympus_proto::version::PROTOCOL_VERSION,
+                shutdown,
+            )
             .await
             .is_err());
         assert_eq!(conns.get("n1").await.unwrap().epoch, 2);

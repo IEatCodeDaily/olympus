@@ -150,11 +150,29 @@ impl NodeRegistry {
 
     pub fn with_inventory(home: &std::path::Path) -> anyhow::Result<Self> {
         let path = home.join("nodes.json");
-        let mut durable: Vec<DurableNode> = std::fs::read(&path)
-            .ok()
-            .map(|bytes| serde_json::from_slice(&bytes))
-            .transpose()?
-            .unwrap_or_default();
+        let mut durable: Vec<DurableNode> = match std::fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(nodes) => nodes,
+                Err(error) => {
+                    let corrupt = path.with_extension("json.corrupt");
+                    tracing::warn!(
+                        path = %path.display(),
+                        backup = %corrupt.display(),
+                        %error,
+                        "quarantining corrupt node inventory"
+                    );
+                    if let Err(rename_error) = std::fs::rename(&path, &corrupt) {
+                        tracing::warn!(%rename_error, "failed to quarantine corrupt node inventory");
+                    }
+                    Vec::new()
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "node inventory unreadable; rebuilding from allowlist");
+                Vec::new()
+            }
+        };
         let now = unix_now();
         for key in crate::enroll::allowlist_list(home) {
             if !durable.iter().any(|node| node.iroh_node_id == key) {
@@ -198,6 +216,16 @@ impl NodeRegistry {
             roles: Arc::new(RwLock::new(HashMap::new())),
             inventory_path: Some(Arc::new(path)),
         })
+    }
+
+    fn iroh_peer_is_allowlisted(&self, peer: Option<&str>) -> bool {
+        let Some(peer) = peer else {
+            return true;
+        };
+        let Some(home) = self.inventory_path.as_deref().and_then(|path| path.parent()) else {
+            return true;
+        };
+        crate::enroll::allowlist_list(home).iter().any(|key| key == peer)
     }
 
     pub async fn enroll(&self, node_id: &str, iroh_node_id: &str) -> anyhow::Result<()> {
@@ -411,13 +439,21 @@ impl NodeRegistry {
     }
 
     /// Update a node's heartbeat and slot usage.
-    pub async fn heartbeat(&self, node_id: &str, slots_used: u32) -> Result<(), NodeError> {
+    pub async fn heartbeat(
+        &self,
+        node_id: &str,
+        slots_used: u32,
+        epoch: Option<u64>,
+    ) -> Result<(), NodeError> {
         let mut nodes = self.nodes.write().await;
         let now = unix_now();
         let persist = {
             let entry = nodes
                 .get_mut(node_id)
                 .ok_or(NodeError::UnknownNode(node_id.to_string()))?;
+            if epoch.is_some() && entry.connection_epoch != epoch {
+                return Err(NodeError::StaleConnection(node_id.to_string()));
+            }
             entry.last_heartbeat = Instant::now();
             entry.slots_used = slots_used;
             entry.last_seen = entry.enrolled_at.map(|_| now);
@@ -583,12 +619,14 @@ impl Default for NodeRegistry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeError {
     UnknownNode(String),
+    StaleConnection(String),
 }
 
 impl std::fmt::Display for NodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownNode(id) => write!(f, "unknown node: {id}"),
+            Self::StaleConnection(id) => write!(f, "stale connection for node: {id}"),
         }
     }
 }
@@ -844,7 +882,7 @@ pub async fn handle_envoy_conn<R, W>(
                 node_id,
                 slots_used,
             } => {
-                if let Err(e) = registry.heartbeat(&node_id, slots_used).await {
+                if let Err(e) = registry.heartbeat(&node_id, slots_used, Some(epoch)).await {
                     NodeResponse::Error {
                         message: e.to_string(),
                     }
@@ -914,7 +952,7 @@ async fn handle_envoy_hello(
     shutdown: tokio::sync::watch::Sender<bool>,
 ) -> HelloOutcome {
     use olympus_proto::frames::EnvoyFrame;
-    use olympus_proto::version::PROTOCOL_VERSION;
+    use olympus_proto::version::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
     let EnvoyFrame::Hello {
         node_id,
@@ -930,12 +968,12 @@ async fn handle_envoy_hello(
         unreachable!("handle_envoy_hello called with non-Hello frame")
     };
 
-    // Fail closed: reject incompatible protocol versions (ADR 0008 §1).
-    if protocol_version != PROTOCOL_VERSION {
+    if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol_version) {
         tracing::warn!(
             node = %node_id,
             got = protocol_version,
-            expected = PROTOCOL_VERSION,
+            min = MIN_PROTOCOL_VERSION,
+            max = PROTOCOL_VERSION,
             "rejecting envoy: protocol version mismatch"
         );
         // We can't write to the writer anymore (it's consumed by insert).
@@ -983,7 +1021,7 @@ async fn handle_envoy_hello(
 
     // Publish the new epoch before closing the superseded connection.
     let (conn, old) = match envoy_conns
-        .insert_epoch(&node_id, writer, epoch, shutdown)
+        .insert_epoch(&node_id, writer, epoch, protocol_version, shutdown)
         .await
     {
         Ok(inserted) => inserted,
@@ -993,7 +1031,7 @@ async fn handle_envoy_hello(
         }
     };
     if let Some(old) = old {
-        old.close().await;
+        tokio::spawn(async move { old.close().await });
     }
     for runtime in runtimes {
         let watermark = match conn.watermark(&runtime.session_id) {
@@ -1027,7 +1065,7 @@ async fn reregister_hello(
     epoch: u64,
 ) -> bool {
     use olympus_proto::frames::EnvoyFrame;
-    use olympus_proto::version::PROTOCOL_VERSION;
+    use olympus_proto::version::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
     let EnvoyFrame::Hello {
         node_id,
@@ -1042,7 +1080,9 @@ async fn reregister_hello(
     else {
         return false;
     };
-    if protocol_version != PROTOCOL_VERSION {
+    if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&protocol_version)
+        || !registry.iroh_peer_is_allowlisted(peer_iroh_id.as_deref())
+    {
         return false;
     }
     let version = if build_version.git_hash != "unknown" {
@@ -1094,15 +1134,25 @@ async fn handle_envoy_frame(
             node_id,
             slots_used,
         } => {
-            let reply = match registry.heartbeat(&node_id, slots_used).await {
-                Ok(()) => olympus_proto::frames::HallFrame::HeartbeatAck,
-                Err(e) => {
-                    tracing::warn!(node = %node_id, error = %e, "heartbeat for unknown node; requesting registration");
-                    olympus_proto::frames::HallFrame::ReRegister
-                }
-            };
             let Some(conn) = conn else {
                 return FrameOutcome::Disconnect;
+            };
+            let reply = match registry.heartbeat(&node_id, slots_used, Some(epoch)).await {
+                Ok(()) if conn.supports_heartbeat_repair() => {
+                    olympus_proto::frames::HallFrame::HeartbeatAck
+                }
+                Ok(()) => return FrameOutcome::Continue,
+                Err(e)
+                    if !conn.supports_heartbeat_repair()
+                        || !registry.iroh_peer_is_allowlisted(peer_iroh_id.as_deref()) =>
+                {
+                    tracing::warn!(node = %node_id, error = %e, "closing unrepairable envoy heartbeat");
+                    return FrameOutcome::Disconnect;
+                }
+                Err(e) => {
+                    tracing::warn!(node = %node_id, error = %e, "heartbeat registration mismatch; requesting registration");
+                    olympus_proto::frames::HallFrame::ReRegister
+                }
             };
             if conn.send_request(reply).await.is_err() {
                 return FrameOutcome::Disconnect;
@@ -1639,7 +1689,7 @@ mod tests {
         )
         .await;
 
-        reg.heartbeat("node-1", 2).await.unwrap();
+        reg.heartbeat("node-1", 2, None).await.unwrap();
 
         let nodes = reg.list().await;
         assert_eq!(nodes[0].slots_used, 2);
@@ -1648,7 +1698,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_unknown_node_fails() {
         let reg = NodeRegistry::new();
-        let err = reg.heartbeat("ghost", 1).await.unwrap_err();
+        let err = reg.heartbeat("ghost", 1, None).await.unwrap_err();
         assert_eq!(err, NodeError::UnknownNode("ghost".into()));
     }
 

@@ -74,9 +74,10 @@ Hello carries **two version fields with distinct jobs**:
   what drain/evict decisions key on and what the Nodes UI shows. Protocol
   version does not solve "which envoy is outdated"; build version does.
 
-Protocol version 3 adds `heartbeat_ack` and `re_register`. Hall rejects older
-protocol versions at hello rather than silently running without the repair
-handshake.
+Protocol version 3 adds `heartbeat_ack` and `re_register`. During a Hall-first
+rolling upgrade, Hall accepts v2 and v3 hellos but sends the new repair frames
+only to v3 envoys; a v2 registration mismatch is closed so its normal reconnect
+loop repairs it. Versions outside that compatibility range are rejected.
 
 ### 2. Envoy autonomy across Hall downtime (#5)
 
