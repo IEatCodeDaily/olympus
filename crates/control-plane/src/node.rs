@@ -222,10 +222,16 @@ impl NodeRegistry {
         let Some(peer) = peer else {
             return true;
         };
-        let Some(home) = self.inventory_path.as_deref().and_then(|path| path.parent()) else {
+        let Some(home) = self
+            .inventory_path
+            .as_deref()
+            .and_then(|path| path.parent())
+        else {
             return true;
         };
-        crate::enroll::allowlist_list(home).iter().any(|key| key == peer)
+        crate::enroll::allowlist_list(home)
+            .iter()
+            .any(|key| key == peer)
     }
 
     pub async fn enroll(&self, node_id: &str, iroh_node_id: &str) -> anyhow::Result<()> {
