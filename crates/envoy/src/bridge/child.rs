@@ -97,9 +97,13 @@ impl ChildHandle {
             .stderr(Stdio::piped());
         #[cfg(unix)]
         command.process_group(0);
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("spawning {:?}", spec.command))?;
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "spawning {:?} (PATH={})",
+                spec.command,
+                std::env::var("PATH").unwrap_or_default()
+            )
+        })?;
         let writer = child
             .stdin
             .take()
