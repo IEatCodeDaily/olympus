@@ -64,7 +64,7 @@ impl JobService {
             .read()
             .expect("jobs projection poisoned")
             .values()
-            .filter(|job| job.status == "running")
+            .filter(|job| job.status == "running" || job.status == "recovering")
             .map(|job| (job.job_id.clone(), job.attempt_epoch))
             .collect();
         for (job_id, attempt_epoch) in running {
@@ -254,6 +254,10 @@ impl JobService {
                 Some(attempt) => {
                     let (status, reason) = match attempt.state {
                         JobAttemptState::Running => ("running", None),
+                        JobAttemptState::Completed if attempt.final_sequence.is_some() => (
+                            "recovering",
+                            Some("replaying_durable_terminal_sequence".into()),
+                        ),
                         JobAttemptState::Completed => (
                             "StepIndeterminate",
                             Some("envoy_completed_without_durable_terminal_sequence".into()),
@@ -597,6 +601,7 @@ mod tests {
             timed_out: false,
             cancelled: false,
             terminal_reason: None,
+            final_sequence: None,
         };
         assert!(restarted
             .pending_dispatches("n", std::slice::from_ref(&running_attempt))
@@ -624,6 +629,7 @@ mod tests {
                     timed_out: false,
                     cancelled: false,
                     terminal_reason: Some("succeeded".into()),
+                    final_sequence: None,
                 }],
             )
             .unwrap();
@@ -634,6 +640,50 @@ mod tests {
             Some("envoy_completed_without_durable_terminal_sequence")
         );
         assert_eq!(reported.final_sequence, None);
+    }
+
+    #[test]
+    fn hall_restart_before_terminal_ack_replays_to_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(Log::open(&dir.path().join("db")).unwrap());
+        let jobs = JobService::open(log.clone()).unwrap();
+        jobs.create(dispatch("recover")).unwrap();
+        drop(jobs);
+
+        let restarted = JobService::open(log.clone()).unwrap();
+        let completed_attempt = JobAttemptStatus {
+            job_id: "recover".into(),
+            attempt_epoch: 1,
+            state: JobAttemptState::Completed,
+            exit_code: Some(0),
+            truncated: false,
+            timed_out: false,
+            cancelled: false,
+            terminal_reason: Some("succeeded".into()),
+            final_sequence: Some(1),
+        };
+        restarted
+            .reconcile("n", std::slice::from_ref(&completed_attempt))
+            .unwrap();
+        assert_eq!(restarted.get("recover").unwrap().status, "recovering");
+        drop(restarted);
+
+        let restarted = JobService::open(log).unwrap();
+        assert_eq!(
+            restarted.get("recover").unwrap().status,
+            "StepIndeterminate"
+        );
+        restarted.reconcile("n", &[completed_attempt]).unwrap();
+        assert_eq!(restarted.get("recover").unwrap().status, "recovering");
+        restarted
+            .persist_output("recover", 1, 0, JobStream::Stdout, "done".into())
+            .unwrap();
+        restarted
+            .persist_result("recover", 1, 1, Some(0), false, false, false)
+            .unwrap();
+        let recovered = restarted.get("recover").unwrap();
+        assert_eq!(recovered.status, "completed");
+        assert_eq!(recovered.final_sequence, Some(1));
     }
 
     #[test]

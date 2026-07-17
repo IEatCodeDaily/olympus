@@ -11,7 +11,7 @@ use olympus_proto::frames::{EnvoyFrame, JobAttemptState, JobAttemptStatus, JobSt
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 
 struct JobEntry {
     pid: u32,
@@ -42,6 +42,11 @@ pub struct JobSpec {
     pub cwd: Option<String>,
     pub timeout_secs: u64,
     pub max_output_bytes: u64,
+}
+
+pub struct JobFrame {
+    pub frame: EnvoyFrame,
+    pub persisted: Option<oneshot::Sender<Result<u64, String>>>,
 }
 
 #[derive(Clone)]
@@ -93,7 +98,7 @@ impl JobTable {
             .collect()
     }
 
-    pub async fn spawn(&self, spec: JobSpec, tx: mpsc::Sender<EnvoyFrame>) -> Result<()> {
+    pub async fn spawn(&self, spec: JobSpec, tx: mpsc::Sender<JobFrame>) -> Result<()> {
         let key = key(&spec.job_id, spec.attempt_epoch);
         if self.attempts.read().await.contains_key(&key) {
             return Ok(()); // idempotent duplicate dispatch attaches to retained attempt
@@ -104,12 +109,8 @@ impl JobTable {
             .filter(|value| !value.is_empty())
             .context("argv must contain a non-empty program")?
             .clone();
-        package_preflight(
-            &spec.package_id,
-            &spec.package_version,
-            &spec.package_digest,
-            &spec.activity,
-        )?;
+        // JOBS-2 is transport-only. EXEC-1 binds the package identity fields
+        // to an installed immutable package and declared grant.
         let cwd = resolve_cwd(&self.root, spec.cwd.as_deref())?;
         std::fs::create_dir_all(&cwd)?;
 
@@ -123,34 +124,13 @@ impl JobTable {
                 timed_out: false,
                 cancelled: false,
                 terminal_reason: None,
+                final_sequence: None,
             },
             None,
         )
         .await?;
 
-        let mut command = Command::new(program);
-        command
-            .args(&spec.argv[1..])
-            .current_dir(cwd)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-        command.env_clear();
-        for name in &spec.env_allowlist {
-            if let Ok(value) = std::env::var(name) {
-                command.env(name, value);
-            }
-        }
-        // SAFETY: setsid is async-signal-safe and touches no Rust-managed state.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        let mut command = gated_command(program, &spec.argv[1..], &cwd, &spec.env_allowlist);
         let mut child = match command.spawn().context("spawning job") {
             Ok(child) => child,
             Err(error) => {
@@ -170,10 +150,18 @@ impl JobTable {
                 timed_out: false,
                 cancelled: false,
                 terminal_reason: None,
+                final_sequence: None,
             },
             Some(pid),
         )
         .await?;
+        use tokio::io::AsyncWriteExt;
+        child
+            .stdin
+            .take()
+            .context("capturing job launch gate")?
+            .write_all(b"go\n")
+            .await?;
         let stdout = child.stdout.take().context("capturing stdout")?;
         let stderr = child.stderr.take().context("capturing stderr")?;
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -250,30 +238,40 @@ impl JobTable {
             } else {
                 "failed"
             };
-            let completed = table
-                .complete_attempt(JobAttemptStatus {
+            let (persisted_tx, persisted_rx) = oneshot::channel();
+            let result = JobFrame {
+                frame: EnvoyFrame::JobResult {
                     job_id: spec.job_id.clone(),
                     attempt_epoch: spec.attempt_epoch,
-                    state: JobAttemptState::Completed,
+                    seq: 0,
                     exit_code,
                     truncated: truncated.load(Ordering::Relaxed),
                     timed_out,
                     cancelled,
-                    terminal_reason: Some(reason.into()),
-                })
-                .await
-                .unwrap_or(false);
-            if completed {
-                let _ = tx
-                    .send(EnvoyFrame::JobResult {
-                        job_id: spec.job_id,
+                },
+                persisted: Some(persisted_tx),
+            };
+            let final_sequence = match tx.send(result).await {
+                Ok(()) => persisted_rx.await.ok().and_then(Result::ok),
+                Err(_) => None,
+            };
+            if let Some(final_sequence) = final_sequence {
+                let _ = table
+                    .complete_attempt(JobAttemptStatus {
+                        job_id: spec.job_id.clone(),
                         attempt_epoch: spec.attempt_epoch,
-                        seq: 0,
+                        state: JobAttemptState::Completed,
                         exit_code,
                         truncated: truncated.load(Ordering::Relaxed),
                         timed_out,
                         cancelled,
+                        terminal_reason: Some(reason.into()),
+                        final_sequence: Some(final_sequence),
                     })
+                    .await;
+            } else {
+                let _ = table
+                    .mark_indeterminate(&spec.job_id, spec.attempt_epoch, "terminal_spool_loss")
                     .await;
             }
         });
@@ -315,6 +313,7 @@ impl JobTable {
                 timed_out: false,
                 cancelled: false,
                 terminal_reason: Some(reason.into()),
+                final_sequence: None,
             },
             pgid,
         )
@@ -358,11 +357,51 @@ impl JobTable {
     }
 }
 
+fn gated_command(
+    program: String,
+    args: &[String],
+    cwd: &Path,
+    env_allowlist: &[String],
+) -> Command {
+    // The child waits for one byte before exec. If Envoy dies before the PGID
+    // is durable, pipe EOF exits without running the requested program.
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "IFS= read -r _ || exit 125; exec \"$@\"", "job-gate"])
+        .arg(program)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    command.env_clear();
+    for name in env_allowlist {
+        if let Ok(value) = std::env::var(name) {
+            command.env(name, value);
+        }
+    }
+    // SAFETY: setsid is async-signal-safe and touches no Rust-managed state.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
 fn kill_group(pid: u32) {
     // Negative pid targets the process group created by setsid.
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
     }
+}
+
+pub fn wire_id(job_id: &str, attempt_epoch: u64) -> String {
+    format!("job:{job_id}:{attempt_epoch}")
 }
 
 fn key(job_id: &str, attempt_epoch: u64) -> String {
@@ -404,18 +443,6 @@ fn now_millis() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
-fn package_preflight(id: &str, version: &str, digest: &str, activity: &str) -> Result<()> {
-    anyhow::ensure!(
-        activity == "job.run",
-        "activity is not granted for job execution"
-    );
-    anyhow::ensure!(
-        !id.is_empty() && !version.is_empty() && !digest.is_empty(),
-        "package identity must be immutable"
-    );
-    Ok(())
-}
-
 fn resolve_cwd(root: &Path, cwd: Option<&str>) -> Result<PathBuf> {
     let relative = Path::new(cwd.unwrap_or("."));
     if relative.is_absolute()
@@ -440,7 +467,7 @@ fn stream_output<R: tokio::io::AsyncRead + Send + Unpin + 'static>(
     limit: u64,
     emitted: Arc<AtomicU64>,
     truncated: Arc<AtomicBool>,
-    tx: mpsc::Sender<EnvoyFrame>,
+    tx: mpsc::Sender<JobFrame>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buffer = vec![0_u8; 8192];
@@ -458,12 +485,15 @@ fn stream_output<R: tokio::io::AsyncRead + Send + Unpin + 'static>(
                 truncated.store(true, Ordering::Relaxed);
             }
             if tx
-                .send(EnvoyFrame::JobOutput {
-                    job_id: job_id.clone(),
-                    attempt_epoch,
-                    seq: 0,
-                    stream,
-                    data: String::from_utf8_lossy(&buffer[..keep]).into_owned(),
+                .send(JobFrame {
+                    frame: EnvoyFrame::JobOutput {
+                        job_id: job_id.clone(),
+                        attempt_epoch,
+                        seq: 0,
+                        stream,
+                        data: String::from_utf8_lossy(&buffer[..keep]).into_owned(),
+                    },
+                    persisted: None,
                 })
                 .await
                 .is_err()
@@ -495,6 +525,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn launch_gate_prevents_effects_before_pgid_is_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran");
+        let mut command = gated_command(
+            "/bin/sh".into(),
+            &["-c".into(), format!("touch {}", marker.display())],
+            dir.path(),
+            &[],
+        );
+        let mut child = command.spawn().unwrap();
+        drop(child.stdin.take()); // simulate Envoy crash before ledger fsync
+        assert_eq!(child.wait().await.unwrap().code(), Some(125));
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
     async fn duplicate_dispatch_is_idempotent_and_drains_before_result() {
         let dir = tempfile::tempdir().unwrap();
         let table = JobTable::new(dir.path().into()).unwrap();
@@ -509,9 +555,11 @@ mod tests {
             .unwrap();
         let mut output = String::new();
         loop {
-            match rx.recv().await.unwrap() {
+            let pending = rx.recv().await.unwrap();
+            match pending.frame {
                 EnvoyFrame::JobOutput { data, .. } => output.push_str(&data),
                 EnvoyFrame::JobResult { exit_code, .. } => {
+                    pending.persisted.unwrap().send(Ok(1)).unwrap();
                     assert_eq!(exit_code, Some(0));
                     break;
                 }
@@ -568,8 +616,11 @@ mod tests {
 
         let result = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
-                if let Some(EnvoyFrame::JobResult { timed_out, .. }) = rx.recv().await {
-                    break timed_out;
+                if let Some(pending) = rx.recv().await {
+                    if let EnvoyFrame::JobResult { timed_out, .. } = pending.frame {
+                        pending.persisted.unwrap().send(Ok(0)).unwrap();
+                        break timed_out;
+                    }
                 }
             }
         })
@@ -581,6 +632,7 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(unsafe { libc::kill(child_pid, 0) }, -1);
     }
 
@@ -601,6 +653,7 @@ mod tests {
                     timed_out: false,
                     cancelled: false,
                     terminal_reason: None,
+                    final_sequence: None,
                 },
                 pgid: None,
                 updated_at: 1,
@@ -705,6 +758,7 @@ mod tests {
                             timed_out: false,
                             cancelled: false,
                             terminal_reason: Some("succeeded".into()),
+                            final_sequence: Some(0),
                         },
                         pgid: None,
                         updated_at: index,

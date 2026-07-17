@@ -294,6 +294,9 @@ pub struct JobAttemptStatus {
     pub cancelled: bool,
     #[serde(default)]
     pub terminal_reason: Option<String>,
+    /// Final durable spool sequence, when Envoy has fsynced a terminal result.
+    #[serde(default)]
+    pub final_sequence: Option<u64>,
 }
 
 /// Envoy→Hall frames.
@@ -573,6 +576,7 @@ mod tests {
                     timed_out: false,
                     cancelled: false,
                     terminal_reason: None,
+                    final_sequence: None,
                 }],
             },
             EnvoyFrame::Heartbeat {

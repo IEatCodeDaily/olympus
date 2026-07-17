@@ -22,7 +22,7 @@ use futures::StreamExt;
 use olympus_envoy::{
     bridge::{AgentCommand, AgentEvent, AgentRuntime},
     discovery,
-    job_table::{JobSpec, JobTable},
+    job_table::{JobFrame, JobSpec, JobTable},
     mock_runtime::MockAgentRuntime,
     pty,
     runtime_table::RuntimeTable,
@@ -341,6 +341,9 @@ where
     let agents_json = serde_json::to_value(&agents).unwrap_or_default();
     let mut runtimes = Vec::new();
     for session_id in conn.spool.sessions()? {
+        if session_id.starts_with("job:") {
+            continue;
+        }
         runtimes.push(olympus_proto::frames::RuntimeStatus {
             last_seq: conn.spool.last_seq(&session_id)?.unwrap_or(0),
             session_id,
@@ -348,6 +351,38 @@ where
             state: "spooled".into(),
             resumable: false,
         });
+    }
+    let mut job_attempts = conn.jobs.inventory().await;
+    for attempt in &mut job_attempts {
+        let identity = olympus_envoy::job_table::wire_id(&attempt.job_id, attempt.attempt_epoch);
+        if let Some(EnvoyFrame::JobResult {
+            seq,
+            exit_code,
+            truncated,
+            timed_out,
+            cancelled,
+            ..
+        }) = conn.spool.read(&identity, None)?.last()
+        {
+            attempt.state = olympus_proto::frames::JobAttemptState::Completed;
+            attempt.exit_code = *exit_code;
+            attempt.truncated = *truncated;
+            attempt.timed_out = *timed_out;
+            attempt.cancelled = *cancelled;
+            attempt.terminal_reason = Some(
+                if *timed_out {
+                    "timed_out"
+                } else if *cancelled {
+                    "cancelled"
+                } else if *exit_code == Some(0) {
+                    "succeeded"
+                } else {
+                    "failed"
+                }
+                .into(),
+            );
+            attempt.final_sequence = Some(*seq);
+        }
     }
     let hello = EnvoyFrame::Hello {
         node_id: node_id.to_string(),
@@ -358,7 +393,7 @@ where
         agents: Some(agents_json),
         runtimes,
         roles,
-        job_attempts: conn.jobs.inventory().await,
+        job_attempts,
     };
     *conn.hello.lock().await = Some(hello);
     conn.send_hello().await?;
@@ -659,14 +694,32 @@ async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
             let output_conn = conn.clone();
             let loss_job_id = job_id.clone();
             tokio::spawn(async move {
-                while let Some(mut frame) = rx.recv().await {
-                    if let Err(error) = output_conn.spool.append_next(&mut frame) {
-                        tracing::error!(job = %loss_job_id, attempt_epoch, %error, "job spool failed; stopping output producer");
-                        let _ = output_conn
-                            .jobs
-                            .mark_indeterminate(&loss_job_id, attempt_epoch, "output_spool_loss")
-                            .await;
-                        break;
+                while let Some(JobFrame {
+                    mut frame,
+                    persisted,
+                }) = rx.recv().await
+                {
+                    match output_conn.spool.append_next(&mut frame) {
+                        Ok(seq) => {
+                            if let Some(persisted) = persisted {
+                                let _ = persisted.send(Ok(seq));
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(persisted) = persisted {
+                                let _ = persisted.send(Err(error.to_string()));
+                            }
+                            tracing::error!(job = %loss_job_id, attempt_epoch, %error, "job spool failed; stopping output producer");
+                            let _ = output_conn
+                                .jobs
+                                .mark_indeterminate(
+                                    &loss_job_id,
+                                    attempt_epoch,
+                                    "output_spool_loss",
+                                )
+                                .await;
+                            break;
+                        }
                     }
                     if output_conn.send_frame(&frame).await.is_err() {
                         break;
