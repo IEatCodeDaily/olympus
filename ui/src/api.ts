@@ -19,6 +19,7 @@ import type {
   SearchResponse,
   ModelsResponse,
   AgentsResponse,
+  AgentsCatalogResponse,
   NodesResponse,
   EnrollResponse,
   HealthResponse,
@@ -58,6 +59,7 @@ function organizationPath(path: string): string {
     path.startsWith("/api/metrics") ||
     path === "/api/models" ||
     path === "/api/agents" ||
+    path === "/api/agents/catalog" ||
     path.startsWith("/api/agents/") ||
     path === "/api/enroll" ||
     path === "/api/nodes" ||
@@ -181,6 +183,12 @@ export async function fetchAgents(): Promise<AgentsResponse> {
   const res = await fetch(`${BASE}/api/agents`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`agents ${res.status}`);
   return res.json() as Promise<AgentsResponse>;
+}
+
+export async function fetchAgentCatalog(): Promise<AgentsCatalogResponse> {
+  const res = await fetch(`${BASE}/api/agents/catalog`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`agent catalog ${res.status}`);
+  return res.json() as Promise<AgentsCatalogResponse>;
 }
 
 /** Manually re-detect a node's agents (Fleet › Agents "detect" button).

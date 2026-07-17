@@ -128,6 +128,10 @@ export interface AgentsResponse {
   agents: AgentInfo[];
 }
 
+export interface AgentsCatalogResponse {
+  nodes: NodeInfo[];
+}
+
 export type NodeStatus = "online" | "draining" | "offline";
 
 export interface NodeInfo {
