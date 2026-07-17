@@ -78,12 +78,21 @@ export function SessionsView({
   const navigate = useNavigate();
   const apiRef = useRef<DockviewApi | null>(null);
   const [openSessionIds, setOpenSessionIds] = useState<Set<string>>(() => new Set());
+  const [paneMarks, setPaneMarks] = useState<Map<string, string>>(() => new Map());
+  const [groupCount, setGroupCount] = useState(0);
 
   const syncOpenSessions = useCallback((api: DockviewApi) => {
-    setOpenSessionIds(new Set(api.panels.flatMap((panel) => {
-      const id = (panel.params as SessionPanelParams | undefined)?.sessionId;
-      return id ? [id] : [];
-    })));
+    const ids = new Set<string>();
+    const marks = new Map<string, string>();
+    api.groups.forEach((group, gi) => {
+      for (const panel of group.panels) {
+        const sid = (panel.params as SessionPanelParams | undefined)?.sessionId;
+        if (sid) { ids.add(sid); marks.set(sid, `P${gi + 1}`); }
+      }
+    });
+    setOpenSessionIds(ids);
+    setPaneMarks(marks);
+    setGroupCount(api.groups.length);
   }, []);
 
   // Bug 17: resizable panels — left sidebar, right sidebar, bottom panel
@@ -116,7 +125,10 @@ export function SessionsView({
     };
   }, [persist]);
 
-  const openSessionPanel = useCallback((id: string, drop?: DockviewDidDropEvent) => {
+  const openSessionPanel = useCallback((id: string, opts?: {
+    drop?: DockviewDidDropEvent;
+    split?: "right" | "below";
+  }) => {
     const api = apiRef.current;
     if (!api) return;
     const panelId = `session:${id}`;
@@ -126,19 +138,31 @@ export function SessionsView({
       syncOpenSessions(api);
       return;
     }
+    // Resolve the active group (or first group as fallback) so splits are relative
+    // to the panel the user is actually looking at, not an arbitrary one.
+    const activeGroup = api.activeGroup ?? api.groups[0] ?? null;
+    const positionArgs =
+      opts?.split && activeGroup
+        ? { position: { referenceGroup: activeGroup, direction: opts.split === "right" ? "right" : "below" } }
+        : opts?.drop?.group
+          ? { position: { referenceGroup: opts.drop.group, direction: dropDirection(opts.drop.position) } }
+          : {};
     const panel = api.addPanel({
       id: panelId,
       title: id,
       component: "session-panel",
       params: { sessionId: id } satisfies SessionPanelParams,
-      ...(drop?.group ? {
-        position: { referenceGroup: drop.group, direction: dropDirection(drop.position) },
-      } : {}),
+      ...positionArgs,
     });
     panel.api.setActive();
     syncOpenSessions(api);
     persist();
   }, [persist, syncOpenSessions]);
+
+  const openSession = useCallback((id: string, split?: "right" | "below") => {
+    openSessionPanel(id, { split });
+    void navigate({ to: "/sessions/$sessionId", params: { sessionId: id } });
+  }, [navigate, openSessionPanel]);
 
   useEffect(() => {
     if (sessionId) openSessionPanel(sessionId);
@@ -171,7 +195,7 @@ export function SessionsView({
       }
     });
     if (sessionId) openSessionPanel(sessionId);
-    const layoutDisposable = event.api.onDidLayoutChange(() => persist());
+    const layoutDisposable = event.api.onDidLayoutChange(() => { syncOpenSessions(event.api); persist(); });
     const activeDisposable = event.api.onDidActivePanelChange(({ panel }) => {
       const params = panel?.params as SessionPanelParams | undefined;
       if (params?.sessionId) {
@@ -187,7 +211,7 @@ export function SessionsView({
     const dropDisposable = event.api.onDidDrop((dropEvent) => {
       const payload = dragPayload(dropEvent.nativeEvent, "application/x-olympus-session") as { sessionId?: string } | null;
       if (!payload?.sessionId) return;
-      openSessionPanel(payload.sessionId, dropEvent);
+      openSessionPanel(payload.sessionId, { drop: dropEvent });
       void navigate({ to: "/sessions/$sessionId", params: { sessionId: payload.sessionId } });
     });
     return () => {
@@ -207,6 +231,8 @@ export function SessionsView({
           width={sidebar.size}
           activeSessionId={sessionId}
           openSessionIds={openSessionIds}
+          paneMarks={paneMarks}
+          onOpenSession={openSession}
           onResizeStart={sidebar.onResizeStart}
           onResizeKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -233,7 +259,7 @@ export function SessionsView({
         ) : (
           <div className="sessions-dock-shell">
             <DockviewReact
-              className="dockview-theme-abyss olympus-dockview sessions-dockview"
+              className={`dockview-theme-abyss olympus-dockview sessions-dockview${groupCount > 1 ? " multi-group" : ""}`}
               components={{ "session-panel": SessionDockPanel }}
               onReady={handleReady}
             />
