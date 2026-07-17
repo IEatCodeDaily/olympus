@@ -42,6 +42,9 @@ pub struct EnvoyResp {
 /// One envoy's connection state: the write half + pending requests + per-session
 /// event channels.
 pub struct EnvoyConnection {
+    pub(crate) epoch: u64,
+    protocol_version: u32,
+    shutdown: tokio::sync::watch::Sender<bool>,
     /// Buffered writer to the transport stream (UDS or iroh QUIC). Guarded so
     /// Hall can send from any task. Transport-agnostic via [`BoxedWriter`].
     writer: Mutex<tokio::io::BufWriter<BoxedWriter>>,
@@ -78,7 +81,27 @@ pub enum TerminalFrame {
 
 impl EnvoyConnection {
     fn new(writer: BoxedWriter, log: Option<Arc<crate::log::Log>>) -> Arc<Self> {
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        Self::new_with_epoch(
+            writer,
+            log,
+            0,
+            olympus_proto::version::PROTOCOL_VERSION,
+            shutdown,
+        )
+    }
+
+    fn new_with_epoch(
+        writer: BoxedWriter,
+        log: Option<Arc<crate::log::Log>>,
+        epoch: u64,
+        protocol_version: u32,
+        shutdown: tokio::sync::watch::Sender<bool>,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            epoch,
+            protocol_version,
+            shutdown,
             writer: Mutex::new(tokio::io::BufWriter::new(writer)),
             pending: Mutex::new(HashMap::new()),
             next_req_id: AtomicU64::new(1),
@@ -134,6 +157,8 @@ impl EnvoyConnection {
             }
             HallFrame::Ack { .. }
             | HallFrame::ResumeFrom { .. }
+            | HallFrame::HeartbeatAck
+            | HallFrame::ReRegister
             | HallFrame::TerminalInput { .. }
             | HallFrame::TerminalResize { .. }
             | HallFrame::TerminalClose { .. } => {
@@ -330,6 +355,16 @@ impl EnvoyConnection {
         let mut pending = self.pending.lock().await;
         pending.clear(); // oneshot senders drop → receivers get a RecvError
     }
+
+    pub async fn close(&self) {
+        let _ = self.shutdown.send(true);
+        self.fail_all().await;
+        let _ = self.writer.lock().await.shutdown().await;
+    }
+
+    pub(crate) fn supports_heartbeat_repair(&self) -> bool {
+        self.protocol_version >= 3
+    }
 }
 
 /// Inject a Hall-assigned reqId into a request frame (overwriting whatever was
@@ -410,6 +445,7 @@ fn inject_req_id(frame: HallFrame, req_id: u64) -> HallFrame {
 pub struct EnvoyConnections {
     inner: Arc<RwLock<HashMap<String, Arc<EnvoyConnection>>>>,
     log: Option<Arc<crate::log::Log>>,
+    next_epoch: Arc<AtomicU64>,
 }
 
 impl EnvoyConnections {
@@ -421,7 +457,12 @@ impl EnvoyConnections {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
             log: Some(log),
+            next_epoch: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn allocate_epoch(&self) -> u64 {
+        self.next_epoch.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// Register a connection for a node. Returns the connection.
@@ -434,9 +475,41 @@ impl EnvoyConnections {
         conn
     }
 
+    pub async fn insert_epoch(
+        &self,
+        node_id: &str,
+        writer: BoxedWriter,
+        epoch: u64,
+        protocol_version: u32,
+        shutdown: tokio::sync::watch::Sender<bool>,
+    ) -> Result<(Arc<EnvoyConnection>, Option<Arc<EnvoyConnection>>), Arc<EnvoyConnection>> {
+        let conn = EnvoyConnection::new_with_epoch(
+            writer,
+            self.log.clone(),
+            epoch,
+            protocol_version,
+            shutdown,
+        );
+        let mut inner = self.inner.write().await;
+        if inner.get(node_id).is_some_and(|old| old.epoch > epoch) {
+            return Err(conn);
+        }
+        let old = inner.insert(node_id.to_owned(), conn.clone());
+        Ok((conn, old))
+    }
+
     /// Remove a connection (returns it so the caller can fail its pending reqs).
     pub async fn remove(&self, node_id: &str) -> Option<Arc<EnvoyConnection>> {
         self.inner.write().await.remove(node_id)
+    }
+
+    pub async fn remove_epoch(&self, node_id: &str, epoch: u64) -> Option<Arc<EnvoyConnection>> {
+        let mut inner = self.inner.write().await;
+        if inner.get(node_id).is_some_and(|conn| conn.epoch == epoch) {
+            inner.remove(node_id)
+        } else {
+            None
+        }
     }
 
     /// Get a connection by node_id.
@@ -665,13 +738,17 @@ mod tests {
     /// Create a test EnvoyConnection backed by a real UDS socketpair (the
     /// write half goes to the conn; the read half is dropped — tests don't
     /// check the wire, only the in-memory event/pending maps).
-    fn test_conn() -> Arc<EnvoyConnection> {
+    fn test_writer() -> BoxedWriter {
         use std::os::unix::net::UnixStream as StdStream;
         let (s1, _s2) = StdStream::pair().unwrap();
         s1.set_nonblocking(true).unwrap();
         let stream = tokio::net::UnixStream::from_std(s1).unwrap();
         let (_reader, writer) = stream.into_split();
-        EnvoyConnection::new(Box::new(writer), None)
+        Box::new(writer)
+    }
+
+    fn test_conn() -> Arc<EnvoyConnection> {
+        EnvoyConnection::new(test_writer(), None)
     }
 
     #[tokio::test]
@@ -685,6 +762,34 @@ mod tests {
         assert!(conns.get("n1").await.is_some());
         conns.remove("n1").await;
         assert!(!conns.is_remote_node("n1").await);
+    }
+
+    #[tokio::test]
+    async fn older_epoch_cannot_replace_newer_connection() {
+        let conns = EnvoyConnections::new();
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        assert!(conns
+            .insert_epoch(
+                "n1",
+                test_writer(),
+                2,
+                olympus_proto::version::PROTOCOL_VERSION,
+                shutdown,
+            )
+            .await
+            .is_ok());
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        assert!(conns
+            .insert_epoch(
+                "n1",
+                test_writer(),
+                1,
+                olympus_proto::version::PROTOCOL_VERSION,
+                shutdown,
+            )
+            .await
+            .is_err());
+        assert_eq!(conns.get("n1").await.unwrap().epoch, 2);
     }
 
     #[tokio::test]

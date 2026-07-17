@@ -39,6 +39,7 @@ use tokio::sync::Mutex;
 
 /// Heartbeat interval.
 const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const HEARTBEAT_REREGISTER_AFTER: usize = 3;
 
 /// How often the idle reaper runs.
 const IDLE_REAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(120);
@@ -216,9 +217,21 @@ struct Conn {
     /// Operator terminal (PTY) manager (ADR 0021 cockpit). Operator-only;
     /// driven solely by HallFrame::Terminal* frames.
     pty: Arc<crate::pty::PtyManager>,
+    hello: Mutex<Option<EnvoyFrame>>,
+    unacked_heartbeats: std::sync::atomic::AtomicUsize,
 }
 
 impl Conn {
+    async fn send_hello(&self) -> Result<()> {
+        let hello = self
+            .hello
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("hello frame not initialized"))?;
+        self.send_frame(&hello).await
+    }
+
     async fn send_frame(&self, frame: &EnvoyFrame) -> Result<()> {
         let json = serde_json::to_string(frame).context("serializing envoy frame")?;
         let mut w = self.writer.lock().await;
@@ -292,6 +305,8 @@ where
         jobs,
         turn: Mutex::new(std::collections::HashMap::new()),
         pty: pty_mgr,
+        hello: Mutex::new(None),
+        unacked_heartbeats: std::sync::atomic::AtomicUsize::new(0),
     });
 
     // Forward PTY output/exit frames to Hall over this connection.
@@ -344,7 +359,8 @@ where
         runtimes,
         roles,
     };
-    conn.send_frame(&hello).await?;
+    *conn.hello.lock().await = Some(hello);
+    conn.send_hello().await?;
     tracing::info!("hello sent");
 
     // Heartbeat loop — store handle so we can abort it when the read loop exits.
@@ -358,8 +374,26 @@ where
                     node_id: hb_node.clone(),
                     slots_used: 0,
                 };
+                hb_conn
+                    .unacked_heartbeats
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if hb_conn.send_frame(&hb).await.is_err() {
                     break;
+                }
+                let unacked = hb_conn
+                    .unacked_heartbeats
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                if unacked >= HEARTBEAT_REREGISTER_AFTER {
+                    tracing::warn!(
+                        unacked,
+                        "heartbeat acknowledgements missing; re-registering"
+                    );
+                    if hb_conn.send_hello().await.is_err() {
+                        break;
+                    }
+                    hb_conn
+                        .unacked_heartbeats
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         })
@@ -504,6 +538,16 @@ fn dispatch_inline(frame: &HallFrame) -> bool {
 /// Dispatch a single HallFrame.
 async fn dispatch_frame(conn: Arc<Conn>, frame: HallFrame) -> Result<()> {
     match frame {
+        HallFrame::HeartbeatAck => {
+            conn.unacked_heartbeats
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+        HallFrame::ReRegister => {
+            tracing::warn!("Hall requested re-registration");
+            conn.unacked_heartbeats
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+            conn.send_hello().await?;
+        }
         HallFrame::EnsureRuntime {
             req_id,
             session_id,
@@ -936,6 +980,98 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reregister_frame_causes_a_second_hello_on_same_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = Arc::new(RuntimeTable::with_factory(Arc::new(|_| {
+            MockAgentRuntime::new_arc() as Arc<dyn AgentRuntime>
+        })));
+        let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
+        let jobs = Arc::new(JobTable::new(dir.path().join("jobs")).unwrap());
+        let (envoy, hall) = tokio::io::duplex(16 * 1024);
+        let (envoy_reader, envoy_writer) = tokio::io::split(envoy);
+        let (hall_reader, mut hall_writer) = tokio::io::split(hall);
+        let task = tokio::spawn(run_connection(
+            envoy_reader,
+            envoy_writer,
+            table,
+            "node",
+            "host",
+            vec![],
+            spool,
+            jobs,
+            vec![],
+        ));
+        let mut lines = tokio::io::BufReader::new(hall_reader).lines();
+        assert!(matches!(
+            serde_json::from_str::<EnvoyFrame>(&lines.next_line().await.unwrap().unwrap()).unwrap(),
+            EnvoyFrame::Hello { .. }
+        ));
+        hall_writer
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&HallFrame::ReRegister).unwrap()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<EnvoyFrame>(
+                &tokio::time::timeout(std::time::Duration::from_secs(1), lines.next_line())
+                    .await
+                    .expect("envoy must re-Hello immediately")
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            EnvoyFrame::Hello { .. }
+        ));
+        drop(hall_writer);
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn three_missed_heartbeat_acks_cause_a_fresh_hello() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = Arc::new(RuntimeTable::with_factory(Arc::new(|_| {
+            MockAgentRuntime::new_arc() as Arc<dyn AgentRuntime>
+        })));
+        let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
+        let jobs = Arc::new(JobTable::new(dir.path().join("jobs")).unwrap());
+        let (envoy, hall) = tokio::io::duplex(64 * 1024);
+        let (envoy_reader, envoy_writer) = tokio::io::split(envoy);
+        let (hall_reader, _hall_writer) = tokio::io::split(hall);
+        let task = tokio::spawn(run_connection(
+            envoy_reader,
+            envoy_writer,
+            table,
+            "self-heal",
+            "host",
+            vec![],
+            spool,
+            jobs,
+            vec![],
+        ));
+        let mut lines = tokio::io::BufReader::new(hall_reader).lines();
+        let first: EnvoyFrame =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert!(matches!(first, EnvoyFrame::Hello { .. }));
+
+        for _ in 0..HEARTBEAT_REREGISTER_AFTER {
+            tokio::time::advance(HEARTBEAT_INTERVAL).await;
+            tokio::task::yield_now().await;
+            let frame: EnvoyFrame =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert!(matches!(frame, EnvoyFrame::Heartbeat { .. }));
+        }
+        let repaired: EnvoyFrame =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert!(matches!(repaired, EnvoyFrame::Hello { .. }));
+        task.abort();
+    }
 
     #[test]
     fn resume_replay_never_blocks_the_socket_read_loop() {

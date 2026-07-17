@@ -215,7 +215,7 @@ async fn main() -> Result<()> {
     // ADR 0008 S6: the local node is NO LONGER an in-process pseudo-envoy.
     // It is olympus-envoy@1 over UDS — the envoy binary connects and
     // registers itself at boot. Hall does not pre-register any node.
-    let node_registry = NodeRegistry::new();
+    let node_registry = NodeRegistry::with_inventory(&home)?;
 
     let mut state = AppState {
         views: Arc::new(RwLock::new(views)),

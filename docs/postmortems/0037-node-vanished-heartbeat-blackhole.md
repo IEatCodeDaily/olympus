@@ -1,7 +1,7 @@
 # Postmortem 0037 — Fx-ZephyrusM16 vanished from prod Fleet for ~10 hours (heartbeat black hole + connection/registration lifecycle mismatch)
 
 - Date: 2026-07-16
-- Status: Open — mitigated by Hall restart; protocol fix pending (kanban olympus-ux)
+- Status: Fixed on `wt/t_09d1531b` (`3b0bde9`); pending merge/review
 - Affected: production Hall on Terminus, envoy `Fx-ZephyrusM16` (iroh `335a99d1…`), transiently `fxcompute-01`
 
 ## Impact
@@ -60,6 +60,26 @@ Reinstall created a fresh envoy process → fresh Hello → registered. But the 
 2. **Unknown-node heartbeat repair**: Hall must respond to a heartbeat from an unregistered node with an explicit re-register signal (or close the connection). Envoy must treat that response — and N consecutive unacknowledged heartbeats — as "re-Hello required".
 3. **Durable enrolled-node inventory**: enrolled nodes (allowlist + last-seen metadata) should be a durable projection so Fleet shows *enrolled but offline* nodes instead of the node silently vanishing; connection state is presence, not identity.
 4. **Flap investigation**: the underlying periodic disconnects (relay/NAT keepalive) deserve their own measurement, but with 1–2 the system self-heals in seconds instead of wedging for hours.
+
+## Resolution
+
+Implemented in `wt/t_09d1531b` through `3b0bde9`:
+
+- Hall assigns monotonically increasing connection epochs and fences both
+  registry and connection-map teardown by epoch. A newer Hello is published
+  before the superseded connection is actively closed.
+- Protocol v3 adds `heartbeat_ack` and `re_register`. Hall requests repair for
+  an authenticated unknown-node heartbeat; Envoy re-sends Hello on that frame
+  or after three consecutive missed acknowledgements.
+- Enrolled identity is persisted atomically in `nodes.json`, including iroh
+  key, enrollment/last-seen timestamps, and last version. `/api/nodes` projects
+  enrolled disconnected nodes as `offline`.
+- Regression coverage reproduces stale zombie teardown, superseding Hello,
+  heartbeat repair (including paused-time missed-ACK recovery), and durable
+  offline API projection.
+
+Verification on `fxcompute-01` at `3b0bde9`: the full control-plane, Envoy, and
+proto suites pass under the shared cargo lock; strict clippy and rustfmt pass.
 
 ## Lessons
 

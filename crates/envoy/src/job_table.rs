@@ -84,7 +84,7 @@ impl JobTable {
 
         let emitted = Arc::new(AtomicU64::new(0));
         let truncated = Arc::new(AtomicBool::new(false));
-        stream_output(
+        let stdout_task = stream_output(
             stdout,
             spec.job_id.clone(),
             JobStream::Stdout,
@@ -93,7 +93,7 @@ impl JobTable {
             truncated.clone(),
             tx.clone(),
         );
-        stream_output(
+        let stderr_task = stream_output(
             stderr,
             spec.job_id.clone(),
             JobStream::Stderr,
@@ -121,6 +121,10 @@ impl JobTable {
                     Err(_) => break None,
                 }
             };
+            // Process exit closes both pipes, but the reader tasks may still
+            // be forwarding their final chunks. Preserve output-before-result
+            // ordering on the wire.
+            let _ = tokio::join!(stdout_task, stderr_task);
             jobs.write().await.remove(&spec.job_id);
             let _ = tx.send(EnvoyFrame::JobResult {
                 job_id: spec.job_id,
@@ -170,7 +174,7 @@ fn stream_output<R: tokio::io::AsyncRead + Send + Unpin + 'static>(
     emitted: Arc<AtomicU64>,
     truncated: Arc<AtomicBool>,
     tx: mpsc::UnboundedSender<EnvoyFrame>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buffer = vec![0_u8; 8192];
         while let Ok(count) = reader.read(&mut buffer).await {
@@ -193,7 +197,7 @@ fn stream_output<R: tokio::io::AsyncRead + Send + Unpin + 'static>(
                 data: String::from_utf8_lossy(&buffer[..keep]).into_owned(),
             });
         }
-    });
+    })
 }
 
 #[cfg(test)]

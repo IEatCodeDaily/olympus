@@ -308,7 +308,10 @@ mod tests {
         // MessageView count — the divergence fixed by ADR 0020 v2.
         assert_eq!(managed.message_count, 2, "managed row counts appends");
         assert_eq!(mgr.messages.count("managed-1"), 2);
-        assert_eq!(synced.message_count, 2, "synced row uses absolute, no double");
+        assert_eq!(
+            synced.message_count, 2,
+            "synced row uses absolute, no double"
+        );
         assert_eq!(mgr.messages.count("synced-1"), 2);
     }
 

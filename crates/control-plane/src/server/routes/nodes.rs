@@ -210,7 +210,7 @@ pub(crate) async fn remove_node(State(state): State<AppState>, Path(id): Path<St
 
     state.nodes.deregister(&id).await;
     if let Some(conn) = state.envoy_conns.remove(&id).await {
-        conn.fail_all().await;
+        tokio::spawn(async move { conn.close().await });
     }
     Json(json!({ "ok": true, "allowlistRevoked": revoked })).into_response()
 }
