@@ -46,6 +46,24 @@ test("live dev interactions", async ({ page }) => {
   expect(focusedStyle.background).not.toBe(openStyle.background);
   expect(`${focusedStyle.shadow} ${openStyle.shadow}`).not.toContain("inset");
 
+  // Pane-fill geometry (postmortem 0041): the panel root must FILL its
+  // dockview pane — a collapsed flex child squishes everything to the top.
+  const fill = await page.evaluate(() => {
+    const view = document.querySelector(".chat-view");
+    const pane = view?.closest(".dv-content-container");
+    if (!view || !pane) return null;
+    const v = view.getBoundingClientRect();
+    const p = pane.getBoundingClientRect();
+    const composer = document.querySelector(".chat-view .composer, .chat-view textarea");
+    const c = composer?.getBoundingClientRect();
+    return { viewH: v.height, paneH: p.height, composerBottom: c ? c.bottom : null, paneBottom: p.bottom };
+  });
+  if (!fill) throw new Error("chat-view or dockview pane not found");
+  expect(fill.viewH).toBeGreaterThanOrEqual(fill.paneH * 0.95);
+  if (fill.composerBottom !== null) {
+    expect(fill.composerBottom).toBeGreaterThan(fill.paneBottom - fill.paneH * 0.5);
+  }
+
   const bottom = page.locator(".chat-view .bpanel");
   const bottomHandle = page.locator(".chat-view .rz-y");
   const h1 = (await bottom.boundingBox())!.height;

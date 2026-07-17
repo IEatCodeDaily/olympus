@@ -873,6 +873,11 @@ input[type=range] { accent-color: var(--silver); height: 14px; cursor: pointer; 
   .sessions-dock-empty { position: absolute; inset: 0; display: flex; flex-direction: column; pointer-events: none; }
   .sessions-dockview .dv-tabs-and-actions-container { display: none; }
   .sessions-dockview .dv-split-view-container, .sessions-dockview .dv-groupview, .sessions-dockview .dv-content-container { height: 100%; }
+  /* dockview content containers are display:block — a flex:1 panel root
+     (.chat-view) collapses to content height inside them, squishing the pane
+     to the top with a void below. Make every panel root fill its pane. */
+  .olympus-dockview .dv-content-container > * { height: 100%; min-height: 0; }
+  .olympus-dockview .dv-react-part > * { height: 100%; min-height: 0; }
   .vault-view-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-6); padding: var(--space-5) var(--space-6); border-bottom: var(--border-w) solid var(--border); }
   .vault-view-header > div { display: flex; flex-direction: column; gap: var(--space-2); }
   .vault-view-header > span { color: var(--faint); font-size: var(--fs-11); }
