@@ -102,7 +102,12 @@ test("session tiling via context menu", async ({ page }) => {
 
   // Now we should have 2 groups → multi-group class + tab bar visible
   await expect(page.locator(".sessions-dockview.multi-group")).toBeVisible();
-  await expect(page.locator(".sessions-dockview.multi-group .dv-tabs-and-actions-container")).toBeVisible();
+  const groupTabBars = page.locator(
+    ".sessions-dockview.multi-group .dv-tabs-and-actions-container",
+  );
+  await expect(groupTabBars).toHaveCount(2);
+  await expect(groupTabBars.first()).toBeVisible();
+  await expect(groupTabBars.nth(1)).toBeVisible();
 
   // Pane marks should appear in sidebar rows
   await expect(page.locator(".srow-pane-mark").first()).toBeVisible();
