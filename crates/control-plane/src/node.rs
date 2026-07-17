@@ -237,9 +237,27 @@ impl NodeRegistry {
     pub async fn enroll(&self, node_id: &str, iroh_node_id: &str) -> anyhow::Result<()> {
         let now = unix_now();
         let mut nodes = self.nodes.write().await;
-        nodes
-            .entry(node_id.to_owned())
-            .or_insert_with(|| NodeEntry {
+
+        // First durable-inventory boot seeds legacy allowlist entries under the
+        // raw iroh key because the old Hall never persisted node names. When
+        // enrollment supplies the name, migrate that placeholder instead of
+        // creating a second fleet row for the same authenticated identity.
+        let duplicate_ids: Vec<_> = nodes
+            .iter()
+            .filter(|(id, node)| {
+                id.as_str() != node_id && node.iroh_node_id.as_deref() == Some(iroh_node_id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut migrated = None;
+        for duplicate_id in duplicate_ids {
+            if let Some(entry) = nodes.remove(&duplicate_id) {
+                migrated.get_or_insert(entry);
+            }
+        }
+
+        let entry = nodes.entry(node_id.to_owned()).or_insert_with(|| {
+            migrated.unwrap_or_else(|| NodeEntry {
                 node_id: node_id.to_owned(),
                 hostname: node_id.to_owned(),
                 status: NodeStatus::Offline,
@@ -255,7 +273,16 @@ impl NodeRegistry {
                 enrolled_at: Some(now),
                 last_seen: None,
                 persisted_last_seen: 0,
-            });
+            })
+        });
+        let placeholder_hostname = entry.hostname == entry.node_id;
+        entry.node_id = node_id.to_owned();
+        if placeholder_hostname {
+            entry.hostname = node_id.to_owned();
+        }
+        entry.iroh_node_id = Some(iroh_node_id.to_owned());
+        entry.enrolled_at.get_or_insert(now);
+
         self.persist_inventory(&nodes)
     }
 
@@ -1698,6 +1725,26 @@ mod tests {
 
         NodeRegistry::with_inventory(dir.path()).expect("rebuildable inventory must fail open");
         assert!(dir.path().join("nodes.json.corrupt").exists());
+    }
+
+    #[tokio::test]
+    async fn enrollment_name_replaces_allowlist_key_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "83141ef93390a387aec148672f7ae44a9ee4c02a0f23f82c0bb80fcc2e499320";
+        crate::enroll::allowlist_add(dir.path(), key).unwrap();
+        let registry = NodeRegistry::with_inventory(dir.path()).unwrap();
+        assert!(registry.get(key).await.is_some());
+
+        registry.enroll("talos", key).await.unwrap();
+        assert!(registry.get(key).await.is_none());
+        assert_eq!(registry.get("talos").await.unwrap().iroh_node_id.as_deref(), Some(key));
+        drop(registry);
+
+        let restarted = NodeRegistry::with_inventory(dir.path()).unwrap();
+        let nodes = restarted.list().await;
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].node_id, "talos");
+        assert_eq!(nodes[0].status, NodeStatus::Offline);
     }
 
     #[tokio::test]
