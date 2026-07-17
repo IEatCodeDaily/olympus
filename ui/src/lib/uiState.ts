@@ -31,7 +31,9 @@ export async function loadWorkspaceState<T>(surface: string): Promise<T | null> 
   const local = getLocalUiState<T>(surface);
   try {
     const res = await apiFetch(`/api/ui-state/${encodeURIComponent(surface)}`);
-    if (!res.ok) return local;
+    // The Hall route may not exist yet; the SPA fallback answers 200 text/html.
+    // Only trust a real JSON response — otherwise fall back to local state.
+    if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) return local;
     const body = (await res.json()) as { state?: unknown };
     return (body.state ?? body) as T;
   } catch {

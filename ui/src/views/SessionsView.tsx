@@ -33,7 +33,7 @@
  *   └──────────────────────────────────────────────────────────────┘
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   DockviewReact,
@@ -91,12 +91,30 @@ export function SessionsView({
     axis: "x", min: 160, max: 400, initial: 220,
     direction: "right", persistKey: "olympus-sidebar-w",
   });
+  // Teardown fence (postmortem 0041 residual): on unmount — including React
+  // StrictMode's mount→unmount→remount — dockview disposes panels ONE BY ONE,
+  // and each removal fires onDidLayoutChange. Persisting those mid-teardown
+  // snapshots corrupts the saved layout (progressively fewer panels, finally
+  // zero). Layout-effect cleanups run BEFORE passive-effect cleanups, so we
+  // snapshot the still-intact layout there and suspend all later persists.
+  const persistSuspendedRef = useRef(false);
+
   const persist = useCallback(() => {
     const api = apiRef.current;
-    if (!api) return;
-    savedSessionsLayout = api.toJSON();
+    if (!api || persistSuspendedRef.current) return;
+    const layout = api.toJSON();
+    if (Object.keys(layout.panels ?? {}).length === 0) return;
+    savedSessionsLayout = layout;
     saveWorkspaceState("sessions", savedSessionsLayout);
   }, []);
+
+  useLayoutEffect(() => {
+    persistSuspendedRef.current = false;
+    return () => {
+      persist(); // final good snapshot, before dockview dispose starts
+      persistSuspendedRef.current = true;
+    };
+  }, [persist]);
 
   const openSessionPanel = useCallback((id: string, drop?: DockviewDidDropEvent) => {
     const api = apiRef.current;
@@ -126,14 +144,14 @@ export function SessionsView({
     if (sessionId) openSessionPanel(sessionId);
   }, [openSessionPanel, sessionId]);
 
-  useEffect(() => () => persist(), [persist]);
 
   const handleReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api;
     const local = savedSessionsLayout ?? getLocalUiState<DockLayout>("sessions");
-    if (local) {
+    if (local && Object.keys(local.panels ?? {}).length > 0) {
       try {
         event.api.fromJSON(local);
+        pruneEmptyGroups(event.api);
         syncOpenSessions(event.api);
       } catch {
         savedSessionsLayout = null;
@@ -141,8 +159,10 @@ export function SessionsView({
     }
     void loadWorkspaceState<DockLayout>("sessions").then((remote) => {
       if (!remote || apiRef.current !== event.api) return;
+      if (Object.keys(remote.panels ?? {}).length === 0) return;
       try {
         event.api.fromJSON(remote);
+        pruneEmptyGroups(event.api);
         syncOpenSessions(event.api);
         savedSessionsLayout = remote;
         if (sessionId) openSessionPanel(sessionId);
@@ -223,6 +243,15 @@ export function SessionsView({
       </div>
     </>
   );
+}
+
+/** Remove groups restored without any panel — they render as dead watermark
+ * panes. A layout can carry them when it was serialized mid-teardown by an
+ * older build, or when a panel fails to rehydrate. */
+function pruneEmptyGroups(api: DockviewApi) {
+  for (const group of [...api.groups]) {
+    if (group.panels.length === 0) api.removeGroup(group);
+  }
 }
 
 function dropDirection(position: "top" | "bottom" | "left" | "right" | "center"): "left" | "right" | "above" | "below" | "within" {
