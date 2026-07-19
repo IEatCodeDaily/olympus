@@ -9,6 +9,10 @@
 - Relates to: ADR 0002 §2 (layer boundary — reaffirmed), §6 (cards),
   §7 (desired-state), §9 (skills/MCP libraries).
 
+> **Amended by ADR 0027 (2026-07-19).** The session tree remains a Hall-owned
+> typed graph, but its session spaces are all flat siblings under
+> `~/.olympus/<org>/sessions/`. No subagent directory nests inside its parent.
+
 > **Product thesis (the one sentence):** the *agent setup* is the replicable
 > unit; Olympus fans it out across nodes and makes it observable. Everything
 > below follows from that.
@@ -35,9 +39,9 @@ substrate demands it (jj not git; cross-node not in-process).
 
 | omp feature | What we take | Divergence |
 |---|---|---|
-| **Session tree** (`/branch`, `/fork`, `/tree`, JSONL leaves) | The branch/fork/tree model over session spaces (ADR 0005 §4.2). A branch is a new leaf from a prior message; a fork is a new session; the tree is walkable. | Our sessions are event-log-backed + session-space dirs, not per-process JSONL. The tree is a control-plane projection, not a local file. |
+| **Session tree** (`/branch`, `/fork`, `/tree`, JSONL leaves) | The branch/fork/tree model over sessions. A branch is a new leaf from a prior message; a fork is a new session; the graph is walkable. | Our sessions are event-log-backed and every session space is flat under the org's `sessions/` directory (ADR 0027), not per-process JSONL or nested directories. The graph is a Hall projection, not a local file. |
 | **IRC bus** (peers DM each other, idle/parked-wake, `list`/`send`/`wait`/`inbox`, `await`) | The *semantics* wholesale — this is the inter-agent comms model, replacing ADR 0002 §6's "previous-attempt-block" forwarding as the primary channel. | omp's bus is in-process; ours must work **cross-node over iroh** (see §7 footgun 2). |
-| **`task` fan-out** (parallel child sessions, isolated workspaces, results as `agent://`) | Parallel sub-session dispatch with per-task isolation. | Maps onto our sub-session tree (ADR 0005 §4.2) + bwrap isolation (§4.3), not omp's COW-clone overlay. |
+| **`task` fan-out** (parallel child sessions, isolated workspaces, results as `agent://`) | Parallel subagent dispatch with per-task isolation. | Maps onto typed `agent_spawn` edges plus independent flat session spaces (ADR 0027) and bwrap isolation (ADR 0005 §4.3), not omp's COW-clone overlay. |
 | **Plan / goal modes** | Sandboxed planning turn against a planner model; approve → execute/keep/compact. | Straight adoption. |
 | **Structural (hashline) edits** | Content-hash line anchors for edits with stale-anchor recovery. | Must be re-verified against jj's conflict model (see §7 footgun 1). |
 | **GitHub-as-filesystem** (`read pr://`, `issue://`) | The virtual-read pattern is interesting and adoptable. | We keep **jj** as the VCS layer (ADR 0004); the `read <scheme>://` virtualization is orthogonal to git-vs-jj and can coexist. |

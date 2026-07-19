@@ -12,10 +12,15 @@
   *where* those resources live, not *how* they are implemented.
 - Relates to: ADR 0002 §2 (layer boundary), §15 (workflows), §17 (artifacts).
 
-> **This ADR is authoritative for the filesystem layout and resource model.**
-> Where ADR 0002 §3/§5 and this document disagree, this document wins. Read it
-> in full before writing any Olympus code that touches paths, sessions, repos,
-> or node sync.
+> **This ADR is authoritative for the organization-scoped resource model.**
+> Where ADR 0002 §3/§5 and this document disagree, this document wins, except
+> for the session-space and invocation-graph amendments below.
+>
+> **Partially superseded by ADR 0027 (2026-07-19).** Session spaces remain under
+> `~/.olympus/<org>/sessions/`, but every session—including subagents—now has one
+> flat `<session_id>/` directory. ADR 0027 replaces §3's nested-session wording,
+> §4's nested tree, and §4.2's nesting rule. Hall's typed invocation graph is
+> authoritative for lineage; directories are not.
 
 > **Partially superseded by ADRs 0024–0026 (2026-07-17).** Organization remains
 > the hard ownership/isolation boundary and Project, Repo, Vault, and Session

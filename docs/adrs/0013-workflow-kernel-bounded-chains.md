@@ -2,7 +2,9 @@
 
 Status: accepted · Date: 2026-07-12
 Relates to: ADR 0012 (extension doctrine), ADR 0011 (§6 workflow engine,
-§7 build order), ADR 0009 (SQLite event log).
+§7 build order), ADR 0009 (SQLite event log), ADR 0027 (workflow triggers are
+typed graph invocations, not subagent calls; workflow agent sessions preserve
+the initiating agent-spawn depth and remain separately workflow-bounded).
 
 ## Context
 

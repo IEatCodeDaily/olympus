@@ -78,8 +78,10 @@ the build. Cheap insurance, kills the whole failure class.
 **B-4. Repo attach → jj workspace materialization.** `attach_repo` currently
 only records the event. Implement: on attach, `jj workspace add` (or clone
 then workspace) from `~/.olympus/<org>/repos/<slug>` into the session space.
-On subsession spawn with a repo-attached parent, create a nested workspace.
-This is the isolation primitive everything else rides on.
+On subagent spawn with a repo-attached parent, create an independent jj workspace
+inside the child's flat `~/.olympus/<org>/sessions/<child_id>/` session space at
+the parent's selected commit (ADR 0027). This is the isolation primitive
+everything else rides on.
 
 **B-5. Subsession spawn from agent tooling.** Expose spawn/list/complete as
 an agent-callable surface (bridge tool or documented curl contract in the
