@@ -198,7 +198,12 @@ async fn relay(
 
     // Open the shell (or re-attach to existing tmux session).
     let persistent = if node == "hall" {
-        match state.hall_pty.manager().open(&terminal_id, cols, rows, None).await {
+        match state
+            .hall_pty
+            .manager()
+            .open(&terminal_id, cols, rows, None)
+            .await
+        {
             Ok(p) => p,
             Err(_) => {
                 let _ = socket

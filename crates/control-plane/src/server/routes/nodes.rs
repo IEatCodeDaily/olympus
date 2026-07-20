@@ -85,7 +85,11 @@ pub(crate) async fn refresh_node_agents(
         let fresh = agents::discover_local_agents();
         return match state.nodes.set_agents(&id, fresh).await {
             Ok(agents) => Json(json!({ "agents": agents })).into_response(),
-            Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+            Err(e) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response(),
         };
     }
 
@@ -139,7 +143,9 @@ async fn probe_agents(
         .map_err(|_| "envoy did not respond within 5s".to_string())?
         .map_err(|_| "envoy disconnected before responding".to_string())?;
     if !resp.ok {
-        return Err(resp.error.unwrap_or_else(|| "envoy reported failure".into()));
+        return Err(resp
+            .error
+            .unwrap_or_else(|| "envoy reported failure".into()));
     }
     let result = resp.result.ok_or("probe response had no result payload")?;
     let agents = result

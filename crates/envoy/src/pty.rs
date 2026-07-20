@@ -24,8 +24,7 @@ use tokio::sync::Mutex;
 /// A base64 alphabet encode/decode without pulling a crate — PTY payloads are
 /// small and this keeps the dependency surface minimal.
 mod b64 {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     pub fn encode(input: &[u8]) -> String {
         let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
@@ -247,7 +246,7 @@ impl PtyManager {
             let mut buf = vec![0u8; 8192];
             loop {
                 match read_async.read(&mut buf).await {
-                    Ok(0) => break,      // EOF: client/shell closed the pty
+                    Ok(0) => break, // EOF: client/shell closed the pty
                     Ok(n) => sink.output(tid.clone(), b64_encode(&buf[..n])),
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -422,8 +421,14 @@ fn spawn_tmux_attach(
 
     let mut master_fd: RawFd = -1;
     // SAFETY: forkpty is the canonical PTY-spawn primitive.
-    let pid =
-        unsafe { libc::forkpty(&mut master_fd, std::ptr::null_mut(), std::ptr::null(), &winsize) };
+    let pid = unsafe {
+        libc::forkpty(
+            &mut master_fd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &winsize,
+        )
+    };
     if pid < 0 {
         return Err(anyhow::anyhow!(
             "forkpty failed: {}",
@@ -433,8 +438,8 @@ fn spawn_tmux_attach(
     if pid == 0 {
         // ── Child ── exec tmux attach or new-session.
         // Build args depending on whether the session exists.
-        let cwd_c =
-            std::ffi::CString::new(workdir).unwrap_or_else(|_| std::ffi::CString::new("/").unwrap());
+        let cwd_c = std::ffi::CString::new(workdir)
+            .unwrap_or_else(|_| std::ffi::CString::new("/").unwrap());
         unsafe {
             libc::chdir(cwd_c.as_ptr());
             libc::setenv(
@@ -504,8 +509,14 @@ fn spawn_bare_shell(cols: u16, rows: u16, cwd: Option<&str>) -> Result<(RawFd, l
 
     let mut master_fd: RawFd = -1;
     // SAFETY: forkpty is the canonical PTY-spawn primitive.
-    let pid =
-        unsafe { libc::forkpty(&mut master_fd, std::ptr::null_mut(), std::ptr::null(), &winsize) };
+    let pid = unsafe {
+        libc::forkpty(
+            &mut master_fd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &winsize,
+        )
+    };
     if pid < 0 {
         return Err(anyhow::anyhow!(
             "forkpty failed: {}",
@@ -514,8 +525,8 @@ fn spawn_bare_shell(cols: u16, rows: u16, cwd: Option<&str>) -> Result<(RawFd, l
     }
     if pid == 0 {
         // ── Child ──
-        let cwd_c =
-            std::ffi::CString::new(workdir).unwrap_or_else(|_| std::ffi::CString::new("/").unwrap());
+        let cwd_c = std::ffi::CString::new(workdir)
+            .unwrap_or_else(|_| std::ffi::CString::new("/").unwrap());
         unsafe {
             libc::chdir(cwd_c.as_ptr());
         }
@@ -667,7 +678,10 @@ mod tests {
 
         let tid = "test-bare";
         let persistent = mgr.open(tid, 80, 24, None).await.expect("open");
-        assert!(!persistent, "should be bare (non-persistent) when tmux disabled");
+        assert!(
+            !persistent,
+            "should be bare (non-persistent) when tmux disabled"
+        );
 
         // Clean up.
         mgr.close(tid).await.ok();

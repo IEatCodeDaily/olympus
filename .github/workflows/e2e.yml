@@ -27,6 +27,7 @@ jobs:
           java-version: "21"
       - run: cd ui && bun install --frozen-lockfile
       - run: cd ui && bash scripts/install-maestro.sh
+      - run: cd ui && bash scripts/test-install-maestro-apparmor.sh
       - run: cd ui && sudo bash scripts/install-maestro-apparmor.sh
       - run: sudo apt-get install -y ffmpeg
       - run: echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
