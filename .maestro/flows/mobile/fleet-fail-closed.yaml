@@ -6,7 +6,9 @@ properties:
 ---
 - launchApp
 - extendedWaitUntil:
-    visible: "Add node"
+    visible: "Fleet overview"
     timeout: 15000
+- assertVisible: "local"
+- assertVisible: "gpu-box"
 - takeScreenshot:
     path: screenshots/mobile-fleet-overview
