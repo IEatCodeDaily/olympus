@@ -15,6 +15,11 @@ properties:
 - extendedWaitUntil:
     visible: "Findings"
     timeout: 10000
+- runFlow:
+    when:
+      visible: "Close Conflicted note"
+    commands:
+      - tapOn: "Close Conflicted note"
 - tapOn: "Engineering"
 - assertVisible: "Create vault…"
 - takeScreenshot:
