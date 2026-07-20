@@ -17,9 +17,10 @@ properties:
     timeout: 10000
 - runFlow:
     when:
-      visible: "Close Conflicted note"
+      visible: "Conflicted note"
     commands:
-      - tapOn: "Close Conflicted note"
+      - tapOn:
+          id: "Close Conflicted note"
 - tapOn: "Engineering"
 - assertVisible: "Create vault…"
 - takeScreenshot:

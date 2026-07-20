@@ -15,9 +15,8 @@ properties:
     timeout: 10000
 - assertVisible: "glm-5v-turbo"
 - tapOn:
-    text: "glm-5v-turbo"
-    index: 1
-- assertVisible: "thinking"
+    id: "Model and thinking"
+- assertVisible: "High"
 - tapOn: "High"
 - assertVisible: "High"
 - tapOn: "Type a message…"
