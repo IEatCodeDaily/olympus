@@ -11,6 +11,10 @@ properties:
     timeout: 15000
 - assertVisible: "Graph View"
 - assertVisible: "Table View"
+- tapOn: "acp-wire-spike.md"
+- extendedWaitUntil:
+    visible: "Findings"
+    timeout: 10000
 - tapOn: "Engineering"
 - assertVisible: "Create vault…"
 - takeScreenshot:

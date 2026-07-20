@@ -268,11 +268,14 @@ export function BottomPanel({
   return (
     <div className="bpanel" style={height ? { height } : undefined}>
       <div className="bp-tabs">
-        <div className="bp-tablist">
+        <div className="bp-tablist" role="tablist" aria-label="Session bottom panel">
           {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
+              role="tab"
+              aria-label={`${t.label} panel`}
+              aria-selected={tab === t.id}
               className={`bp-tab${tab === t.id ? " on" : ""}`}
               onClick={() => onTabChange(t.id)}
             >

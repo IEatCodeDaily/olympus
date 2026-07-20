@@ -198,7 +198,13 @@ impl HermesAgentRuntime {
             let mut state = self.state.lock().await;
             match state.child.as_mut() {
                 Some(child) => {
-                    let exit = child.early_exit();
+                    let exit = if timed_out {
+                        child.early_exit()
+                    } else {
+                        child
+                            .early_exit_with_grace(Duration::from_millis(100))
+                            .await
+                    };
                     if exit.is_some() {
                         child.finish_stderr().await;
                     }
@@ -423,7 +429,11 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("fake-acp.sh");
-        std::fs::write(&script, "#!/bin/sh\necho adapter-broke >&2\nexit 7\n").unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho adapter-broke >&2\nexec 1>&-\nexit 7\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let runtime = HermesAgentRuntime::new_arc(HermesRuntimeConfig {
             command: vec![script.to_string_lossy().into_owned()],

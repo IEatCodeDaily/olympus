@@ -31,6 +31,26 @@ function systemMessage(sessionId: string, messageId: number, content: string): M
 }
 
 describe("BottomPanel Hall-backed logs", () => {
+  it("exposes uniquely named tabs for automation and assistive technology", () => {
+    render(
+      <BottomPanel
+        sessionId="session-a"
+        tab="terminal"
+        onTabChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Terminal panel" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: "Logs panel" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+  });
+
   it("rehydrates retained Hall history after switching A to B to A", () => {
     messagesBySession.set("session-a", [systemMessage("session-a", 1, "A retained failure")]);
     messagesBySession.set("session-b", [systemMessage("session-b", 2, "B retained failure")]);

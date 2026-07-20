@@ -183,7 +183,7 @@ button {
 
 /* ── Chat column ─────────────────────────────────── */
 .chatcol { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
-.transcript { flex: 1; overflow-y: auto; padding: var(--space-12) var(--space-12); }
+.transcript { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-12) var(--space-12); }
 .tcol { width: 100%; max-width: var(--measure); margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-12); }
 .msg-user { position: relative; align-self: flex-end; max-width: 80%; background: var(--elev); border: var(--border-w) solid var(--border); border-radius: var(--radius-lg) var(--radius-lg) var(--radius) var(--radius-lg); padding: var(--space-5) var(--space-6); font-size: var(--fs-13-5); line-height: var(--lh-normal); color: var(--text); }
 /* Steer — a user interrupt injected mid-turn. Distinct border + badge. */

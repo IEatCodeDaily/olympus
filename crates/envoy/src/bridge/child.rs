@@ -144,6 +144,17 @@ impl ChildHandle {
         }
     }
 
+    /// Give an already-closing child a short window to publish its exit status.
+    /// Pipe EOF can become visible just before `try_wait`, so a single poll can
+    /// otherwise discard the most useful startup diagnostic.
+    pub async fn early_exit_with_grace(&mut self, grace: std::time::Duration) -> Option<String> {
+        match tokio::time::timeout(grace, self.child.wait()).await {
+            Ok(Ok(status)) => Some(format!("child exited: {status}")),
+            Ok(Err(error)) => Some(format!("child wait failed: {error}")),
+            Err(_) => None,
+        }
+    }
+
     pub fn stderr_buffer(&self) -> Arc<Mutex<Vec<u8>>> {
         Arc::clone(&self.stderr)
     }

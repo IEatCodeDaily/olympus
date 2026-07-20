@@ -179,6 +179,9 @@ export function Composer({
                 type="button"
                 className="modelpill"
                 title="Model & thinking"
+                aria-label="Model and thinking"
+                aria-haspopup="menu"
+                aria-expanded={modelOpen}
                 onClick={() => setModelOpen((v) => !v)}
               >
                 <span className="nm">{modelLabel}</span>

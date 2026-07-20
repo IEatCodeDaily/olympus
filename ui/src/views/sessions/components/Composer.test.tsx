@@ -67,6 +67,16 @@ function renderComposer(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Composer model selector", () => {
+  it("exposes one stable semantic trigger for model and thinking choices", () => {
+    renderComposer();
+
+    const trigger = screen.getByRole("button", { name: "Model and thinking" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("thinking")).toBeInTheDocument();
+  });
+
   it("groups models by provider with headers", () => {
     renderComposer();
 
