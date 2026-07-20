@@ -46,8 +46,6 @@ properties:
 - tapOn: "New Note"
 - tapOn: "Title"
 - inputText: "Maestro note"
-- tapOn: "File path"
-- inputText: "maestro-note.md"
 - tapOn: "Create note"
 - extendedWaitUntil:
     visible: "Maestro note"
@@ -56,9 +54,7 @@ properties:
     path: screenshots/note-created
 - tapOn: "New Note"
 - tapOn: "Title"
-- inputText: "Replacement"
-- tapOn: "File path"
-- inputText: "maestro-note.md"
+- inputText: "Maestro note"
 - tapOn: "Create note"
 - assertVisible: ".*note already exists.*"
 - tapOn: "Cancel"

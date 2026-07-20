@@ -97,18 +97,10 @@ export function VaultWorkspaceView() {
     setMutationError(null);
     try {
       const markdown = `---\ntitle: ${yamlString(title)}\n---\n\n# ${title}\n`;
-      queryClient.setQueryData(qk.vaultNote(activeVaultId, path), {
-        path,
-        title,
-        markdown,
-        frontmatter: { title },
-        linkedNotes: [],
-      });
-      setNewNoteFolder(null);
-      openTab(noteTab(path, title));
       const document = await putVaultNote(activeVaultId, path, { markdown, createOnly: true });
       queryClient.setQueryData(qk.vaultNote(activeVaultId, document.path), document);
       await invalidateVault(activeVaultId);
+      setNewNoteFolder(null);
       openTab(noteTab(document.path, document.title));
     } catch (error) {
       setMutationError(errorMessage(error));
