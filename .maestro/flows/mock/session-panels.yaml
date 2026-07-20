@@ -21,14 +21,14 @@ properties:
     path: screenshots/session-right-overview
 
 # ── Bottom panel tabs are text labels — cycle through them ─────────────────
-- tapOn: "Terminal panel"
+- tapOn: "Terminal"
 - assertVisible: ".*envoy PTY support.*"
-- tapOn: "Logs panel"
+- tapOn: "Logs"
 - takeScreenshot:
     path: screenshots/session-bottom-logs
-- tapOn: "Output panel"
+- tapOn: "Output"
 - takeScreenshot:
     path: screenshots/session-bottom-output
-- tapOn: "Debug panel"
+- tapOn: "Debug"
 - takeScreenshot:
     path: screenshots/session-bottom-debug
