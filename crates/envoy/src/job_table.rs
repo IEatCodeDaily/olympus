@@ -7,10 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use futures::future::join;
 use olympus_proto::frames::{EnvoyFrame, JobStream};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 struct JobEntry {
     child: Arc<Mutex<Child>>,
@@ -84,7 +86,7 @@ impl JobTable {
 
         let emitted = Arc::new(AtomicU64::new(0));
         let truncated = Arc::new(AtomicBool::new(false));
-        stream_output(
+        let stdout_task = stream_output(
             stdout,
             spec.job_id.clone(),
             JobStream::Stdout,
@@ -93,7 +95,7 @@ impl JobTable {
             truncated.clone(),
             tx.clone(),
         );
-        stream_output(
+        let stderr_task = stream_output(
             stderr,
             spec.job_id.clone(),
             JobStream::Stderr,
@@ -121,6 +123,7 @@ impl JobTable {
                     Err(_) => break None,
                 }
             };
+            let _ = join(stdout_task, stderr_task).await;
             jobs.write().await.remove(&spec.job_id);
             let _ = tx.send(EnvoyFrame::JobResult {
                 job_id: spec.job_id,
@@ -170,7 +173,7 @@ fn stream_output<R: tokio::io::AsyncRead + Send + Unpin + 'static>(
     emitted: Arc<AtomicU64>,
     truncated: Arc<AtomicBool>,
     tx: mpsc::UnboundedSender<EnvoyFrame>,
-) {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut buffer = vec![0_u8; 8192];
         while let Ok(count) = reader.read(&mut buffer).await {
@@ -193,7 +196,7 @@ fn stream_output<R: tokio::io::AsyncRead + Send + Unpin + 'static>(
                 data: String::from_utf8_lossy(&buffer[..keep]).into_owned(),
             });
         }
-    });
+    })
 }
 
 #[cfg(test)]

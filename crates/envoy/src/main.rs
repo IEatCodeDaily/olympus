@@ -11,7 +11,7 @@
 //! exercised in CI without a real agent.
 //!
 //! Usage:
-//!   olympus-envoy [--socket <path>] [--node-id <id>] [--mock]
+//!   olympus-envoy [--socket <path>] [--node-id <id>] [--state-dir <path>] [--mock]
 //! Defaults: socket = `$OLYMPUS_CONTROL_SOCKET` or `~/.olympus/control.sock`.
 
 use std::path::PathBuf;
@@ -194,6 +194,11 @@ async fn main() -> Result<()> {
 
 /// Per-envoy state dir (iroh key lives here): ~/.olympus/envoy/<node-id>/.
 fn envoy_state_dir(node_id: &str) -> Result<PathBuf> {
+    if let Some(path) =
+        arg_value("--state-dir").or_else(|| std::env::var("OLYMPUS_ENVOY_STATE_DIR").ok())
+    {
+        return Ok(PathBuf::from(path));
+    }
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
         .join(".olympus")
@@ -821,6 +826,7 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
             match role {
                 "agent_runtime" | "agent-runtime" => {}
                 "job_runner" | "job-runner" => roles.push(NodeRole::JobRunner),
+                "system_envoy" | "system-envoy" => roles.push(NodeRole::SystemEnvoy),
                 other => anyhow::bail!("unknown envoy role: {other}"),
             }
         }
@@ -828,6 +834,7 @@ fn configured_roles() -> Result<Vec<NodeRole>> {
     roles.sort_by_key(|role| match role {
         NodeRole::AgentRuntime => 0,
         NodeRole::JobRunner => 1,
+        NodeRole::SystemEnvoy => 2,
     });
     roles.dedup();
     Ok(roles)

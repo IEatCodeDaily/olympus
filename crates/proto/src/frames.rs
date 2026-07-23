@@ -30,6 +30,7 @@ use crate::version::BuildVersion;
 pub enum NodeRole {
     AgentRuntime,
     JobRunner,
+    SystemEnvoy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -429,7 +430,11 @@ mod tests {
                 version: BuildVersion::for_binary("0.1.0"),
                 agents: Some(json!([{"id": "default", "kind": "hermes"}])),
                 runtimes: vec![sample_runtime_status()],
-                roles: vec![NodeRole::AgentRuntime, NodeRole::JobRunner],
+                roles: vec![
+                    NodeRole::AgentRuntime,
+                    NodeRole::JobRunner,
+                    NodeRole::SystemEnvoy,
+                ],
             },
             EnvoyFrame::Heartbeat {
                 node_id: "envoy-1".into(),

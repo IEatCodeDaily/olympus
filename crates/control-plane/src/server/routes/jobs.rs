@@ -45,6 +45,8 @@ struct DispatchBody {
     node_id: String,
     argv: Vec<String>,
     #[serde(default)]
+    privileged: bool,
+    #[serde(default)]
     env_allowlist: Vec<String>,
     cwd: Option<String>,
     #[serde(default = "default_timeout")]
@@ -106,6 +108,15 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<DispatchBody>)
             Json(json!({"error":"node does not advertise job_runner"})),
         )
             .into_response();
+    }
+    if let Some(error) = privileged_job_error(
+        body.privileged,
+        state
+            .nodes
+            .has_role(&body.node_id, NodeRole::SystemEnvoy)
+            .await,
+    ) {
+        return (StatusCode::CONFLICT, Json(json!({"error":error}))).into_response();
     }
     let Some(conn) = state.envoy_conns.get(&body.node_id).await else {
         return (
@@ -222,5 +233,24 @@ pub async fn apply_result(
         job.truncated = truncated;
         job.timed_out = timed_out;
         job.cancelled = cancelled;
+    }
+}
+
+fn privileged_job_error(privileged: bool, system_envoy: bool) -> Option<&'static str> {
+    (privileged && !system_envoy).then_some("SYSTEM_ENVOY_REQUIRED")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::privileged_job_error;
+
+    #[test]
+    fn privileged_jobs_require_system_envoy() {
+        assert_eq!(
+            privileged_job_error(true, false),
+            Some("SYSTEM_ENVOY_REQUIRED")
+        );
+        assert_eq!(privileged_job_error(true, true), None);
+        assert_eq!(privileged_job_error(false, false), None);
     }
 }
