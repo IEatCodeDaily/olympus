@@ -17,12 +17,20 @@ work by role. Same binary, same iroh transport, same frame protocol.
 - Envoy gains a `JobTable` paralleling `RuntimeTable`. The idle-reaper pattern
   (shipped 2026-07-11, `3fd7d2f`) applies to both tables.
 
-### 2. iroh is the overlay network
+### 2. iroh is an optional remote-Envoy overlay (amended by ADR 0016)
 
-All inter-node Olympus traffic rides iroh QUIC (e2e-encrypted, NAT-traversing,
-keyed by node id). No WireGuard/Netbird/Tailscale for Olympus traffic. A new
-build node (e.g. LXC) needs only: envoy binary + toolchains + Hall's iroh node
-ID. Allowlist enrollment stays fail-closed per ADR 0008.
+> **ADR 0016 amendment:** Iroh is **optional**, not mandatory. UI→Hall is plain
+> HTTP/WebSocket behind a reverse proxy (ADR 0014); local Envoy↔Hall is the Unix
+> socket. Iroh QUIC MAY be used for *remote* Envoy↔Hall links, but identity is
+> the pinned Ed25519 Hall key (ADR 0016), not the transport. Any authenticated
+> tunnel is acceptable; no Iroh endpoint is required to exist for local or
+> reverse-proxied operation.
+
+When used, Iroh QUIC (e2e-encrypted, NAT-traversing, keyed by node id) carries
+remote inter-node Olympus traffic. No WireGuard/Netbird/Tailscale for Olympus
+traffic. A remote build node (e.g. LXC) needs: envoy binary + toolchains +
+Hall's pinned public key (and its Iroh node ID when the Iroh transport is
+chosen). Allowlist/pin enrollment stays fail-closed per ADR 0008 and ADR 0016.
 
 ### 3. The agent-facing interface is MCP, not a CLI
 
