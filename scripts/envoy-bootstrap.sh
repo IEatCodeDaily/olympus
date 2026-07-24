@@ -54,7 +54,8 @@ fi
 log "Enrolling node '$NODE_ID' with Hall: $HALL_URL"
 
 # ── 2. Download the envoy binary ────────────────────────────────────────
-mkdir -p "$BIN_DIR" "$STATE_DIR" "$RUNTIME_DIR"
+mkdir -p "$BIN_DIR"
+install -d -m 0700 "$STATE_DIR" "$RUNTIME_DIR"
 STAMP="$(date +%s)"
 TARGET="$BIN_DIR/olympus-envoy-enroll-$STAMP"
 log "Downloading olympus-envoy binary…"

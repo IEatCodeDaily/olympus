@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use pgvector::Vector;
 use postgres::{Client, NoTls, Transaction};
 
 use crate::event::Event;
@@ -196,13 +197,13 @@ impl PostgresStore {
         embedding: &[f32],
     ) -> Result<()> {
         anyhow::ensure!(!embedding.is_empty(), "embedding must not be empty");
-        let vector = vector_literal(embedding);
+        let vector = Vector::from(embedding.to_vec());
         self.client
             .lock()
             .expect("PostgreSQL mutex poisoned")
             .execute(
                 "INSERT INTO hall_message_embeddings(session_id,message_id,model,embedding)
-             VALUES($1,$2,$3,$4::vector)
+             VALUES($1,$2,$3,$4)
              ON CONFLICT(session_id,message_id,model) DO UPDATE SET embedding=excluded.embedding",
                 &[&session_id, &(message_id as i64), &model, &vector],
             )?;
@@ -216,15 +217,15 @@ impl PostgresStore {
         limit: usize,
     ) -> Result<Vec<SearchHit>> {
         anyhow::ensure!(!embedding.is_empty(), "embedding must not be empty");
-        let vector = vector_literal(embedding);
+        let vector = Vector::from(embedding.to_vec());
         let mut client = self.client.lock().expect("PostgreSQL mutex poisoned");
         Ok(client
             .query(
                 "SELECT m.session_id,m.message_id,COALESCE(m.content,''),
-                    (1-(e.embedding <=> $2::vector))::real,m.created_at,COALESCE(s.source,'')
+                    (1-(e.embedding <=> $2))::real,m.created_at,COALESCE(s.source,'')
              FROM hall_message_embeddings e JOIN hall_messages m USING(session_id,message_id)
              LEFT JOIN hall_sessions s USING(session_id) WHERE e.model=$1
-             ORDER BY e.embedding <=> $2::vector LIMIT $3",
+             ORDER BY e.embedding <=> $2 LIMIT $3",
                 &[&model, &vector, &(limit.min(i64::MAX as usize) as i64)],
             )?
             .into_iter()
@@ -299,17 +300,6 @@ fn apply_projection(tx: &mut Transaction<'_>, event: &Event) -> Result<()> {
         _ => {}
     }
     Ok(())
-}
-
-fn vector_literal(values: &[f32]) -> String {
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(f32::to_string)
-            .collect::<Vec<_>>()
-            .join(",")
-    )
 }
 
 fn event_type(event: &Event) -> &'static str {

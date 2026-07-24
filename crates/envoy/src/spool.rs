@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -31,6 +32,8 @@ impl EventSpool {
     pub fn with_cap(state_dir: &Path, cap: u64) -> Result<Self> {
         let dir = state_dir.join("spool");
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("restricting permissions on {}", dir.display()))?;
         let spool = Self {
             dir,
             cap,
@@ -80,6 +83,7 @@ impl EventSpool {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
+            .mode(0o600)
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         file.write_all(&bytes)?;
@@ -130,7 +134,12 @@ impl EventSpool {
         }
         let tmp = path.with_extension("jsonl.tmp");
         {
-            let mut file = File::create(&tmp)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
             for frame in retained {
                 serde_json::to_writer(&mut file, &frame)?;
                 file.write_all(b"\n")?;
@@ -211,7 +220,12 @@ impl EventSpool {
         let path = self.counter_path(session_id);
         let tmp = path.with_extension("seq.tmp");
         {
-            let mut file = File::create(&tmp)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
             writeln!(file, "{next}")?;
             file.sync_all()?;
         }

@@ -19,6 +19,7 @@ tracing-subscriber.workspace = true
 tantivy.workspace = true
 rusqlite = { workspace = true, features = ["backup", "bundled"] }
 postgres.workspace = true
+pgvector.workspace = true
 tokio.workspace = true
 axum.workspace = true
 serde_json.workspace = true

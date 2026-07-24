@@ -173,7 +173,8 @@ install_user() {
     require_user_prereqs
     unit="$(user_unit)"; dropin="$(user_dropin)"; bin_dir="$(user_bin_dir)"; node_id="envoy-$INSTANCE"
     build_and_install_binary "$bin_dir"
-    run mkdir -p "$(dirname "$unit")" "$(dirname "$dropin")" "$(user_state_dir)" "$(user_runtime_dir)"
+    run mkdir -p "$(dirname "$unit")" "$(dirname "$dropin")"
+    run install -d -m 0700 "$(user_state_dir)" "$(user_runtime_dir)"
     args="$(unit_exec_args "$node_id") --state-dir $(user_state_dir) --roles agent_runtime"
     if $DRY_RUN; then
         dry "write user unit: $unit"
@@ -217,7 +218,8 @@ install_system() {
     unit="$(system_unit)"; bin_dir="$(system_bin_dir)"
     build_and_install_binary "$bin_dir"
     args="$(unit_exec_args "envoy-system") --state-dir $(system_state_dir) --roles agent_runtime,job_runner,system-envoy"
-    run install -d -m 0755 "$(system_config_dir)" "$(system_state_dir)" "$bin_dir"
+    run install -d -m 0755 "$(system_config_dir)" "$bin_dir"
+    run install -d -m 0700 "$(system_state_dir)"
     if $DRY_RUN; then
         dry "write system unit: $unit"
         dry "User=olympus-envoy"
@@ -277,10 +279,12 @@ uninstall_tier() {
 
 verify_registration() {
     $DRY_RUN && { dry "poll /api/nodes for tier '$TIER' (up to 30s)"; return 0; }
-    local token_file="${XDG_STATE_HOME:-$HOME/.local/state}/olympus/token"
-    [[ -f "$token_file" ]] || { warn "token file $token_file not found — cannot verify registration via API"; return 0; }
+    local token_file="${OLYMPUS_HOME:-$HOME/.olympus}/token"
+    [[ -f "$token_file" ]] || die "token file $token_file not found — cannot verify registration via API" 4
+    local token
+    token="$(cat "$token_file")"
     for _ in $(seq 1 30); do
-        curl -sf -H "Authorization: Bearer ***" "http://127.0.0.1:$HALL_PORT/api/nodes" | grep -q 'envoy' && return 0
+        curl -sf -H "Authorization: Bearer $token" "http://127.0.0.1:$HALL_PORT/api/nodes" | grep -q 'envoy' && return 0
         sleep 1
     done
     die "registration timeout" 4
