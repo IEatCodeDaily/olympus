@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 use rand::RngCore;
 use tokio::sync::Mutex;
 
+use crate::auth_store::hash_token;
+
 /// How long a minted enroll token stays valid.
 pub const ENROLL_TTL: Duration = Duration::from_secs(15 * 60);
 
@@ -40,8 +42,9 @@ struct EnrollEntry {
     used_by: Option<String>,
 }
 
-/// In-memory store of active enroll tokens. Tokens are ephemeral by design —
-/// a Hall restart invalidates outstanding invitations (mint a new one).
+/// In-memory store of active enroll tokens, keyed by BLAKE3(token).
+/// Tokens are ephemeral by design — a Hall restart invalidates outstanding
+/// invitations (mint a new one).
 #[derive(Clone, Default)]
 pub struct EnrollStore {
     tokens: Arc<Mutex<HashMap<String, EnrollEntry>>>,
@@ -73,7 +76,7 @@ impl EnrollStore {
         let now = Instant::now();
         tokens.retain(|_, e| now.duration_since(e.minted_at) < ENROLL_TTL);
         tokens.insert(
-            token.clone(),
+            hash_token(&token),
             EnrollEntry {
                 minted_at: now,
                 used_by: None,
@@ -87,7 +90,7 @@ impl EnrollStore {
     pub async fn is_valid(&self, token: &str) -> bool {
         let tokens = self.tokens.lock().await;
         tokens
-            .get(token)
+            .get(&hash_token(token))
             .is_some_and(|e| e.minted_at.elapsed() < ENROLL_TTL)
     }
 
@@ -96,7 +99,8 @@ impl EnrollStore {
     /// node id is idempotent (installer re-runs).
     pub async fn consume(&self, token: &str, node_id: &str) -> ConsumeOutcome {
         let mut tokens = self.tokens.lock().await;
-        let Some(entry) = tokens.get_mut(token) else {
+        let token_hash = hash_token(token);
+        let Some(entry) = tokens.get_mut(&token_hash) else {
             return ConsumeOutcome::Rejected;
         };
         if entry.minted_at.elapsed() >= ENROLL_TTL {

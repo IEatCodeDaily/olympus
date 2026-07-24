@@ -12,10 +12,14 @@
 //!
 //! Usage:
 //!   olympus-envoy [--socket <path>] [--node-id <id>] [--state-dir <path>] [--mock]
+//!   olympus-envoy --hall iroh:<hall-id> [--replace-hall --expected-old-hall <old-id>]
 //! Defaults: socket = `$OLYMPUS_CONTROL_SOCKET` or `~/.olympus/control.sock`.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{
+    io::{self, BufRead, IsTerminal, Write},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
@@ -119,15 +123,26 @@ async fn main() -> Result<()> {
     // Transport selection: `--hall iroh:<node-id>` connects via iroh (public
     // n0 relays, ADR 0008 §1 / S7); otherwise UDS (default local path).
     let hall = arg_value("--hall").or_else(|| std::env::var("OLYMPUS_HALL").ok());
+    let replace_hall = flag_present("--replace-hall");
+    let expected_old_hall = arg_value("--expected-old-hall");
     if let Some(target) = hall.as_deref().and_then(|h| h.strip_prefix("iroh:")) {
         let state_dir = envoy_state_dir(&node_id)?;
+        let target: iroh::PublicKey = target
+            .parse()
+            .with_context(|| format!("parsing Hall node id {target:?}"))?;
+        if replace_hall {
+            replace_hall_locally(&state_dir, &target, expected_old_hall.as_deref())?;
+        } else {
+            configure_hall_pin(&state_dir, &target)?;
+        }
         let secret = olympus_envoy::transport::load_or_create_secret(&state_dir)?;
         let my_id = secret.public();
         tracing::info!(envoy_node_id = %my_id, hall = %target, "connecting to Hall via iroh");
         println!("envoy iroh node id: {my_id}  (add to hall.toml allowed_envoys)");
         let endpoint = olympus_envoy::transport::bind_endpoint(secret).await?;
+        let target = target.to_string();
         loop {
-            match olympus_envoy::transport::connect_to_hall(&endpoint, target).await {
+            match olympus_envoy::transport::connect_to_hall(&endpoint, &target).await {
                 Ok((send, recv)) => {
                     tracing::info!("connected to Hall via iroh");
                     if let Err(e) = run_connection(
@@ -204,6 +219,59 @@ fn envoy_state_dir(node_id: &str) -> Result<PathBuf> {
         .join(".olympus")
         .join("envoy")
         .join(node_id))
+}
+
+fn prompt_hall_repin(current: &iroh::PublicKey, target: &iroh::PublicKey) -> Result<bool> {
+    if !io::stdin().is_terminal() {
+        return Ok(false);
+    }
+    eprintln!("Pinned Hall key {current} differs from requested Hall key {target}.");
+    eprintln!("Type the current Hall key exactly to replace it:");
+    eprint!("> ");
+    io::stderr().flush().ok();
+    let mut answer = String::new();
+    let mut stdin = io::stdin().lock();
+    stdin
+        .read_line(&mut answer)
+        .context("reading Hall replacement confirmation")?;
+    Ok(answer.trim() == current.to_string())
+}
+
+fn replace_hall_locally(
+    state_dir: &std::path::Path,
+    target: &iroh::PublicKey,
+    expected_old_hall: Option<&str>,
+) -> Result<()> {
+    let current = olympus_envoy::transport::load_pinned_hall(state_dir)?
+        .context("no Hall is pinned yet; enrollment must happen before replacement")?;
+    if !olympus_envoy::transport::local_repin_authorized(state_dir)? {
+        anyhow::bail!("local Hall replacement requires the state directory owner or root");
+    }
+    if let Some(expected_raw) = expected_old_hall {
+        let expected: iroh::PublicKey = expected_raw
+            .parse()
+            .with_context(|| format!("parsing --expected-old-hall {expected_raw:?}"))?;
+        if expected != current {
+            anyhow::bail!("expected old Hall {expected}, found {current}");
+        }
+    } else if !prompt_hall_repin(&current, target)? {
+        anyhow::bail!("Hall replacement cancelled");
+    }
+    olympus_envoy::transport::replace_pinned_hall(state_dir, current, *target)?;
+    Ok(())
+}
+
+fn configure_hall_pin(state_dir: &std::path::Path, target: &iroh::PublicKey) -> Result<()> {
+    match olympus_envoy::transport::load_pinned_hall(state_dir)? {
+        None => {
+            olympus_envoy::transport::pin_hall(state_dir, *target)?;
+            Ok(())
+        }
+        Some(current) if current == *target => Ok(()),
+        Some(current) => anyhow::bail!(
+            "refusing to connect to Hall {target} because {current} is pinned; run locally with --replace-hall --expected-old-hall {current}"
+        ),
+    }
 }
 
 /// Type-erased writer — UDS write half locally, iroh QUIC SendStream remotely.
