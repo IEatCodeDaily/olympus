@@ -14,8 +14,27 @@ use crate::event::Event;
 use crate::views::card::CardAttempt;
 use crate::views::{CardRow, MessageRow, ProjectRow, RegistryEntry, RepoRow, SessionRow, SetupRow};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageConfig {
+    Sqlite(std::path::PathBuf),
+    Postgres(String),
+}
+
+impl StorageConfig {
+    pub fn parse(dsn: Option<&str>, sqlite_path: &Path) -> Result<Self> {
+        match dsn {
+            None | Some("") => Ok(Self::Sqlite(sqlite_path.to_path_buf())),
+            Some(dsn) if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") => {
+                Ok(Self::Postgres(dsn.into()))
+            }
+            Some(_) => anyhow::bail!("OLYMPUS_DATABASE_URL must be a postgres:// DSN"),
+        }
+    }
+}
+
 pub struct Log {
     conn: Mutex<Connection>,
+    postgres: Option<crate::postgres_store::PostgresStore>,
 }
 
 impl Log {
@@ -80,10 +99,40 @@ impl Log {
         }
         Ok(Self {
             conn: Mutex::new(conn),
+            postgres: None,
         })
     }
 
+    pub fn open_config(config: StorageConfig) -> Result<Self> {
+        match config {
+            StorageConfig::Sqlite(path) => Self::open(&path),
+            StorageConfig::Postgres(dsn) => {
+                let postgres = crate::postgres_store::PostgresStore::open(&dsn)?;
+                let mut conn = Connection::open_in_memory()?;
+                conn.execute_batch(SCHEMA)?;
+                migrate_event_payloads_to_json(&mut conn)?;
+                for (_, event) in postgres.read_from(0, usize::MAX)? {
+                    let tx = conn.transaction()?;
+                    append_in_tx(&tx, &event)?;
+                    tx.commit()?;
+                }
+                Ok(Self {
+                    conn: Mutex::new(conn),
+                    postgres: Some(postgres),
+                })
+            }
+        }
+    }
+
     pub fn append(&self, event: &Event) -> Result<u64> {
+        if let Some(postgres) = &self.postgres {
+            let seq = postgres.append(event)?;
+            let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+            let tx = conn.transaction()?;
+            append_in_tx(&tx, event)?;
+            tx.commit()?;
+            return Ok(seq);
+        }
         let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
         let tx = conn.transaction()?;
         let seq = append_in_tx(&tx, event)?;
@@ -94,6 +143,16 @@ impl Log {
     pub fn append_batch(&self, events: &[Event]) -> Result<Option<u64>> {
         if events.is_empty() {
             return Ok(None);
+        }
+        if let Some(postgres) = &self.postgres {
+            let first = postgres.append_batch(events)?;
+            let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+            let tx = conn.transaction()?;
+            for event in events {
+                append_in_tx(&tx, event)?;
+            }
+            tx.commit()?;
+            return Ok(first);
         }
         let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
         let tx = conn.transaction()?;
@@ -107,6 +166,9 @@ impl Log {
     }
 
     pub fn read_from(&self, seq: u64, limit: usize) -> Result<Vec<(u64, Event)>> {
+        if let Some(postgres) = &self.postgres {
+            return postgres.read_from(seq, limit);
+        }
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
         let mut stmt =
             conn.prepare("SELECT seq, payload FROM events WHERE seq >= ?1 ORDER BY seq LIMIT ?2")?;
@@ -120,15 +182,36 @@ impl Log {
     }
 
     pub fn event_count(&self) -> Result<usize> {
+        if let Some(postgres) = &self.postgres {
+            return postgres.event_count();
+        }
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
         Ok(conn.query_row("SELECT COUNT(*) FROM events", [], |row| {
             row.get::<_, i64>(0)
         })? as usize)
     }
 
+    /// Produce a transactionally consistent SQLite snapshot through SQLite's
+    /// online backup API. Copying the live WAL/database files is unsafe.
+    pub fn backup_sqlite(&self, destination: &Path) -> Result<()> {
+        anyhow::ensure!(
+            self.postgres.is_none(),
+            "PostgreSQL backups use pg_dump plus the Hall identity key"
+        );
+        let source = self.conn.lock().expect("SQLite mutex poisoned");
+        let mut destination_conn = Connection::open(destination)
+            .with_context(|| format!("opening backup destination {}", destination.display()))?;
+        let backup = rusqlite::backup::Backup::new(&source, &mut destination_conn)?;
+        backup.run_to_completion(128, std::time::Duration::from_millis(10), None)?;
+        Ok(())
+    }
+
     /// Durably advance the per-session Envoy transport watermark. Returns
     /// false for a duplicate and fails closed if delivery has a gap.
     pub fn accept_envoy_seq(&self, session_id: &str, seq: u64) -> Result<bool> {
+        if let Some(postgres) = &self.postgres {
+            return postgres.accept_envoy_seq(session_id, seq);
+        }
         let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
         let tx = conn.transaction()?;
         let current: Option<i64> = tx
@@ -164,6 +247,22 @@ impl Log {
         message_id: Option<u64>,
         event: &Event,
     ) -> Result<bool> {
+        if let Some(postgres) = &self.postgres {
+            let is_new = postgres.accept_observed(
+                transport_session_id,
+                seq,
+                hermes_id,
+                message_id,
+                event,
+            )?;
+            if is_new {
+                let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
+                let tx = conn.transaction()?;
+                append_in_tx(&tx, event)?;
+                tx.commit()?;
+            }
+            return Ok(is_new);
+        }
         let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
         let tx = conn.transaction()?;
         let current: Option<i64> = tx
@@ -206,6 +305,9 @@ impl Log {
     }
 
     pub fn envoy_watermark(&self, session_id: &str) -> Result<Option<u64>> {
+        if let Some(postgres) = &self.postgres {
+            return postgres.envoy_watermark(session_id);
+        }
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
         conn.query_row(
             "SELECT seq FROM envoy_watermarks WHERE session_id=?1",
@@ -226,6 +328,9 @@ impl Log {
     /// deserializing any `Event` into RAM. The old approach materialized
     /// 143K events + 137K message payloads (~1.8 GB RSS) and caused OOM.
     pub fn retain_native(&self) -> Result<()> {
+        if let Some(postgres) = &self.postgres {
+            postgres.retain_native()?;
+        }
         let mut conn = self.conn.lock().expect("SQLite mutex poisoned");
         let tx = conn.transaction()?;
 
@@ -313,6 +418,9 @@ impl Log {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+        if let Some(postgres) = &self.postgres {
+            return postgres.search(query, limit);
+        }
         let conn = self.conn.lock().expect("SQLite mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT f.session_id, CAST(f.message_id AS INTEGER),
@@ -335,6 +443,65 @@ impl Log {
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    pub fn set_embedding(
+        &self,
+        session_id: &str,
+        message_id: u64,
+        model: &str,
+        embedding: &[f32],
+    ) -> Result<()> {
+        self.postgres
+            .as_ref()
+            .context("semantic search requires PostgreSQL + pgvector")?
+            .set_embedding(session_id, message_id, model, embedding)
+    }
+
+    pub fn semantic_search(
+        &self,
+        model: &str,
+        embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        self.postgres
+            .as_ref()
+            .context("semantic search requires PostgreSQL + pgvector")?
+            .semantic_search(model, embedding, limit)
+    }
+
+    pub fn hybrid_search(
+        &self,
+        query: &str,
+        model: &str,
+        embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let lexical = self.search(query, limit)?;
+        let semantic = self.semantic_search(model, embedding, limit)?;
+        let mut scores = std::collections::HashMap::new();
+        for (rank, hit) in lexical.into_iter().enumerate() {
+            scores.insert(
+                (hit.session_id.clone(), hit.message_id),
+                (hit, 1.0 / (60.0 + rank as f32)),
+            );
+        }
+        for (rank, hit) in semantic.into_iter().enumerate() {
+            scores
+                .entry((hit.session_id.clone(), hit.message_id))
+                .and_modify(|(_, score)| *score += 1.0 / (60.0 + rank as f32))
+                .or_insert((hit, 1.0 / (60.0 + rank as f32)));
+        }
+        let mut hits: Vec<_> = scores.into_values().collect();
+        hits.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Ok(hits
+            .into_iter()
+            .take(limit)
+            .map(|(mut hit, score)| {
+                hit.score = score;
+                hit
+            })
+            .collect())
     }
 
     pub fn get_setup(&self, scope: &str) -> Result<Option<SetupRow>> {
@@ -1104,6 +1271,42 @@ CREATE TABLE IF NOT EXISTS observed_messages(hermes_id TEXT NOT NULL,message_id 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_selection_defaults_to_sqlite_and_accepts_postgres_dsn() {
+        assert_eq!(
+            StorageConfig::parse(None, Path::new("hall.db")).unwrap(),
+            StorageConfig::Sqlite(Path::new("hall.db").to_path_buf())
+        );
+        assert_eq!(
+            StorageConfig::parse(
+                Some("postgres://hall:secret@db/olympus"),
+                Path::new("ignored.db")
+            )
+            .unwrap(),
+            StorageConfig::Postgres("postgres://hall:secret@db/olympus".into())
+        );
+        assert!(
+            StorageConfig::parse(Some("mysql://db/olympus"), Path::new("ignored.db"))
+                .unwrap_err()
+                .to_string()
+                .contains("postgres")
+        );
+    }
+
+    #[test]
+    fn sqlite_online_backup_restores_committed_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("hall.db");
+        let backup = dir.path().join("backup.db");
+        let log = Log::open(&source).unwrap();
+        log.append(&fixture_event()).unwrap();
+
+        log.backup_sqlite(&backup).unwrap();
+        drop(log);
+
+        assert_eq!(Log::open(&backup).unwrap().event_count().unwrap(), 1);
+    }
 
     fn fixture_event() -> Event {
         Event::SessionCreated {

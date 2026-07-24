@@ -1,7 +1,7 @@
 # PostgreSQL as a Future Olympus Storage and Memory Substrate
 
-**Status:** Exploration — not an accepted architecture decision  
-**Current decision:** Keep SQLite for Olympus native state until the requirements below justify a networked database.
+**Status:** Accepted optional backend per ADR 0016
+**Current decision:** SQLite remains the default; one Hall may select PostgreSQL with `OLYMPUS_DATABASE_URL` when native FTS and pgvector retrieval are required.
 
 ## Motivation
 

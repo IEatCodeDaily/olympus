@@ -23,7 +23,7 @@ use std::sync::{
 use anyhow::{Context, Result};
 use olympus_control_plane::{
     auth, import,
-    log::Log,
+    log::{Log, StorageConfig},
     node::NodeRegistry,
     search::SearchIndex,
     server::{self, AppState, ImportState},
@@ -118,9 +118,20 @@ async fn main() -> Result<()> {
         .unwrap_or(true);
     let profile = std::env::var("HERMES_PROFILE").unwrap_or_else(|_| "default".to_string());
 
-    // ---- open the SQLite event log (sole source of truth for native data) ----
+    // Exactly one Hall may serve an Olympus network. This is an operator
+    // topology guard, not a distributed lock/election (ADR 0016).
+    tracing::warn!("single-Hall mode: do not start another Hall for this Olympus network");
+
+    // ---- open the selected event log (SQLite default, PostgreSQL optional) ----
     let log_path = home.join("olympus.db");
-    let log = Arc::new(Log::open(&log_path).context("opening event log")?);
+    let sqlite_existed = log_path.exists();
+    let storage = StorageConfig::parse(
+        std::env::var("OLYMPUS_DATABASE_URL").ok().as_deref(),
+        &log_path,
+    )?;
+    let log = Arc::new(Log::open_config(storage).context("opening event log")?);
+    olympus_control_plane::hall::load_identity(&home, sqlite_existed || log.event_count()? > 0)
+        .context("loading Hall identity")?;
     // Drop the previous boot's state.db-imported sessions so the re-index is
     // idempotent (native events survive a restart).
     log.retain_native().context("retaining native events")?;

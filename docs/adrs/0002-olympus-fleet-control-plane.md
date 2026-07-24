@@ -2,10 +2,13 @@
 
 - Status: **PARTIALLY SUPERSEDED** — §3 (Identity/Context/Session model) and
   §5 (Filesystem hierarchy) are **withdrawn and replaced by ADR 0005**
-  (org-scoped local-first resource model). The rest of this ADR (single-writer
-  event log, envoy layer boundary, iroh/UDS transport, scheduler, §2, §6, §10,
-  §15, §17) remains in force. **Where §3 or §5 disagrees with ADR 0005, ADR 0005
-  wins.**
+  (org-scoped local-first resource model). **§10's command-lease / `claimedBy` /
+  claimEpoch / heartbeat-lease-sweeper three-timer machinery is SUPERSEDED by
+  ADR 0016** (single Hall, no multi-claimant arbitration). The rest of this ADR
+  (single-writer event log, envoy layer boundary, UDS transport — Iroh now
+  optional per ADR 0016, scheduler-as-dispatcher, §2, §6, §15, §17) remains in
+  force. **Where §3 or §5 disagrees with ADR 0005, ADR 0005 wins; where §10
+  disagrees with ADR 0016, ADR 0016 wins.**
 - Date: 2026-06-27 (Rust-native substrate revision: 2026-06-28, see ADR 0003;
   org-scoped model: 2026-07-01, see ADR 0005)
 - Supersedes: the "thin host-effect runtime" framing of ADR 0001 (see §21).

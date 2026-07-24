@@ -1,6 +1,13 @@
 # ADR 0006: omp-as-blueprint — declarative agent replication + observable orchestration
 
-- Status: Accepted (with five flagged-for-veto open questions in §7)
+- Status: **PARTIALLY SUPERSEDED by ADR 0016** — the cross-node *replication*
+  framing (Hall↔peer replication, "Layers 1–2 = control plane + replication")
+  is withdrawn: the topology is one Hall + N durable Envoys, so fan-out is
+  Hall→Envoy dispatch, not Hall↔Hall replication. The node-agent experience
+  borrowings (session tree, IRC-bus semantics, plan/goal modes, structural
+  edits, declared skills/MCP materialized by the Envoy) are **retained** and now
+  read as a one-Hall→per-Envoy push. Originally: Accepted (with five
+  flagged-for-veto open questions in §7).
 - Date: 2026-07-02
 - Builds on: **ADR 0005** (org-scoped local-first resource model), **ADR 0003**
   (Rust substrate), **ADR 0004** (vaults markdown-first + jj). Does not
